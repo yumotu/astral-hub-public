@@ -7,18 +7,39 @@ export type LocalComputerStatus = {
   server?: string;
   error?: string;
   cancelled?: boolean;
-  projects: { id: string; name: string; root: string; allowWrite: boolean; allowExecute: boolean }[];
+  projects: {
+    id: string;
+    name: string;
+    root: string;
+    allowWrite: boolean;
+    allowExecute: boolean;
+  }[];
 };
 export type LocalComputerIdentity = { server: string; owner: string };
+export type DesktopWindowState = { platform: string; fullScreen: boolean; revision: number };
 declare global {
   interface Window {
     astralDesktop?: {
+      windowControls?: {
+        status: () => Promise<DesktopWindowState | null>;
+        action: (action: 'exit-fullscreen' | 'minimize' | 'close') => Promise<DesktopWindowState>;
+        onChange: (callback: (state: DesktopWindowState) => void) => () => void;
+      };
       computer?: {
         status: (v: LocalComputerIdentity) => Promise<LocalComputerStatus>;
-        pair: (v: LocalComputerIdentity & { code: string; allowWrite: boolean; allowExecute: boolean }) => Promise<LocalComputerStatus>;
+        pair: (
+          v: LocalComputerIdentity & { code: string; allowWrite: boolean; allowExecute: boolean },
+        ) => Promise<LocalComputerStatus>;
         start: (v: LocalComputerIdentity) => Promise<LocalComputerStatus>;
         stop: (v: LocalComputerIdentity) => Promise<LocalComputerStatus>;
-        grant: (v: LocalComputerIdentity & { projectId?: string; remove?: boolean; allowWrite?: boolean; allowExecute?: boolean }) => Promise<LocalComputerStatus>;
+        grant: (
+          v: LocalComputerIdentity & {
+            projectId?: string;
+            remove?: boolean;
+            allowWrite?: boolean;
+            allowExecute?: boolean;
+          },
+        ) => Promise<LocalComputerStatus>;
       };
       openMailLink?: (url: string) => Promise<{ opened: boolean }>;
       updates?: {

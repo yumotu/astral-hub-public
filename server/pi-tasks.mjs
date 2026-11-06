@@ -90,6 +90,7 @@ export function createPiTasks(
     const task = get(owner, id);
     if (!task) return;
     const patch = { lastActivityAt: new Date().toISOString() };
+    if (e.type === 'long_goal') patch.longGoal = e.goal;
     if (e.type === 'runtime_warning')
       patch.runtimeWarnings = [...(task.runtimeWarnings || []), e.diagnostic].slice(-4);
     if (e.type === 'extension_ui_request') {

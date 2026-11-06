@@ -634,3 +634,35 @@ a.process-step-target:hover {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
+.long-goal-card {
+  min-width: 0;
+  max-width: 100%;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 12px;
+}
+.long-goal-card > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.long-goal-card > summary strong {
+  min-width: 0;
+}
+.long-goal-card > summary span {
+  margin-left: auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.long-goal-card > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}

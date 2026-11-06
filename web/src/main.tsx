@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
+import { DesktopWindowBar } from './DesktopWindowBar';
 import { MobilePanelsProvider, useMobilePanels } from './MobilePanels';
 import { PiTasksProvider } from './pi-tasks';
 import { resourceScope } from './resource-cache';
@@ -1777,6 +1778,7 @@ function Plugins({
 }
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>
+    <DesktopWindowBar />
     <App />
   </ThemeProvider>,
 );

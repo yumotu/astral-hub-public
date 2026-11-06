@@ -98,6 +98,14 @@ test('remote main conversations can invoke current-account app functions without
   assert.equal((await f.req(path, { action: 'catalog' }, f.owner.token)).status, 401);
   const catalog = (await f.req(path, { action: 'catalog' }, f.device.token)).body;
   assert.ok(catalog.functions.some((x) => x.name === 'contacts.send'));
+  assert.ok(catalog.functions.some((x) => x.name === 'assistant.attachments'));
+  const inputs = await f.req(
+    path,
+    { action: 'invoke', name: 'assistant.attachments', input: {}, callId: 'attachments' },
+    f.device.token,
+  );
+  assert.equal(inputs.status, 200);
+  assert.deepEqual(inputs.body.result.files, []);
   const learning = await f.req(
     path,
     { action: 'invoke', name: 'learning.list', input: {}, callId: 'list' },
@@ -614,6 +622,14 @@ test('computer inputs require advertised support, account ownership and a runnin
   assert.equal(job.attachments[0].id, file.id);
   assert.equal((await f.req(inputs, undefined, f.owner.token)).status, 401);
   assert.equal((await f.req(inputs, undefined, f.device.token)).body.files[0].id, file.id);
+  const discovered = await f.req(
+    '/relay/device/workspace/jobs/' + p.id + '/app-functions',
+    { action: 'invoke', name: 'assistant.attachments', input: {}, callId: 'current-inputs' },
+    f.device.token,
+  );
+  assert.equal(discovered.status, 200);
+  assert.equal(discovered.body.result.files[0].id, file.id);
+  assert.ok(discovered.body.result.files.every((f) => !('path' in f)));
   const bytes = await fetch(f.base + inputs + '/' + file.id, {
     headers: { Authorization: 'Bearer ' + f.device.token },
   });

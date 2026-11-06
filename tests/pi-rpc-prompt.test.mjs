@@ -171,3 +171,40 @@ test('many bounded RPC result frames do not exhaust a lifetime byte counter', as
   assert.equal(collector.result().output, 'turn 49');
   assert.throws(() => collector.push('x'.repeat(1001)), /单条输出过多/);
 });
+
+test('handled goal launch waits for its actual agent settlement while status-only commands return promptly', async () => {
+  let emit,
+    finished = false;
+  const client = fixture((p, fire) => {
+    emit = fire;
+    const goal = {
+      version: 1,
+      id: 'goal',
+      objective: 'verify',
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    fire({
+      type: 'extension_ui_request',
+      method: 'setStatus',
+      statusKey: 'astral-long-goal',
+      statusText: JSON.stringify({ goal, triggerTurn: true }),
+    });
+    fire({ type: 'response', id: p.id, success: true, data: { disposition: 'handled' } });
+  });
+  const task = promptAndSettle(client, '/long-goal verify', undefined, 1000).then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  assert.equal(finished, false, 'handled was mistaken for completed work');
+  emit({ type: 'agent_start' });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  emit({ type: 'agent_settled' });
+  await task;
+  assert.equal(finished, true);
+});

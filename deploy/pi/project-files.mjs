@@ -14,6 +14,7 @@ import { resolve, join, dirname, relative, basename, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { lockProjectFile } from './project-lock.mjs';
 import { compareFiles } from './file-diff.mjs';
+import { attachmentMaxBytes } from './attachment-limits.mjs';
 const error = (status, message) => Object.assign(new Error(message), { status });
 export const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const blockedDirs = new Set([
@@ -364,6 +365,57 @@ export function createProjectFiles({
     };
   }
   return {
+    async importFile(id, path, data) {
+      const p = project(id);
+      if (p.readOnly)
+        throw error(403, '保存附件需要当前项目的修改权限；chat_read离线识别不需要修改权限。');
+      if (!Buffer.isBuffer(data) || data.length > attachmentMaxBytes)
+        throw error(413, '附件超过50 MiB或原始数据不正确。');
+      const release = await lockProjectFile(backupDir, resolve(p.root, ...pieces(path)));
+      try {
+        const file = await checked(id, path, { createParents: true, allowMissing: true });
+        if (file.relative === '.') throw error(400, '需要项目内文件路径。');
+        if (file.info) {
+          if (!file.info.isFile() || file.info.nlink > 1 || file.info.size !== data.length)
+            throw error(409, '目标路径已存在；保存附件不会覆盖已有文件。');
+          const h = await open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            const st = await h.stat();
+            if (
+              st.ino !== file.info.ino ||
+              st.dev !== file.info.dev ||
+              st.size !== data.length ||
+              st.nlink > 1 ||
+              hash(await h.readFile()) !== hash(data)
+            )
+              throw error(409, '目标文件已存在且内容不同，不会覆盖。');
+          } finally {
+            await h.close();
+          }
+          return { path: file.relative, bytes: data.length, sha256: hash(data), created: false };
+        }
+        const parent = await realpath(dirname(file.path));
+        if (parent !== join(await realpath(p.root), dirname(file.relative)))
+          throw error(403, '附件目标目录已变化，请重新确认。');
+        const h = await open(
+          file.path,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          0o600,
+        );
+        try {
+          await h.writeFile(data);
+          await h.sync();
+        } catch (e) {
+          await unlink(file.path).catch(() => {});
+          throw e;
+        } finally {
+          await h.close();
+        }
+        return { path: file.relative, bytes: data.length, sha256: hash(data), created: true };
+      } finally {
+        release();
+      }
+    },
     async info(id, path = '.') {
       const f = await checked(id, path);
       return {

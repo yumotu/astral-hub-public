@@ -20,6 +20,32 @@ async function fixture(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { dir, root, files };
 }
+
+test('raw attachment import preserves bytes and is retry safe without overwrites, private paths, links or read-only bypass', async (t) => {
+  const { dir, root, files } = await fixture(t);
+  const original = Buffer.concat([
+    Buffer.from('%PDF-synthetic-original'),
+    Buffer.alloc(16 * 1024 * 1024, 42),
+  ]);
+  const result = await files.importFile('rw', 'attachments/resume.pdf', original);
+  assert.equal(result.created, true);
+  assert.deepEqual(await readFile(join(root, result.path)), original);
+  assert.equal((await files.importFile('rw', result.path, original)).created, false);
+  await assert.rejects(files.importFile('rw', result.path, Buffer.from('different')), /已存在/);
+  await assert.rejects(files.importFile('ro', 'new.pdf', original), /修改权限/);
+  await assert.rejects(files.importFile('rw', '../outside.pdf', original), /保护|相对路径/);
+  await assert.rejects(files.importFile('rw', '.env', original), /保护/);
+  await writeFile(join(dir, 'outside.pdf'), 'outside');
+  if (process.platform !== 'win32') {
+    await symlink(join(dir, 'outside.pdf'), join(root, 'linked.pdf'));
+    await assert.rejects(files.importFile('rw', 'linked.pdf', original), /符号链接/);
+  }
+  assert.equal(await readFile(join(dir, 'outside.pdf'), 'utf8'), 'outside');
+  await assert.rejects(
+    files.importFile('rw', 'huge.pdf', Buffer.alloc(50 * 1024 * 1024 + 1)),
+    /50 MiB/,
+  );
+});
 test('project tools refuse traversal, protected files, symlinks and read-only edits', async (t) => {
   const { dir, root, files } = await fixture(t);
   await writeFile(join(root, '.env'), 'SECRET=hidden');

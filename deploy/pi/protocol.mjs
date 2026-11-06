@@ -87,6 +87,7 @@ export const projectToolNames = [
   'project_workspaces',
   'chat_files',
   'chat_read',
+  'chat_save',
   'chat_export',
   'web_search',
   'fetch_content',
@@ -188,7 +189,12 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
                                 e.toolName,
                               )
                             ? '已获取网络资料'
-                            : ['chat_files', 'chat_read', 'project_workspaces'].includes(e.toolName)
+                            : [
+                                  'chat_files',
+                                  'chat_read',
+                                  'chat_save',
+                                  'project_workspaces',
+                                ].includes(e.toolName)
                               ? '已读取资料'
                               : e.toolName === 'chat_export'
                                 ? '已生成下载附件'

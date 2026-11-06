@@ -292,6 +292,13 @@ async function execute(p, event) {
           ASTRAL_SANDBOX_ACCESS_TOKEN: p.sandboxAccess?.token || '',
           ASTRAL_GOAL_URL: p.goalAccess?.url || '',
           ASTRAL_GOAL_TOKEN: p.goalAccess?.token || '',
+          ASTRAL_LONG_GOAL_ALLOWED:
+            p.toolAllowlist &&
+            !['create_goal', 'get_goal', 'update_goal'].every((name) =>
+              p.toolAllowlist.includes(name),
+            )
+              ? '0'
+              : '1',
           ASTRAL_APP_ACCESS_URL: p.appAccess?.url || '',
           ASTRAL_APP_ACCESS_TOKEN: p.appAccess?.token || '',
           ASTRAL_MAIL_ACCESS_URL: p.mailAccess?.url || '',

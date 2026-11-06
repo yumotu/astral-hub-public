@@ -24,6 +24,7 @@
       "preload.cjs",
       "updates.cjs",
       "mail-links.cjs",
+      "window-controls.cjs",
       "web/**/*",
       "local-computer.cjs"
     ],

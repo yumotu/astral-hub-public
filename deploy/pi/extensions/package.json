@@ -3,11 +3,18 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@napi-rs/canvas": "1.1.0",
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "fflate": "0.8.3",
+    "image-size": "2.0.4",
     "mammoth": "1.13.0",
     "node-pty": "1.1.0",
+    "pdfjs-dist": "6.4.299",
     "pi-web-access": "0.46.0",
     "read-excel-file": "9.3.14",
+    "tesseract.js": "7.0.0",
+    "unpdf": "1.9.1",
     "zod": "4.6.7"
   }
 }

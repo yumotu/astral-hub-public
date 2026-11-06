@@ -227,7 +227,7 @@ jobs:
       - run: npm ci --prefix agent --ignore-scripts
       - run: npm --prefix agent run terminal:setup
       - run: node scripts/package-agent.mjs
-      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs
+      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs agent/tests/long-goal-runtime.test.mjs agent/tests/document-ocr.test.mjs
   android-sign:
     if: ${{ needs.source-audit.outputs.release == 'true' }}
     needs: [source-audit, web-and-tests, desktop, android, pi-runtime, computer-runtime]

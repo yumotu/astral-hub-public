@@ -46,6 +46,7 @@ export type PiTask = {
   runtimeWarnings?: import('./types').PiRuntimeDiagnostic[];
   context?: unknown;
   uiRequests?: import('./PluginRequests').PluginRequest[];
+  longGoal?: import('./LongGoalCard').LongGoalState | null;
   schedule?: { jobId: string; jobName: string; scheduledAt: string; timeZone: string };
 };
 export const taskPending = (t: PiTask) =>
@@ -65,6 +66,8 @@ export const taskLabel = (t: PiTask) =>
   })[t.status] || t.status;
 export function reduceTaskEvent(task: PiTask, e: Record<string, unknown>): PiTask {
   task = { ...task, lastActivityAt: new Date().toISOString() };
+  if (e.type === 'long_goal')
+    return { ...task, longGoal: e.goal as import('./LongGoalCard').LongGoalState | null };
   if (e.type === 'runtime_warning')
     return {
       ...task,
@@ -96,7 +99,11 @@ export function reduceTaskEvent(task: PiTask, e: Record<string, unknown>): PiTas
   )
     task = { ...task, timeline: applyPiTimeline(task.timeline || [], e) };
   if (e.type === 'text_delta')
-    return { ...task, output: (task.output + String(e.delta || '')).slice(-48000), phase: '正在回复' };
+    return {
+      ...task,
+      output: (task.output + String(e.delta || '')).slice(-48000),
+      phase: '正在回复',
+    };
   if (e.type === 'thinking_delta')
     return {
       ...task,

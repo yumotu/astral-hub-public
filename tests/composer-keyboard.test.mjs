@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { historyComposerEnter } from '../web/src/composer-keyboard.ts';
+import { historyComposerEnter, editorComposerEnter } from '../web/src/composer-keyboard.ts';
 
 function fixture() {
   const body = { closest: () => null },
@@ -75,6 +75,56 @@ test('IME confirmation, held Enter, line breaks and modified keys cannot trigger
     assert.equal(historyComposerEnter(f.event(patch), f.area, f.history), false);
   assert.equal(f.focused(), 0);
   assert.deepEqual(f.submitted, []);
+});
+
+test('temporary history submits its own form while blocking the underlying main conversation and nested dialogs', () => {
+  const f = fixture();
+  const scope = { closest: () => null, getClientRects: () => [{}], contains: () => false };
+  f.overlays.push(scope);
+  const event = f.event();
+  assert.equal(historyComposerEnter(event, f.area, f.history), false);
+  f.area.closest = (selector) => (selector === '[data-composer-scope]' ? scope : null);
+  assert.equal(historyComposerEnter(event, f.area, f.history), true);
+  assert.deepEqual(f.submitted, [f.button]);
+  f.overlays.push({ closest: () => null, getClientRects: () => [{}], contains: () => false });
+  assert.equal(historyComposerEnter(f.event(), f.area, f.history), false);
+});
+
+test('all composer editors share Enter submission without IME, repeated or modified sends', () => {
+  let submissions = 0;
+  const key = (patch = {}) => ({
+    key: 'Enter',
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    defaultPrevented: false,
+    nativeEvent: { isComposing: false, keyCode: 13 },
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+    ...patch,
+  });
+  const submit = () => {
+    submissions++;
+  };
+  assert.equal(editorComposerEnter(key(), submit), true);
+  assert.equal(submissions, 1);
+  for (const patch of [
+    { shiftKey: true },
+    { ctrlKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { defaultPrevented: true },
+    { key: 'a' },
+    { nativeEvent: { isComposing: true, keyCode: 13 } },
+    { nativeEvent: { isComposing: false, keyCode: 229 } },
+  ]) {
+    assert.equal(editorComposerEnter(key(patch), submit), false);
+  }
+  assert.equal(editorComposerEnter(key({ repeat: true }), submit), true);
+  assert.equal(submissions, 1);
 });
 
 test('other controls, hidden chats, overlays and command completion retain their own keyboard handling', () => {

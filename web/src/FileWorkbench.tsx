@@ -1,4 +1,5 @@
 import { useBackLayer } from './back-navigation';
+import { useHistoryComposerEnter, editorComposerEnter } from './composer-keyboard';
 import {
   createContext,
   lazy,
@@ -182,6 +183,9 @@ export function FileWorkbenchProvider({
 }
 function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }) {
   const wb = useFileWorkbench()!;
+  const area = useRef<HTMLTextAreaElement>(null),
+    history = useRef<HTMLDivElement>(null);
+  useHistoryComposerEnter(area, history);
   const [conversation] = useState(() => crypto.randomUUID()),
     [input, setInput] = useState(''),
     [ids, setIds] = useState<string[]>([]),
@@ -220,7 +224,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
     }
   }
   return (
-    <section className="temporary-chat" aria-label="划选临时对话">
+    <section className="temporary-chat" aria-label="划选临时对话" data-composer-scope>
       <header>
         <strong>临时对话</strong>
         <span>独立上下文</span>
@@ -235,7 +239,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
         </summary>
         <pre>{quote.text}</pre>
       </details>
-      <div className="temporary-messages" aria-live="polite">
+      <div className="temporary-messages" aria-live="polite" ref={history}>
         {!tasks.length && (
           <p className="field-help">
             围绕引用内容提问，不改变主对话的上下文。关闭后可在归档中找回。
@@ -276,11 +280,13 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
         }}
       >
         <textarea
+          ref={area}
           aria-label="临时对话消息"
           placeholder="就所选内容提问…"
           maxLength={1800}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(event) => editorComposerEnter(event, submit)}
           rows={2}
         />
         <div>
@@ -318,7 +324,12 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
               停止
             </button>
           ) : (
-            <button className="primary" disabled={busy || !input.trim()} aria-label="发送临时对话">
+            <button
+              className="primary"
+              data-composer-submit
+              disabled={busy || !input.trim()}
+              aria-label="发送临时对话"
+            >
               {busy ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />}发送
             </button>
           )}

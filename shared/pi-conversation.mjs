@@ -1,7 +1,9 @@
+import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
+
 export const normalizeMessageMode = (value) => (value === 'queue' ? 'queue' : 'steer');
 
-export function messageDelivery(activeTask, preference) {
-  return activeTask && normalizeMessageMode(preference) === 'steer'
+export function messageDelivery(activeTask, preference, input = '') {
+  return activeTask && (longGoalControl(input) || normalizeMessageMode(preference) === 'steer')
     ? { mode: 'steer', parentId: activeTask.id }
     : { mode: 'queue', parentId: null };
 }
@@ -18,20 +20,38 @@ export function latestCompletedTask(tasks, conversationId) {
 export function mergeSessionContext(previous, incoming, conversationId) {
   if (!incoming || incoming.conversationId !== conversationId) return previous;
   return previous?.conversationId === conversationId && previous.revision > incoming.revision
-    ? previous : incoming;
+    ? previous
+    : incoming;
 }
 
 export function currentSessionContext(turns, tasks, conversationId, snapshot) {
   const task = latestCompletedTask(tasks, conversationId);
   const turn = turns.at(-1);
   const candidates = [
-    ...(turn ? [{ id: turn.id, at: turn.execution?.finishedAt || turn.createdAt,
-      context: turn.execution?.context }] : []),
-    ...(task ? [{ id: task.id, at: task.finishedAt || task.execution?.finishedAt || task.createdAt,
-      context: task.context || task.execution?.context }] : []),
+    ...(turn
+      ? [
+          {
+            id: turn.id,
+            at: turn.execution?.finishedAt || turn.createdAt,
+            context: turn.execution?.context,
+          },
+        ]
+      : []),
+    ...(task
+      ? [
+          {
+            id: task.id,
+            at: task.finishedAt || task.execution?.finishedAt || task.createdAt,
+            context: task.context || task.execution?.context,
+          },
+        ]
+      : []),
   ].sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0));
   const latest = candidates.at(-1);
-  if (snapshot?.conversationId === conversationId && snapshot.baselineTaskId === (latest?.id || null))
+  if (
+    snapshot?.conversationId === conversationId &&
+    snapshot.baselineTaskId === (latest?.id || null)
+  )
     return snapshot.context;
   return latest?.context || null;
 }

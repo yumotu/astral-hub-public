@@ -1,4 +1,13 @@
-const { app, BrowserWindow, protocol, net, shell, ipcMain, Notification, dialog } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  protocol,
+  net,
+  shell,
+  ipcMain,
+  Notification,
+  dialog,
+} = require('electron');
 const { resolve, extname } = require('node:path');
 const { pathToFileURL } = require('node:url');
 protocol.registerSchemesAsPrivileged([
@@ -10,6 +19,11 @@ protocol.registerSchemesAsPrivileged([
 let window;
 let updater;
 let computer;
+let windowControls;
+require('./window-controls.cjs').registerWindowControls(ipcMain, {
+  current: () => windowControls,
+  trusted,
+});
 for (const method of ['status', 'pair', 'start', 'stop', 'grant'])
   ipcMain.handle('astral:computer:' + method, (event, value) => {
     if (!trusted(event) || !computer) throw new Error('本机电脑连接不可用。');
@@ -116,6 +130,8 @@ async function createWindow() {
     title: '星屿 · 你的灵感空间',
     icon: resolve(__dirname, 'web/icon-512.png'),
     backgroundColor: '#f7f8f4',
+    frame: true,
+    titleBarStyle: 'default',
     webPreferences: {
       preload: resolve(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -124,6 +140,7 @@ async function createWindow() {
       webSecurity: true,
     },
   });
+  windowControls = require('./window-controls.cjs').createWindowControls(window);
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);

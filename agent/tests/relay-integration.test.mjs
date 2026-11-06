@@ -40,9 +40,21 @@ test(
       const nativeCall = input.includes('ONLINE_PACKAGE_CALL');
       const appCall = input.includes('APP_FUNCTIONS');
       const ask = input.includes('ASK_USER_NATIVE');
+      const longGoal = users.some((u) => u.includes('LONG_GOAL_NATIVE'));
+      const checkpoint = p.messages.some(
+        (m) => m.role === 'assistant' && text(m).includes('goal checkpoint'),
+      );
+      const finishGoal =
+        longGoal && checkpoint && p.tools.some((t) => t.function.name === 'update_goal');
       const tool =
-        last.role !== 'tool' &&
-        (input.includes('READ_FILE') || exportFile || pluginCall || nativeCall || appCall || ask);
+        finishGoal ||
+        (last.role !== 'tool' &&
+          (input.includes('READ_FILE') ||
+            exportFile ||
+            pluginCall ||
+            nativeCall ||
+            appCall ||
+            ask));
       if (ask && last.role === 'tool')
         assert.ok(
           text(last).includes('用户选择乙'),
@@ -68,37 +80,48 @@ test(
           'binary data entered model context',
         );
       }
-      const chunks = tool
-        ? [
-            {
-              role: 'assistant',
-              tool_calls: [
+      const chunks =
+        longGoal && !finishGoal
+          ? [{ role: 'assistant', content: checkpoint ? 'goal completed' : 'goal checkpoint' }]
+          : tool
+            ? [
                 {
-                  index: 0,
-                  id: 'qa_' + randomUUID(),
-                  type: 'function',
-                  function: ask
-                    ? {
-                        name: 'ask_user',
-                        arguments:
-                          '{"question":"请选要继续的方案","options":["用户选择甲","用户选择乙"]}',
-                      }
-                    : appCall
-                      ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
-                      : nativeCall
-                        ? { name: 'native_online_fixture', arguments: '{}' }
-                        : pluginCall
-                          ? { name: 'custom_inspect_readme', arguments: '{"input":"README.txt"}' }
-                          : exportFile
-                            ? { name: 'chat_export', arguments: '{"path":"existing-image.png"}' }
-                            : { name: 'project_read', arguments: '{"path":"README.txt"}' },
+                  role: 'assistant',
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'qa_' + randomUUID(),
+                      type: 'function',
+                      function: finishGoal
+                        ? { name: 'update_goal', arguments: '{"status":"complete"}' }
+                        : ask
+                          ? {
+                              name: 'ask_user',
+                              arguments:
+                                '{"question":"请选要继续的方案","options":["用户选择甲","用户选择乙"]}',
+                            }
+                          : appCall
+                            ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
+                            : nativeCall
+                              ? { name: 'native_online_fixture', arguments: '{}' }
+                              : pluginCall
+                                ? {
+                                    name: 'custom_inspect_readme',
+                                    arguments: '{"input":"README.txt"}',
+                                  }
+                                : exportFile
+                                  ? {
+                                      name: 'chat_export',
+                                      arguments: '{"path":"existing-image.png"}',
+                                    }
+                                  : { name: 'project_read', arguments: '{"path":"README.txt"}' },
+                    },
+                  ],
                 },
-              ],
-            },
-          ]
-        : Array.from(
-            input.includes('HOLD_NATIVE') ? 'x'.repeat(300) : 'synthetic-stream ' + input,
-          ).map((content, i) => ({ ...(!i ? { role: 'assistant' } : {}), content }));
+              ]
+            : Array.from(
+                input.includes('HOLD_NATIVE') ? 'x'.repeat(300) : 'synthetic-stream ' + input,
+              ).map((content, i) => ({ ...(!i ? { role: 'assistant' } : {}), content }));
       let i = 0,
         timer;
       return new Response(
@@ -363,6 +386,27 @@ test(
     assert.equal(answered.status, 'done', JSON.stringify(answered));
     assert.equal(answered.uiRequests[0].status, 'resolved');
     assert.equal(answered.tools.filter((t) => t.name === 'ask_user').length, 1);
+    const goalJob = submit(randomUUID(), '/long-goal LONG_GOAL_NATIVE verify the saved goal state');
+    await request('/relay/submissions', goalJob, owner.token);
+    const [goalResult] = await pollUntil(
+      [goalJob],
+      (rows) => !['running', 'queued'].includes(rows[0].status),
+    );
+    assert.equal(goalResult.status, 'done', JSON.stringify(goalResult));
+    assert.equal(goalResult.longGoal.status, 'complete');
+    assert.equal(goalResult.longGoal.tokenBudget, null);
+    assert.equal(goalResult.tools.filter((t) => t.name === 'update_goal').length, 1);
+    assert.equal(goalResult.output, 'goal completed');
+    const statusJob = submit(goalJob.conversationId, '/long-goal status');
+    const callsBeforeStatus = calls.length;
+    await request('/relay/submissions', statusJob, owner.token);
+    const [goalStatus] = await pollUntil(
+      [statusJob],
+      (rows) => !['running', 'queued'].includes(rows[0].status),
+    );
+    assert.equal(goalStatus.status, 'done', JSON.stringify(goalStatus));
+    assert.equal(goalStatus.longGoal.status, 'complete');
+    assert.equal(calls.length, callsBeforeStatus, 'status-only command called the model');
     const delivery = submit(randomUUID(), 'EXPORT_FILE_' + randomUUID());
     await request('/relay/submissions', delivery, owner.token);
     const [delivered] = await pollUntil(

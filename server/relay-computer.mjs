@@ -1,7 +1,21 @@
 import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { createRelayArtifacts } from './relay-artifacts.mjs';
+import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 const uuid = z.string().uuid();
+const longGoal = z
+  .object({
+    version: z.literal(1),
+    id: z.string().max(200),
+    objective: z.string().max(10000),
+    status: z.enum(['active', 'paused', 'complete', 'budget_limited']),
+    tokenBudget: z.number().int().nonnegative().nullable(),
+    tokensUsed: z.number().int().nonnegative(),
+    timeUsedSeconds: z.number().int().nonnegative(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict();
 const dialog = z
   .object({
     type: z.literal('extension_ui_request').optional(),
@@ -44,6 +58,7 @@ const progress = z
     phase: z.string().max(100),
     tools: z.array(tool).max(100),
     uiRequests: z.array(dialog).max(100).optional(),
+    longGoal: longGoal.nullable().optional(),
   })
   .strict();
 export function createRelayComputer(
@@ -100,6 +115,7 @@ export function createRelayComputer(
       thinking: JSON.parse(j.state || '{}').thinking || '',
       phase: JSON.parse(j.state || '{}').phase || '',
       uiRequests: JSON.parse(j.state || '{}').uiRequests || [],
+      longGoal: JSON.parse(j.state || '{}').longGoal,
       tools: JSON.parse(j.tools),
       artifacts: artifacts.list(j.id),
       error: j.error,
@@ -325,6 +341,7 @@ export function createRelayComputer(
                 revision: p.revision,
                 thinking: p.thinking,
                 phase: p.phase,
+                ...(p.longGoal !== undefined ? { longGoal: p.longGoal } : {}),
                 uiRequests: (p.uiRequests || old.uiRequests || []).map((r) => ({
                   ...r,
                   status:
@@ -511,7 +528,7 @@ export function createRelayComputer(
         )
           throw fail(409, '此对话前一任务结果未知。请检查电脑文件后新建对话，旧任务不会自动重放。');
         const parent =
-          p.deliveryPreference === 'steer' && !p.attachments.length
+          (p.deliveryPreference === 'steer' || longGoalControl(p.input)) && !p.attachments.length
             ? db
                 .prepare(
                   "SELECT * FROM relay_jobs WHERE owner=? AND device_id=? AND project_id=? AND conversation_id=? AND parent_id IS NULL AND status='running'",

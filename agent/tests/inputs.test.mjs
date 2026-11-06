@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
@@ -85,9 +85,25 @@ test('computer inputs read real 16 MiB documents, verify cached bytes and rechec
   await writeFile(join(dir, 'input-cache', files[0].sha256), 'corrupted');
   assert.match((await read(files[0].id)).content, /0720/);
   assert.equal(downloads, 3);
+  const save = () =>
+    tools
+      .get('chat_save')
+      .execute(
+        randomUUID(),
+        { id: files[0].id, path: 'attachments/resume.docx' },
+        new AbortController().signal,
+      );
+  await assert.rejects(save, /修改权限/);
+  grant.allowWrite = true;
+  await saveConfig(path, config);
+  process.env.ASTRAL_PROJECT_ACCESS = 'edit';
+  assert.equal(JSON.parse((await save()).content[0].text).created, true);
+  assert.equal(JSON.parse((await save()).content[0].text).created, false);
+  assert.deepEqual(await readFile(join(root, 'attachments/resume.docx')), files[0].bytes);
   await assert.rejects(() => read(randomUUID()), /当前电脑对话/);
   allowed = false;
   await assert.rejects(() => read(files[0].id), /授权可能已结束/);
+  await assert.rejects(save, /授权可能已结束/);
   assert.equal(downloads, 3);
   allowed = true;
   config.projects = [];

@@ -293,6 +293,33 @@ export function registerAppFeatures(engine, { community, mail, learning, body, r
     },
   });
   engine.register({
+    name: 'assistant.goal',
+    description:
+      '查看当前任务的持续目标状态和用量。持续执行使用原生create_goal/get_goal/update_goal，仅用户明确要求时启动；停止任务会暂停持续执行，/long-goal resume明确恢复。此查询不启动或恢复目标。',
+    schema: empty,
+    execute: async (ctx) => {
+      const task =
+        ctx.origin === 'computer'
+          ? (await computer(ctx, '/api/relay/jobs/' + ctx.task)).job
+          : (await social(ctx, '/api/pi/tasks')).tasks.find((t) => t.id === ctx.task);
+      return { goal: task?.longGoal || null };
+    },
+  });
+  engine.register({
+    name: 'assistant.attachments',
+    description:
+      '列出当前对话可用的原始附件。实际读取使用chat_read（内置PDF文字提取、离线中英文OCR和页码），可修改项目用chat_save保存原件供命令解析。解析失败与原件不存在是不同状态；不扩展到其他账号/对话。',
+    schema: empty,
+    execute: async (ctx) => {
+      const task =
+        ctx.origin === 'computer'
+          ? (await computer(ctx, '/api/relay/jobs/' + ctx.task)).job
+          : (await social(ctx, '/api/pi/tasks')).tasks.find((t) => t.id === ctx.task);
+      if (!task) throw fail(404, '当前任务不存在。');
+      return social(ctx, '/api/pi/conversations/' + task.conversationId + '/files');
+    },
+  });
+  engine.register({
     name: 'usage.summary',
     description:
       '查询当前账号Token用量和按DeepSeek官网价核算的人民币费用，from/to为北京时间日期。管理员可指定账号或查看全部；仅查询，不扣余额，不把缺失统计当作零。',

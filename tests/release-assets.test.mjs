@@ -113,16 +113,25 @@ test('web and release executors share deterministic bytes, the current version a
     'rpc-prompt.mjs',
     'activity-deadline.mjs',
     'ask-user.mjs',
+    'long-goal.mjs',
+    'long-goal-command.mjs',
+    ...['index.ts','goal-state.ts','usage.ts','LICENSE','UPSTREAM.json'].map(name=>'vendor/pi-goal/'+name),
     'stream-writer.mjs',
     'package-transaction.mjs',
     'document-text.mjs',
+    'attachments.mjs',
+    'pdf-content.mjs',
+    'pdf-document.mjs',
+    'chat-content.mjs',
     'office-content.mjs',
     'attachment-limits.mjs',
-  ])
+  ]) {
+    await mkdir(dirname(join(root, 'deploy/pi', name)), {recursive:true});
     await writeFile(
       join(root, 'deploy/pi', name),
       await readFile(new URL('../deploy/pi/' + name, import.meta.url)),
     );
+  }
   const first = buildAgent(root, { web: true });
   await writeFile(join(root, 'agent/relay-agent.mjs'), 'export {};\n');
   const next = buildAgent(root);

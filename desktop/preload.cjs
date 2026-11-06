@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('astralDesktop', {
+  windowControls: {
+    status: () => ipcRenderer.invoke('astral:window:status'),
+    action: (action) => ipcRenderer.invoke('astral:window:action', action),
+    onChange: (callback) => {
+      const handler = (_event, value) => callback(value);
+      ipcRenderer.on('astral:window:changed', handler);
+      return () => ipcRenderer.removeListener('astral:window:changed', handler);
+    },
+  },
   computer: Object.fromEntries(
     ['status', 'pair', 'start', 'stop', 'grant'].map((method) => [
       method,

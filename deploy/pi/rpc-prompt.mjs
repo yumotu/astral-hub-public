@@ -47,6 +47,7 @@ export async function promptAndSettle(client, message, images, timeout = 900000)
   let resolve,
     reject,
     settled = false,
+    launched = false,
     disposition;
   const done = new Promise((a, b) => {
     resolve = a;
@@ -62,12 +63,17 @@ export async function promptAndSettle(client, message, images, timeout = 900000)
   written.get(client).add(replies);
   const unsubscribe = client.onEvent((event) => {
     deadline.touch();
+    if (event.type === 'agent_start') {
+      launched = true;
+      settled = false;
+    }
+    if (longGoalEvent(event)?.triggerTurn) launched = true;
     if (extensionUiRequest(event)) deadline.wait(event.id);
     if (event.type === 'response' && event.id === id) {
       if (!event.success) reject(new Error(event.error || 'Pi 拒绝了请求。'));
       else {
         disposition = event.data?.disposition;
-        if (disposition === 'handled' || settled) resolve(disposition);
+        if ((disposition === 'handled' && !launched) || settled) resolve(disposition);
       }
     }
     if (event.type === 'agent_settled') {
@@ -93,6 +99,7 @@ export function customMessageText(event) {
   if (
     event.type !== 'message_end' ||
     event.message?.role !== 'custom' ||
+    event.message?.customType === 'pi-goal-event' ||
     event.message.display === false
   )
     return '';
@@ -107,6 +114,60 @@ export function customMessageText(event) {
             .join('\n')
         : ''
   ).slice(0, 48000);
+}
+
+export function longGoalEvent(event) {
+  if (
+    event.type !== 'extension_ui_request' ||
+    event.method !== 'setStatus' ||
+    event.statusKey !== 'astral-long-goal' ||
+    typeof event.statusText !== 'string' ||
+    event.statusText.length > 20000
+  )
+    return null;
+  try {
+    const { goal, triggerTurn } = JSON.parse(event.statusText);
+    if (goal === null) return { type: 'long_goal', goal: null, triggerTurn: false };
+    if (
+      !goal ||
+      goal.version !== 1 ||
+      typeof goal.id !== 'string' ||
+      goal.id.length > 200 ||
+      typeof goal.objective !== 'string' ||
+      goal.objective.length > 10000 ||
+      !['active', 'paused', 'complete', 'budget_limited'].includes(goal.status)
+    )
+      return null;
+    if (
+      ![
+        goal.tokensUsed,
+        goal.timeUsedSeconds,
+        goal.createdAt,
+        goal.updatedAt,
+        ...(goal.tokenBudget === null ? [] : [goal.tokenBudget]),
+      ].every((n) => Number.isSafeInteger(n) && n >= 0)
+    )
+      return null;
+    return {
+      type: 'long_goal',
+      goal: Object.fromEntries(
+        [
+          'version',
+          'id',
+          'objective',
+          'status',
+          'tokenBudget',
+          'tokensUsed',
+          'timeUsedSeconds',
+          'createdAt',
+          'updatedAt',
+        ].map((k) => [k, goal[k]]),
+      ),
+      triggerTurn: triggerTurn === true,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function extensionUiRequest(event) {

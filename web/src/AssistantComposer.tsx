@@ -1,6 +1,6 @@
 import type { KeyboardEventHandler, ReactNode, RefObject, TextareaHTMLAttributes } from 'react';
 import { pastedFiles, insertPastedText } from './composer-paste';
-import { useHistoryComposerEnter } from './composer-keyboard';
+import { useHistoryComposerEnter, editorComposerEnter } from './composer-keyboard';
 import { useComposerSize } from './mobile-viewport';
 
 export function AssistantComposer({
@@ -79,10 +79,7 @@ export function AssistantComposer({
             return;
           }
           onKeyDown?.(event);
-          if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            void send();
-          }
+          editorComposerEnter(event, send);
         }}
       />
       {children}

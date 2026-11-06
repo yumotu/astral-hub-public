@@ -1,5 +1,5 @@
 import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { zipSync } from 'fflate';
 
@@ -18,14 +18,25 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
     'rpc-prompt.mjs',
     'activity-deadline.mjs',
     'ask-user.mjs',
+    'long-goal.mjs',
+    'long-goal-command.mjs',
+    ...['index.ts', 'goal-state.ts', 'usage.ts', 'LICENSE', 'UPSTREAM.json'].map(
+      (name) => 'vendor/pi-goal/' + name,
+    ),
     'stream-writer.mjs',
     'package-transaction.mjs',
     'document-text.mjs',
+    'attachments.mjs',
+    'pdf-content.mjs',
+    'pdf-document.mjs',
+    'chat-content.mjs',
     'office-content.mjs',
     'attachment-limits.mjs',
   ];
-  for (const file of resources)
+  for (const file of resources) {
+    mkdirSync(dirname(join(root, 'agent/assets', file)), { recursive: true });
     cpSync(join(root, 'deploy/pi', file), join(root, 'agent/assets', file));
+  }
   cpSync(join(root, 'shared/computer-plugin.mjs'), join(root, 'agent/assets/computer-plugin.mjs'));
   cpSync(
     join(root, 'shared/computer-package.mjs'),

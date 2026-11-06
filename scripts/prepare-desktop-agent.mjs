@@ -133,6 +133,8 @@ for (const arch of arches) {
           'plugins.test.mjs',
           'online-packages.test.mjs',
           'inputs.test.mjs',
+          'long-goal-runtime.test.mjs',
+          'document-ocr.test.mjs',
         ].map((n) => join(stage, 'agent/tests', n)),
       ],
       { env },

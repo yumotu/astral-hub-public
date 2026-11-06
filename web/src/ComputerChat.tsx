@@ -17,6 +17,7 @@ import { useMessageOutbox } from './message-outbox';
 import { MessageOutbox } from './MessageOutbox';
 import { AppFunctionRequests } from './AppFunctionRequests';
 import { PluginRequests, type PluginRequest } from './PluginRequests';
+import { LongGoalCard, type LongGoalState } from './LongGoalCard';
 import { RunSummary } from './ExecutionInfo';
 import { useAssistantPreferences } from './assistant-preferences';
 import { computerChatStorageKey } from '../../shared/assistant-target.mjs';
@@ -42,6 +43,7 @@ type Job = {
   status: string;
   phase: string;
   uiRequests?: PluginRequest[];
+  longGoal?: LongGoalState | null;
   tools: ToolRun[];
   artifacts?: ChatFile[];
   error?: string;
@@ -433,6 +435,7 @@ export function ComputerChat({
                 />
                 <div className="message assistant">
                   <RunSummary status={j.status} phase={phase(j)} />
+                  <LongGoalCard goal={j.longGoal} status={j.status} />
                   {jobs
                     .filter((c) => c.parentId === j.id)
                     .map((c) => (

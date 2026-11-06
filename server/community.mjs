@@ -14,6 +14,7 @@ import { concurrencyLimits } from '../deploy/pi/concurrency.mjs';
 import { clientAddress } from './client-address.mjs';
 import { createProjectLabels, projectLabelSchema } from './project-labels.mjs';
 import { activityDeadline } from '../deploy/pi/activity-deadline.mjs';
+import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 const username = z
   .string()
   .trim()
@@ -282,6 +283,7 @@ export function createCommunity(store, { token, body, options = {} }) {
               'steer_applied',
               'extension_ui_request',
               'extension_ui_resolved',
+              'long_goal',
               'notification',
               'notification_policy',
             ].includes(e.type)
@@ -731,8 +733,8 @@ export function createCommunity(store, { token, body, options = {} }) {
             .find((t) => !t.parentId && t.status === 'running');
           p = {
             ...p,
-            mode: deliveryPreference === 'steer' && current ? 'steer' : 'queue',
-            parentId: deliveryPreference === 'steer' && current ? current.id : null,
+            mode: (deliveryPreference === 'steer' || (!p.attachments.length && longGoalControl(p.input))) && current ? 'steer' : 'queue',
+            parentId: (deliveryPreference === 'steer' || (!p.attachments.length && longGoalControl(p.input))) && current ? current.id : null,
           };
         }
         if (p.mode === 'steer') {

@@ -12,6 +12,7 @@ export function pluginLoadPlan(resources = {}, { owner = false, cronRoot, coreOn
     'mail-tools',
     'app-tools',
     'ask-user',
+    'long-goal',
   ].map((name) => `/bridge/${name}.mjs`);
   const warnings = [],
     adapted = [];
@@ -19,6 +20,10 @@ export function pluginLoadPlan(resources = {}, { owner = false, cronRoot, coreOn
   if (owner && !coreOnly)
     for (const path of resources.extensions || []) {
       const normalized = path.replaceAll('\\', '/');
+      if (normalized.includes('/node_modules/pi-goal/')) {
+        adapted.push('pi-goal');
+        continue;
+      }
       if (/\/node_modules\/pi-web-access\//.test(normalized)) {
         adapted.push('pi-web-access');
         continue;

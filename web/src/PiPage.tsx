@@ -46,6 +46,7 @@ import { ToolLog } from './ToolLog';
 import { PiTimeline } from './PiTimeline';
 import { FileChanges } from './FileChanges';
 import { RunSummary, RunMetrics, SessionTelemetry } from './ExecutionInfo';
+import { LongGoalCard } from './LongGoalCard';
 import type { ToolRun } from './ToolLog';
 import { RemoteAgentsPage } from './RemoteAgentsPage';
 import { AssistantComputerProjects } from './AssistantComputerProjects';
@@ -1115,7 +1116,7 @@ function ServerPiPage({
       access,
       thinkingLevel,
       attachments: staged.map((f) => f.id),
-      ...messageDelivery(activeTask, sendMode),
+      ...messageDelivery(activeTask, sendMode, staged.length ? '' : text),
       deliveryPreference: sendMode,
     };
     try {
@@ -1805,6 +1806,7 @@ function ServerPiPage({
                           status={running ? 'running' : taskState?.status || 'done'}
                           phase={taskState?.compacting ? '压缩中…' : taskState?.phase}
                         />
+                        <LongGoalCard goal={taskState?.longGoal} status={taskState?.status} />
                         {!t.timeline?.length && showThinking && t.thinking && (
                           <details className="thinking-panel" open={running || undefined}>
                             <summary>
