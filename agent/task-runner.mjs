@@ -13,6 +13,7 @@ export async function createComputerTasks({
   piEntry,
   ledgerFile,
   request,
+  spawnWorker = fork,
 }) {
   await mkdir(dirname(ledgerFile), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(ledgerFile);
@@ -55,7 +56,7 @@ export async function createComputerTasks({
     if ((job.execute && !grant.allowExecute) || (job.access === 'edit' && !grant.allowWrite))
       throw Error('本机授权已变化。');
     db.prepare("INSERT INTO jobs VALUES(?,?,'started',NULL)").run(job.id, input);
-    const child = fork(fileURLToPath(new URL('./task-worker.mjs', import.meta.url)), [], {
+    const child = spawnWorker(fileURLToPath(new URL('./task-worker.mjs', import.meta.url)), [], {
       cwd: grant.root,
       env: localEnvironment(),
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -72,6 +73,7 @@ export async function createComputerTasks({
       sending: false,
       result: null,
       killTimer: null,
+      closed: false,
     };
     active.set(job.id, record);
     child.stderr.resume();
@@ -150,7 +152,11 @@ export async function createComputerTasks({
       }
     });
     child.on('error', () => stop(record));
-    child.once('exit', () => {
+    // exit can precede the last IPC message, especially on Windows. Only close
+    // guarantees the child's communication streams have drained; an early
+    // fallback would otherwise replace a valid final result with an error.
+    child.once('close', () => {
+      record.closed = true;
       clearInterval(progressTimer);
       clearInterval(heartbeat);
       timeout.close();
@@ -221,8 +227,8 @@ export async function createComputerTasks({
           [...active.values()].map(
             (r) =>
               new Promise((resolve) => {
-                r.child.once('exit', resolve);
-                if (r.child.exitCode !== null || r.child.signalCode !== null) resolve();
+                r.child.once('close', resolve);
+                if (r.closed) resolve();
               }),
           ),
         );

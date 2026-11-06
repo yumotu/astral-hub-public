@@ -1,0 +1,55 @@
+name: Verify protected Android signing
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '21' }
+      - name: Verify existing certificate and both protected passwords without publishing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+          import { execFileSync } from 'node:child_process';
+          import { X509Certificate } from 'node:crypto';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          process.umask(0o077);
+          const names = ['ANDROID_KEYSTORE_BASE64','ANDROID_STORE_PASSWORD','ANDROID_KEY_PASSWORD','ANDROID_KEY_ALIAS'];
+          if (names.some(name => !process.env[name])) throw Error('A required protected signing secret is missing.');
+          const encoded = process.env.ANDROID_KEYSTORE_BASE64.replace(/\s/g, '');
+          const bytes = Buffer.from(encoded, 'base64');
+          if (bytes.length < 16 || bytes.length > 4194304 || bytes.toString('base64') !== encoded) throw Error('Invalid protected keystore encoding.');
+          const dir = await mkdtemp(join(tmpdir(), 'astral-signing-check-'));
+          const env = { ...process.env }; delete env.ANDROID_KEYSTORE_BASE64;
+          try {
+            const original = join(dir, 'original.keystore');
+            await writeFile(original, bytes, { mode: 0o600 });
+            const args = ['-keystore', original, '-storepass:env', 'ANDROID_STORE_PASSWORD', '-alias', env.ANDROID_KEY_ALIAS];
+            const certificate = new X509Certificate(execFileSync('keytool', ['-exportcert', ...args], { env, stdio: ['ignore','pipe','pipe'] }));
+            const actual = certificate.fingerprint256.replaceAll(':', '').toLowerCase();
+            const expected = (await readFile('android/signing-certificate.sha256', 'utf8')).trim();
+            if (actual !== expected) throw Error('Original application certificate mismatch.');
+            execFileSync('keytool', ['-importkeystore', '-srckeystore', original, '-srcstorepass:env', 'ANDROID_STORE_PASSWORD', '-srckeypass:env', 'ANDROID_KEY_PASSWORD', '-srcalias', env.ANDROID_KEY_ALIAS, '-destkeystore', join(dir, 'verification.p12'), '-deststoretype', 'PKCS12', '-deststorepass:env', 'ANDROID_STORE_PASSWORD', '-destkeypass:env', 'ANDROID_KEY_PASSWORD', '-noprompt'], { env, stdio: ['ignore','pipe','pipe'] });
+            console.log(JSON.stringify({ protectedSecrets: 'verified', originalCertificateSha256: actual, published: false }));
+          } catch {
+            throw Error('Protected signing verification failed; no application was published.');
+          } finally {
+            bytes.fill(0); await rm(dir, { recursive: true, force: true });
+          }
+          NODE
