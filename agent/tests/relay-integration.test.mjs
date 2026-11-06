@@ -20,7 +20,10 @@ const text = (m) =>
         .join('\n');
 test(
   'actual Pi workers stream concurrently, preserve separate native histories, apply supplements once and cancel without replay',
-  { timeout: 120000 },
+  // This aggregate starts twelve independent native sessions. The x64 desktop
+  // runtime also runs under Rosetta on arm64 macOS CI; individual waits below
+  // remain bounded, while the parent allows all required phases to finish.
+  { timeout: 240000 },
   async (t) => {
     const dir = await mkdtemp(join(tmpdir(), 'astral-computer-integration-')),
       root = join(dir, 'project');
@@ -261,6 +264,7 @@ test(
       results = [],
       lastPoll = 0;
     async function pollUntil(inputs, check) {
+      t.diagnostic('Native phase: ' + inputs.map((p) => p.input.split(/\s+/)[0]).join(', '));
       for (let i = 0; i < 250; i++) {
         // Match the real executor's polling cadence; status sampling can remain
         // frequent without exhausting the device's 120/minute claim quota.
