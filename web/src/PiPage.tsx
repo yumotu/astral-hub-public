@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 import { useMobilePanels } from './MobilePanels';
+import { useHistoryComposerEnter } from './composer-keyboard';
 import './message-actions.css';
 import { api, dateLabel } from './data';
 import { peekAPI } from './resource-cache';
@@ -675,6 +676,7 @@ function ServerPiPage({
   const pending = useRef<string | null>(null),
     scroll = useRef<HTMLDivElement>(null),
     alive = useRef(true);
+  useHistoryComposerEnter(composer, scroll, !computerTarget);
   useEffect(() => {
     pending.current = null;
   }, [sendMode]);

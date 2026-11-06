@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AssistantComposerActions } from './AssistantComposerActions';
+import { useHistoryComposerEnter } from './composer-keyboard';
 import { AssistantSettings } from './AssistantSettings';
 import { AssistantMode } from './AssistantMode';
 import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
@@ -143,6 +144,7 @@ export function ComputerChat({
     area = useRef<HTMLTextAreaElement>(null),
     follow = useRef(true),
     alive = useRef(true);
+  useHistoryComposerEnter(area, scroll);
   const { manager: outbox, rows } = useMessageOutbox(settings, owner, {
     deviceId,
     projectId: project.id,
