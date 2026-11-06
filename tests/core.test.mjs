@@ -25,7 +25,7 @@ const analysis = {
   cards: [{ title: '此刻的指引', text: '先安排一段安静的时间。' }],
   advice: ['写下今天可以推进的一件小事。'],
 };
-test('PDF preview workers are served with JavaScript MIME under nosniff and worker CSP', async t => {
+test('PDF preview workers are served with JavaScript MIME under nosniff and worker CSP', async (t) => {
   const root = new URL('../dist/', import.meta.url);
   await mkdir(root, { recursive: true });
   const name = 'mime-check-' + randomUUID() + '.mjs';
@@ -362,11 +362,11 @@ test('server restart preserves records and custom plugins', async (t) => {
   const r = localDraw('重启后还在吗？', 'single');
   first.store.sync([{ id: r.id, deleted: false, data: r }]);
   first.store.savePlugin(pluginSchema.parse(example));
-  await new Promise(resolve => first.server.close(resolve));
+  await new Promise((resolve) => first.server.close(resolve));
   const second = await createApp({ token, dataDir: dir });
   assert.equal(second.store.all()[0].id, r.id);
   assert.equal(second.store.plugins()[0].id, example.id);
-  await new Promise(resolve => second.server.close(resolve));
+  await new Promise((resolve) => second.server.close(resolve));
 });
 test('server stores plugin configuration only; the client executes plugins', async (t) => {
   const { request } = await fixture(t);
@@ -459,6 +459,21 @@ test('native app origin is explicitly allowed; unknown origins are not granted C
   assert.equal(native.status, 204);
   assert.equal(native.headers.get('Access-Control-Allow-Origin'), 'astral://app');
   assert.match(native.headers.get('Access-Control-Allow-Methods'), /\bPATCH\b/);
+  for (const route of [
+    '/api/pi/projects/workspace/display-name',
+    '/api/relay/projects/project/display-name',
+  ]) {
+    const rename = await fetch(url + route, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'astral://app',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+    assert.equal(rename.status, 204);
+    assert.match(rename.headers.get('Access-Control-Allow-Methods'), /\bPUT\b/);
+  }
   const unknown = await fetch(url + '/api/status', {
     method: 'OPTIONS',
     headers: { Origin: 'https://unknown.example' },

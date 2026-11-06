@@ -155,6 +155,62 @@ async function fixture(t, options = {}) {
   return { app, request, calls, mailState };
 }
 
+test('new mail notices use a durable UID baseline, never mark messages read and reject stale mailbox identities', async (t) => {
+  const f = await fixture(t),
+    owner = (
+      await f.request(
+        '/auth/bootstrap',
+        {
+          username: 'mailnotices',
+          displayName: '邮件通知验收',
+          password: 'Synthetic-password-123',
+          adminToken: token,
+        },
+        { auth: false },
+      )
+    ).body;
+  const auth = { token: owner.token },
+    request = (p, data, opts = {}) => f.request(p, data, { ...auth, ...opts });
+  await request('/mail/account', { address: 'me@gmail.com', appPassword: 'test-password' });
+  await request('/mail/messages?refresh=1');
+  assert.equal(
+    (await request('/notifications')).body.notifications.length,
+    0,
+    'first sync spammed old mail',
+  );
+  f.mailState.uids = [101, 102, 103];
+  await request('/mail/messages?refresh=1');
+  const notices = (await request('/notifications')).body.notifications;
+  assert.equal(notices.length, 1);
+  const n = notices[0];
+  assert.equal(n.kind, 'mail');
+  assert.equal(n.target.uid, 103);
+  assert.ok(!JSON.stringify(n).includes('test-password'));
+  await request('/mail/messages?refresh=1');
+  assert.equal((await request('/notifications')).body.notifications.length, 1);
+  const link =
+    '/mail/messages/103?mailbox=INBOX&noticeRevision=' +
+    n.target.revision +
+    '&noticeValidity=' +
+    n.target.uidValidity;
+  assert.equal((await request(link)).status, 200);
+  assert.equal(
+    (await request('/mail/unread')).body.count,
+    2,
+    'notice reading changed business read state',
+  );
+  f.mailState.validity = 2n;
+  assert.equal((await request(link)).status, 409);
+  await request('/mail/messages?refresh=1');
+  assert.equal(
+    (await request('/notifications')).body.notifications.length,
+    1,
+    'UIDVALIDITY change replayed old mail',
+  );
+  await request('/mail/account', { address: 'new@gmail.com', appPassword: 'different-password' });
+  assert.equal((await request(link)).status, 409);
+});
+
 test('old mail pages use exclusive stable UID cursors bound to filters and mailbox identity', async (t) => {
   const { request, mailState } = await fixture(t);
   await request('/mail/account', { address: 'me@gmail.com', appPassword: 'test-password' });

@@ -8,12 +8,20 @@ import { useBackLayer } from './back-navigation';
 import type { AuthSession, Settings } from './types';
 import './learning.css';
 
-type Question = { id: string; kind: 'choice' | 'short'; prompt: string; options?: string[] };
+type Question = {
+  id: string;
+  kind: 'choice' | 'short';
+  prompt: string;
+  options?: string[];
+  revision?: number;
+};
 type Answer = { choiceIndex: number } | { text: string };
 type Attempt = {
   id: string;
   lessonId: string;
   questionId: string;
+  questionRevision?: number;
+  question?: { prompt: string; options?: string[] };
   answer: Answer;
   score: number;
   feedback: string;
@@ -170,12 +178,18 @@ function Exercise({
             {result.score} / 100 · {result.passed ? '已掌握' : '加入错题本'}
           </strong>
           <p>{result.feedback}</p>
+          {(result.questionRevision || 1) !== (question.revision || 1) && (
+            <p className="field-help">
+              此结果属于第{result.questionRevision || 1}版题目，当前为第{question.revision || 1}
+              版；历史分数保留，重新作答使用新版。
+            </p>
+          )}
           <details>
             <summary>答案与解析</summary>
             {result.correctIndex !== undefined && (
               <p>
                 正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
-                {question.options?.[result.correctIndex]}
+                {(result.question?.options || question.options)?.[result.correctIndex]}
               </p>
             )}
             {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
@@ -460,7 +474,13 @@ export function LearningPage({
       if (alive.current) setBusy('');
     }
   }
-  async function grade(lessonId: string, questionId: string, answer: Answer, id: string) {
+  async function grade(
+    lessonId: string,
+    questionId: string,
+    answer: Answer,
+    id: string,
+    questionRevision?: number,
+  ) {
     const r = await api<{ attempt: Attempt }>(
       settings,
       '/learning/attempts',
@@ -468,6 +488,7 @@ export function LearningPage({
         id,
         lessonId,
         questionId,
+        ...(questionRevision ? { questionRevision } : {}),
         answer,
       },
       undefined,
@@ -684,9 +705,10 @@ export function LearningPage({
                     <LoaderCircle size={16} className="spin" />{' '}
                     {lesson.progress?.stage === 'planning'
                       ? '讲解已保存，正在规划整套题目的覆盖与难度'
-                      : lesson.progress?.stage === 'questions' || lesson.progress?.stage === 'repair'
-                      ? '讲解已保存，正在分批准备练习'
-                      : '正在准备详细讲解'}{' '}
+                      : lesson.progress?.stage === 'questions' ||
+                          lesson.progress?.stage === 'repair'
+                        ? '讲解已保存，正在分批准备练习'
+                        : '正在准备详细讲解'}{' '}
                     · {lesson.progress?.completed || 0} / {lesson.progress?.total || total}题
                   </p>
                 )}
@@ -700,11 +722,11 @@ export function LearningPage({
               {lesson.status === 'ready' && <h2>检验理解 · {lesson.questions?.length}题</h2>}
               {lesson.questions?.map((q) => (
                 <Exercise
-                  key={lesson.id + q.id}
-                  draftKey={viewKey + lesson.id + q.id}
+                  key={lesson.id + q.id + ':' + (q.revision || 1)}
+                  draftKey={viewKey + lesson.id + q.id + ':' + (q.revision || 1)}
                   question={q}
                   latest={lesson.attempts?.filter((a) => a.questionId === q.id).at(-1)}
-                  onGrade={(answer, id) => grade(lesson.id, q.id, answer, id)}
+                  onGrade={(answer, id) => grade(lesson.id, q.id, answer, id, q.revision || 1)}
                 />
               ))}
             </section>
@@ -769,10 +791,13 @@ export function LearningPage({
                 </small>
               </header>
               <Exercise
-                draftKey={viewKey + w.lessonId + w.questionId}
+                key={w.lessonId + w.questionId + ':' + (w.question.revision || 1)}
+                draftKey={viewKey + w.lessonId + w.questionId + ':' + (w.question.revision || 1)}
                 question={{ ...w.question, id: w.questionId }}
                 latest={w.lastAttempt}
-                onGrade={(answer, id) => grade(w.lessonId, w.questionId, answer, id)}
+                onGrade={(answer, id) =>
+                  grade(w.lessonId, w.questionId, answer, id, w.question.revision || 1)
+                }
               />
             </div>
           ))}

@@ -182,7 +182,37 @@ function Workspace({
   const [page, setPage] = useState<Page>('pi');
   const pageHistory = useRef<Page[]>([]);
   const unread = useUnread(settings, !!session);
-  const notifications = useNotifications(settings, session?.user.id, (notification) => {
+  const [mailNotice, setMailNotice] = useState<{
+    id: string;
+    mailbox: string;
+    uid: number;
+    revision: string;
+    uidValidity: string;
+  } | null>(null);
+  const [contactNotice, setContactNotice] = useState<{ id: string; contactId?: string } | null>(
+    null,
+  );
+  const openNotification = (notification: {
+    id?: string;
+    conversationId?: string | null;
+    taskId?: string | null;
+    target?: import('./notifications').AppNotification['target'];
+  }) => {
+    if (notification.target?.type === 'mail') {
+      setMailNotice({ id: notification.id || crypto.randomUUID(), ...notification.target });
+      setPage('mail');
+      return;
+    }
+    if (notification.target?.type === 'contact' || notification.target?.type === 'contacts') {
+      setContactNotice({
+        id: notification.id || crypto.randomUUID(),
+        ...(notification.target.type === 'contact'
+          ? { contactId: notification.target.contactId }
+          : {}),
+      });
+      setPage('social');
+      return;
+    }
     if (notification.conversationId) {
       localStorage.setItem(
         `astral.pi.last:${settings.url}:${session?.user.id || 'guest'}`,
@@ -191,7 +221,24 @@ function Workspace({
       window.dispatchEvent(new CustomEvent('astral-open-pi', { detail: notification }));
     }
     setPage('pi');
-  });
+  };
+  const notifications = useNotifications(settings, session?.user.id, openNotification);
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('notification');
+    if (!session || !id || !/^[a-f0-9-]{36}$/.test(id)) return;
+    let active = true;
+    void api<{ notification: import('./notifications').AppNotification }>(
+      settings,
+      '/notifications/' + id,
+    )
+      .then((v) => {
+        if (active) openNotification(v.notification);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [session?.user.id, settings.url]);
   useEffect(() => {
     const id = new URLSearchParams(location.search).get('piConversation');
     if (session && /^[a-f0-9-]{36}$/.test(id || '')) {
@@ -315,6 +362,8 @@ function Workspace({
     setNotice('本机设置已保存，AI 密钥不会同步。');
   }
   function navigate(p: Page) {
+    if (p === 'mail') setMailNotice(null);
+    if (p === 'social') setContactNotice(null);
     if (p !== page) pageHistory.current = [...pageHistory.current.slice(-19), page];
     setPage(p);
     setMobileNav(false);
@@ -620,6 +669,7 @@ function Workspace({
               />
             ) : page === 'social' ? (
               <SocialPage
+                openTarget={contactNotice}
                 key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
                 settings={settings}
                 session={session}
@@ -643,6 +693,7 @@ function Workspace({
               />
             ) : page === 'mail' ? (
               <MailPage
+                openTarget={mailNotice}
                 key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
                 settings={settings}
                 session={session}
@@ -650,6 +701,7 @@ function Workspace({
               />
             ) : (
               <SettingsPage
+                admin={session?.user.role === 'owner'}
                 notifications={notifications}
                 settings={settings}
                 save={saveSettings}

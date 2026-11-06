@@ -48,7 +48,8 @@ export function historyComposerEnter(
   const button = form?.querySelector<HTMLButtonElement>(
     '[data-composer-submit],.composer-primary-action:not(.stop-task)',
   );
-  if (button && !button.disabled) form!.requestSubmit(button);
+  if (button && !button.disabled && button.getAttribute?.('aria-disabled') !== 'true')
+    form!.requestSubmit(button);
   return true;
 }
 

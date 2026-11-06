@@ -41,10 +41,11 @@ test(
       calls.push({ users, answered });
       let delta,
         tool = false;
-      if (last.role === 'tool' || generated.includes('update_goal'))
+      if (generated.includes('update_goal'))
         delta = { role: 'assistant', content: 'Verified completion after the real answer' };
       else {
-        const name = answered ? 'update_goal' : 'ask_user';
+        const plans=generated.filter(v=>v==='goal_plan').length;
+        const name = !plans || (answered&&plans===1) ? 'goal_plan' : answered ? 'update_goal' : 'ask_user';
         assert.ok(
           p.tools.some((x) => x.function.name === name),
           'restored native goal tool missing: ' + name,
@@ -61,7 +62,7 @@ test(
               function: {
                 name,
                 arguments: JSON.stringify(
-                  answered
+                  name==='goal_plan' ? {revision:plans,criteria:['Answer matches user scope'],items:[{id:'scope',text:'Use the real user scope',status:answered?'done':'pending',...(answered?{evidence:'Actual recovery answer received by original continuation'}:{})}],verification:answered?[{criterion:'Answer matches user scope',evidence:'Native continuation includes actual user answer'}]:[]} : answered
                     ? { status: 'complete' }
                     : {
                         question: 'Which scope should the goal use?',
@@ -276,7 +277,8 @@ test(
     assert.equal(completed.status, 'done', JSON.stringify(completed));
     assert.equal(completed.longGoal.id, waiting.longGoal.id);
     assert.equal(completed.longGoal.status, 'complete');
-    assert.deepEqual(generated, ['ask_user', 'update_goal'], 'old tool or task was replayed');
+    assert.deepEqual(generated, ['goal_plan','ask_user','goal_plan','update_goal'], 'old tool or task was replayed');
+    assert.equal(completed.longGoal.plan.revision,2);
     assert.ok(calls.some((c) => c.answered));
     const beforeRetry = calls.length;
     assert.equal(

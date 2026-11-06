@@ -40,7 +40,7 @@ test(
         users = p.messages.filter((m) => m.role === 'user').map(text),
         input = users.at(-1) || '',
         last = p.messages.at(-1);
-      calls.push({ users });
+      calls.push({ users, toolResults: p.messages.filter((m) => m.role === 'tool').map(text) });
       const exportFile = input.includes('EXPORT_FILE');
       const pluginCall = input.includes('PLUGIN_FILE');
       const nativeCall = input.includes('ONLINE_PACKAGE_CALL');
@@ -53,6 +53,9 @@ test(
       );
       const finishGoal =
         longGoal && checkpoint && p.tools.some((t) => t.function.name === 'update_goal');
+      const savedPlan = p.messages.some((m) =>
+        m.tool_calls?.some((t) => t.function.name === 'goal_plan'),
+      );
       const tool =
         finishGoal ||
         (last.role !== 'tool' &&
@@ -112,7 +115,31 @@ test(
                       id: 'qa_' + randomUUID(),
                       type: 'function',
                       function: finishGoal
-                        ? { name: 'update_goal', arguments: '{"status":"complete"}' }
+                        ? savedPlan
+                          ? { name: 'update_goal', arguments: '{"status":"complete"}' }
+                          : {
+                              name: 'goal_plan',
+                              arguments: JSON.stringify({
+                                revision: 0,
+                                criteria: ['Checkpoint received in original native history'],
+                                items: [
+                                  {
+                                    id: 'verify',
+                                    text: 'Verify native checkpoint',
+                                    status: 'done',
+                                    evidence:
+                                      'Fixture observed goal checkpoint in assistant history',
+                                  },
+                                ],
+                                verification: [
+                                  {
+                                    criterion: 'Checkpoint received in original native history',
+                                    evidence:
+                                      'Provider inspected the actual original conversation payload',
+                                  },
+                                ],
+                              }),
+                            }
                         : ask
                           ? {
                               name: 'ask_user',
@@ -386,12 +413,24 @@ test(
     assert.ok(
       appResult.tools.some(
         (t) =>
-          t.name === 'app_functions' &&
-          t.status === 'done' &&
-          t.output.includes('contacts.send') &&
-          t.output.includes('learning.generate'),
+          t.name === 'app_functions' && t.status === 'done' && t.summary === '查询软件功能目录',
       ),
       JSON.stringify(appResult),
+    );
+    assert.ok(
+      calls.some(
+        (c) =>
+          c.users.at(-1)?.includes(appCall.input) &&
+          c.toolResults.some((result) =>
+            [
+              'contacts.send',
+              'learning.generate',
+              'memory.remember',
+              'learning.question_update',
+            ].every((name) => result.includes(name)),
+          ),
+      ),
+      'the complete live application catalog must reach the model even when the UI trace is truncated',
     );
     const scheduleJob = submit(randomUUID(), 'SCHEDULE_NATIVE_' + randomUUID());
     await request('/relay/submissions', scheduleJob, owner.token);
@@ -522,6 +561,8 @@ test(
     assert.equal(goalResult.status, 'done', JSON.stringify(goalResult));
     assert.equal(goalResult.longGoal.status, 'complete');
     assert.equal(goalResult.longGoal.tokenBudget, null);
+    assert.equal(goalResult.longGoal.plan.items[0].status, 'done');
+    assert.equal(goalResult.tools.filter((t) => t.name === 'goal_plan').length, 1);
     assert.equal(goalResult.tools.filter((t) => t.name === 'update_goal').length, 1);
     assert.equal(goalResult.output, 'goal completed');
     const statusJob = submit(goalJob.conversationId, '/long-goal status');

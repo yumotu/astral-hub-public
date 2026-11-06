@@ -1,8 +1,14 @@
 import { useRef, useState, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Settings2, ChevronDown } from 'lucide-react';
+import { Settings2, ChevronDown, X } from 'lucide-react';
 import { useBackLayer } from './back-navigation';
-export function AssistantSettings({ children }: { children: ReactNode }) {
+export function AssistantSettings({
+  children,
+  location = '服务器',
+}: {
+  children: ReactNode;
+  location?: string;
+}) {
   const [open, setOpen] = useState(false),
     root = useRef<HTMLDivElement>(null),
     panel = useRef<HTMLElement>(null);
@@ -68,25 +74,45 @@ export function AssistantSettings({ children }: { children: ReactNode }) {
       </button>
       {open &&
         createPortal(
-          <section
-            ref={panel}
-            style={position}
-            className="surface assistant-settings-panel"
-            aria-label="对话设置面板"
-            onKeyDown={(e) => {
-              if (
-                e.key === 'Escape' &&
-                !e.defaultPrevented &&
-                !(e.target instanceof Element && e.target.closest('.approval-dialog'))
-              ) {
-                e.preventDefault();
-                setOpen(false);
-                root.current?.querySelector('button')?.focus();
-              }
-            }}
-          >
-            {children}
-          </section>,
+          <>
+            <div className="assistant-settings-backdrop" onClick={() => setOpen(false)} />
+            <section
+              ref={panel}
+              style={position}
+              className="surface assistant-settings-panel"
+              aria-label="对话设置面板"
+              role="dialog"
+              aria-modal="true"
+              onKeyDown={(e) => {
+                if (
+                  e.key === 'Escape' &&
+                  !e.defaultPrevented &&
+                  !(e.target instanceof Element && e.target.closest('.approval-dialog'))
+                ) {
+                  e.preventDefault();
+                  setOpen(false);
+                  root.current?.querySelector('button')?.focus();
+                }
+              }}
+            >
+              <header className="assistant-settings-heading">
+                <strong>对话设置</strong>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="关闭对话设置"
+                  onClick={() => {
+                    setOpen(false);
+                    root.current?.querySelector('button')?.focus();
+                  }}
+                >
+                  <X size={17} />
+                </button>
+              </header>
+              <p className="assistant-settings-location">执行位置 · {location}</p>
+              {children}
+            </section>
+          </>,
           document.body,
         )}
     </div>

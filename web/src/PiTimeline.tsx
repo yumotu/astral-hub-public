@@ -30,7 +30,7 @@ function StepIcon({ item, active }: { item: Activity; active: boolean }) {
 }
 function ProcessGroup({ items, active }: { items: Activity[]; active: boolean }) {
   const workbench = useFileWorkbench();
-  const [choice, setChoice] = useState<boolean | null>(null);
+  const [choice, setChoice] = useState(false);
   const running = active;
   const unconfirmed =
     !active && items.some((item) => item.kind === 'tool' && item.status === 'running');
@@ -56,7 +56,7 @@ function ProcessGroup({ items, active }: { items: Activity[]; active: boolean })
           : tools.length
             ? '执行与检查'
             : '思考过程';
-  const expanded = choice ?? running;
+  const expanded = choice;
   return (
     <details
       className={`execution-process ${running ? 'is-running' : ''} ${failed ? 'has-error' : ''}`}

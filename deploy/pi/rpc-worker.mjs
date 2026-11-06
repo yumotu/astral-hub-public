@@ -131,6 +131,7 @@ args.push(
           'create_goal',
           'get_goal',
           'update_goal',
+          'goal_plan',
           ...(p.canManageSkills ? ['skill_create', 'skill_manage'] : []),
           ...(p.canManageSkills && p.projectId ? ['skill_install'] : []),
           ...(p.projectId && p.access === 'edit' && p.allowWrite

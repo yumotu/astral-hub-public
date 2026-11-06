@@ -57,6 +57,9 @@ export const toolLabels: Record<string, string> = {
   todo_write: '更新任务清单',
   TodoWrite: '更新任务清单',
   update_plan: '更新计划',
+  goal_plan: '目标计划',
+  app_functions: '软件功能',
+  compress: '压缩上下文',
 };
 export function ToolLog({
   tools,

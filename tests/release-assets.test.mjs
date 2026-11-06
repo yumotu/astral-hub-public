@@ -103,6 +103,8 @@ test('web and release executors share deterministic bytes, the current version a
   ])
     await writeFile(join(root, 'agent', name), 'export {};\r\n');
   await writeFile(join(root, 'agent/device.json'), 'fixture-secret-must-not-be-packaged');
+  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md'])
+    await writeFile(join(root, name), await readFile(new URL('../' + name, import.meta.url)));
   for (const name of [
     'project-files.mjs',
     'project-lock.mjs',
@@ -115,9 +117,12 @@ test('web and release executors share deterministic bytes, the current version a
     'ask-user.mjs',
     'question-continuation.mjs',
     'long-goal.mjs',
+    'goal-plan.mjs',
     'long-goal-command.mjs',
     'schedule-tools.mjs',
-    ...['index.ts','goal-state.ts','usage.ts','LICENSE','UPSTREAM.json'].map(name=>'vendor/pi-goal/'+name),
+    ...['index.ts', 'goal-state.ts', 'usage.ts', 'LICENSE', 'UPSTREAM.json'].map(
+      (name) => 'vendor/pi-goal/' + name,
+    ),
     'stream-writer.mjs',
     'package-transaction.mjs',
     'document-text.mjs',
@@ -128,7 +133,7 @@ test('web and release executors share deterministic bytes, the current version a
     'office-content.mjs',
     'attachment-limits.mjs',
   ]) {
-    await mkdir(dirname(join(root, 'deploy/pi', name)), {recursive:true});
+    await mkdir(dirname(join(root, 'deploy/pi', name)), { recursive: true });
     await writeFile(
       join(root, 'deploy/pi', name),
       await readFile(new URL('../deploy/pi/' + name, import.meta.url)),
@@ -143,6 +148,8 @@ test('web and release executors share deterministic bytes, the current version a
     await readFile(join(root, 'web/public/downloads', first.name)),
   );
   const archive = unzipSync(first.bytes);
+  assert.match(strFromU8(archive['astral-remote-pi-agent/LICENSE']), /MIT License/);
+  assert.ok(archive['astral-remote-pi-agent/THIRD_PARTY_NOTICES.md']);
   const unpacked = join(root, 'unpacked');
   for (const [name, bytes] of Object.entries(archive)) {
     const path = join(unpacked, name);

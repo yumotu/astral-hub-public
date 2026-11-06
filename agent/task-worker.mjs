@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { RpcClient } from '@earendil-works/pi-coding-agent';
-import { createCollector, toolPath, toolOutput } from './assets/protocol.mjs';
+import { createCollector, toolPath, toolOutput, usageEvent } from './assets/protocol.mjs';
 import {
   promptAndSettle,
   extensionUiRequest,
@@ -98,8 +98,16 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
     here = dirname(fileURLToPath(import.meta.url)),
     collector = createCollector({ projectMode: true });
   let releasePackages;
-  let state = { output: '', thinking: '', phase: '正在连接本机Pi', tools: [], uiRequests: [] },
+  let state = {
+      output: '',
+      thinking: '',
+      phase: '正在连接本机Pi',
+      tools: [],
+      uiRequests: [],
+      metrics: {},
+    },
     revision = 0;
+  let responseStarted;
   const publish = () => send({ type: 'progress', state: { ...state, revision: ++revision } });
   answerDialog = (response) => {
     const request = dialogs.get(response.id);
@@ -111,7 +119,9 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
         ? typeof confirmed !== 'boolean'
         : typeof value !== 'string' ||
           value.length > 12000 ||
-          (request.method === 'select' && !request.options.includes(value)))
+          (request.method === 'select' &&
+            !request.options.includes(value) &&
+            !(request.source === 'ask_user' && value.trim().length > 0 && value.length <= 4000)))
     )
       return;
     writeRpcRecord(client, {
@@ -224,6 +234,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       'create_goal',
       'get_goal',
       'update_goal',
+      'goal_plan',
       ...(job.canSchedule ? ['schedule_manage'] : []),
       ...extraToolNames,
       ...(job.access === 'edit' ? ['project_write', 'project_edit'] : []),
@@ -295,8 +306,8 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
           names.some((name) => ['schedule_manage', 'app_functions'].includes(name))
             ? '1'
             : '0',
-        ASTRAL_LONG_GOAL_ALLOWED: ['create_goal', 'get_goal', 'update_goal'].every((name) =>
-          names.includes(name),
+        ASTRAL_LONG_GOAL_ALLOWED: ['create_goal', 'get_goal', 'update_goal', 'goal_plan'].every(
+          (name) => names.includes(name),
         )
           ? '1'
           : '0',
@@ -326,6 +337,22 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       },
     });
     client.onEvent((e) => {
+      if (e.type === 'message_start' && e.message?.role === 'assistant') {
+        responseStarted = performance.now();
+        state.metrics.modelTurns = (state.metrics.modelTurns || 0) + 1;
+      }
+      if (e.type === 'message_end' && e.message?.role === 'assistant') {
+        const usage = usageEvent(
+          e.message.usage,
+          responseStarted === undefined ? undefined : performance.now() - responseStarted,
+        );
+        for (const [key, value] of Object.entries(usage?.usage || {}))
+          state.metrics[key] = (state.metrics[key] || 0) + value;
+        if (usage?.responseMs !== undefined)
+          state.metrics.responseMs = (state.metrics.responseMs || 0) + usage.responseMs;
+        responseStarted = undefined;
+        publish();
+      }
       const goal = longGoalEvent(e);
       if (goal) {
         state.longGoal = goal.goal;
@@ -351,6 +378,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       if (e.type === 'message_update' && ['text_delta', 'thinking_delta'].includes(a?.type))
         writer.write({ type: a.type, delta: redact(a.delta) });
       if (e.type === 'tool_execution_start') {
+        state.metrics.toolCalls = (state.metrics.toolCalls || 0) + 1;
         writer.flush();
         state.phase = '正在执行工具';
         state.tools = [
@@ -433,6 +461,17 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
     if (result.failed || !result.output.trim())
       throw Error(result.errorMessage || '本机Pi未返回完成结果。');
     state.output = result.output;
+    const [nativeState, stats] = await Promise.all([client.getState(), client.getSessionStats()]);
+    state.context = {
+      messageCount: nativeState.messageCount,
+      stats: {
+        tokens: stats.tokens,
+        contextUsage: stats.contextUsage,
+        userMessages: stats.userMessages,
+        assistantMessages: stats.assistantMessages,
+        toolCalls: stats.toolCalls,
+      },
+    };
     state.phase = '已完成';
     send({
       type: 'result',

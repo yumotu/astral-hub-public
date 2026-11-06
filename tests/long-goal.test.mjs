@@ -6,11 +6,49 @@ import { pluginLoadPlan } from '../deploy/pi/plugin-load-plan.mjs';
 import { longGoalEvent, customMessageText } from '../deploy/pi/rpc-prompt.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 import { messageDelivery } from '../shared/pi-conversation.mjs';
+import { parseGoalPlan, latestGoalPlan, goalPlanComplete } from '../deploy/pi/goal-plan.mjs';
 import {
   createGoalState,
   accountGoalTurn,
   parseTokenBudget,
 } from '../deploy/pi/vendor/pi-goal/goal-state.ts';
+
+test('goal plans survive branch replay, bind to one goal and require step plus acceptance evidence', () => {
+  const goalId = 'goal-a',
+    pending = {
+      goalId,
+      revision: 1,
+      criteria: ['Build passes'],
+      items: [{ id: 'build', text: 'Build', status: 'pending' }],
+      verification: [],
+    };
+  assert.equal(goalPlanComplete(parseGoalPlan(pending)), false);
+  assert.throws(
+    () => parseGoalPlan({ ...pending, items: [{ ...pending.items[0], status: 'done' }] }),
+    /证据/,
+  );
+  const done = parseGoalPlan({
+    ...pending,
+    revision: 2,
+    items: [{ ...pending.items[0], status: 'done', evidence: 'npm run build exit 0' }],
+    verification: [{ criterion: 'Build passes', evidence: 'Build log exit 0' }],
+  });
+  assert.equal(goalPlanComplete(done), true);
+  const entries = [
+    { type: 'custom', customType: 'astral-goal-plan', data: pending },
+    { type: 'custom', customType: 'astral-goal-plan', data: done },
+  ];
+  assert.deepEqual(latestGoalPlan({ sessionManager: { getBranch: () => entries } }, goalId), done);
+  assert.equal(latestGoalPlan({ sessionManager: { getBranch: () => entries } }, 'goal-b'), null);
+  assert.throws(
+    () =>
+      parseGoalPlan({
+        ...done,
+        verification: [{ criterion: 'Unrelated criterion', evidence: 'x' }],
+      }),
+    /对应/,
+  );
+});
 
 test('the single long-goal plugin is pinned with intact upstream source and license in server and computer packages', async () => {
   const root = new URL('../deploy/pi/vendor/pi-goal/', import.meta.url);

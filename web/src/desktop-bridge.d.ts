@@ -59,7 +59,12 @@ declare global {
         supported: () => Promise<boolean>;
         show: (notice: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
         onClick: (
-          callback: (notice: { scope: string; conversationId?: string; taskId?: string }) => void,
+          callback: (notice: {
+            id?: string;
+            scope: string;
+            conversationId?: string;
+            taskId?: string;
+          }) => void,
         ) => () => void;
       };
     };

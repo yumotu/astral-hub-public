@@ -89,6 +89,40 @@ async function fixture(t, options = {}) {
     tick: (ms) => (time += ms),
   };
 }
+test('computer cancellation remains pending until the executor acknowledges stop and keeps the same conversation lane blocked', async (t) => {
+  const f = await fixture(t),
+    p = f.submit();
+  await f.req('/relay/submissions', p, f.owner.token);
+  await f.poll();
+  await f.req('/relay/device/workspace/jobs/' + p.id + '/progress', f.state, f.device.token);
+  await f.req('/relay/jobs/' + p.id + '/cancel', {}, f.owner.token);
+  assert.equal(
+    (await f.req('/relay/jobs/' + p.id, undefined, f.owner.token)).body.job.stopPending,
+    true,
+  );
+  const next = f.submit(p.conversationId, 'after stop', { deliveryPreference: 'queue' });
+  await f.req('/relay/submissions', next, f.owner.token);
+  assert.equal((await f.poll()).body.job, null);
+  await f.req(
+    '/relay/device/workspace/jobs/' + p.id + '/result',
+    { ...f.state, revision: 2, status: 'done', output: 'late completion must not revive' },
+    f.device.token,
+  );
+  assert.equal(
+    (await f.req('/relay/jobs/' + p.id, undefined, f.owner.token)).body.job.stopPending,
+    true,
+  );
+  await f.req(
+    '/relay/device/workspace/jobs/' + p.id + '/result',
+    { ...f.state, revision: 3, status: 'cancelled' },
+    f.device.token,
+  );
+  const stopped = (await f.req('/relay/jobs/' + p.id, undefined, f.owner.token)).body.job;
+  assert.equal(stopped.stopPending, false);
+  assert.equal(stopped.status, 'cancelled');
+  assert.equal(stopped.output, 'partial');
+  assert.equal((await f.poll()).body.job.id, next.id);
+});
 test('interrupted computer questions admit one explicit same-target continuation and keep unknown operations blocked', async (t) => {
   const f = await fixture(t);
   await f.req(

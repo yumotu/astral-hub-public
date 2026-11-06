@@ -524,7 +524,11 @@ export function createPiTasks(
       else if (
         request.method !== 'confirm' &&
         typeof response.value === 'string' &&
-        (request.method !== 'select' || request.options.includes(response.value))
+        (request.method !== 'select' ||
+          request.options.includes(response.value) ||
+          (request.source === 'ask_user' &&
+            response.value.trim().length > 0 &&
+            response.value.length <= 4000))
       )
         reply = { id: request.id, value: response.value };
       else throw fail(400, '插件回复与请求类型不匹配。');

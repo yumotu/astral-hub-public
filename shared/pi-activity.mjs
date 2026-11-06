@@ -1,5 +1,5 @@
 // Presentation adapters for actual Pi tool results and stream telemetry.
-const todoNames = new Set(['todo', 'todos', 'todowrite', 'todo_write', 'update_plan']);
+const todoNames = new Set(['todo', 'todos', 'todowrite', 'todo_write', 'update_plan', 'goal_plan']);
 export const isTodoTool = (name) => todoNames.has(String(name).toLowerCase());
 export function normalizeTodos(value) {
   if (!Array.isArray(value)) return null;
@@ -32,7 +32,7 @@ export function todoSnapshot(tool) {
   const output = String(tool.output || '');
   try {
     const data = JSON.parse(output);
-    const list = normalizeTodos(data.todos ?? data.plan);
+    const list = normalizeTodos(data.todos ?? data.plan?.items ?? data.plan);
     if (list) return list;
   } catch {}
   // Compatibility with Pi's original todo extension and pre-upgrade histories.
@@ -75,6 +75,11 @@ export function conversationTodo(turns, tasks, conversationId) {
   records.sort((a, b) => timestamp(a) - timestamp(b));
   for (let i = records.length - 1; i >= 0; i--) {
     const record = records[i];
+    if (record.longGoal)
+      return {
+        items: normalizeTodos(record.longGoal.plan?.items || []) || [],
+        source: record.longGoal,
+      };
     const snapshot = latestTodo(record.timeline || []) ?? latestTodo(record.tools || []);
     if (snapshot !== null) return snapshot;
   }

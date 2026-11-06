@@ -558,12 +558,12 @@ a.process-step-target:hover {
 }
 @media (max-width: 480px) {
   .session-telemetry .telemetry-tokens {
-    display: none;
+    display: inline-flex;
   }
 }
 @media (max-width: 1200px) {
   .session-telemetry .telemetry-secondary {
-    display: none;
+    display: inline-flex;
   }
 }
 @media (max-width: 700px) {
@@ -581,7 +581,7 @@ a.process-step-target:hover {
     font-size: 9px;
   }
   .session-telemetry .telemetry-counts {
-    display: none;
+    display: inline-flex;
   }
   .process-steps {
     padding-left: 9px;

@@ -1,6 +1,6 @@
 {
   "name": "astral-hub-desktop",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": true,
   "description": "星屿 · 你的灵感空间",
   "author": "Astral Hub",
@@ -65,5 +65,6 @@
         ]
       }
     ]
-  }
+  },
+  "license": "MIT"
 }

@@ -16,6 +16,7 @@ import { createCommunity } from './community.mjs';
 import { createRelay } from './relay.mjs';
 import { createMail } from './mail.mjs';
 import { createLearning } from './learning.mjs';
+import { createMemories } from './memories.mjs';
 import { createMailAgent } from './mail-agent.mjs';
 import { createAppFunctions } from './app-functions.mjs';
 import { registerAppFeatures } from './app-feature-tools.mjs';
@@ -58,6 +59,7 @@ export async function createApp(options = {}) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const store = createStore(options.dbPath ?? resolve(dataDir, 'astral.sqlite'));
   const usage = createUsage(store.db, { now: options.now });
+  const memories = createMemories(store.db, { now: options.now });
   const updates = createAppUpdates({
     root: options.updatesDir || resolve(dataDir, 'private/updates'),
     now: options.now,
@@ -338,6 +340,10 @@ export async function createApp(options = {}) {
     imapFactory: options.mail?.imapFactory,
     smtpFactory: options.mail?.smtpFactory,
     now: options.mail?.now,
+    notify: (space, p, dedupe) => {
+      const user = store.db.prepare('SELECT id FROM users WHERE space=?').get(space);
+      if (user) notifications.publish(user.id, p, dedupe);
+    },
   });
   mail.start();
   mailAgent = createMailAgent(store.db, {
@@ -352,6 +358,7 @@ export async function createApp(options = {}) {
   appFunctions = createAppFunctions(store.db, {
     token,
     body,
+    readMemory: (ctx, query) => memories.recall(ctx.owner, query, memories.taskContext(ctx).scope),
     now: options.now,
     internalUrl:
       options.appAccessUrl ||
@@ -387,7 +394,7 @@ export async function createApp(options = {}) {
       return false;
     },
   });
-  registerAppFeatures(appFunctions, { usage, community, mail, learning, body, relay });
+  registerAppFeatures(appFunctions, { usage, community, mail, learning, memories, body, relay });
   const origins = new Set(
     (
       options.origins ??
@@ -427,7 +434,7 @@ export async function createApp(options = {}) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       }
       if (req.method === 'OPTIONS') {
         res.writeHead(origin && origins.has(origin) ? 204 : 403);
@@ -461,6 +468,7 @@ export async function createApp(options = {}) {
           if (await usage.handle(req, url, json, actor)) return;
           if (await updates.handle(req, url, res, json, actor, body)) return;
           if (await goals.handle(req, url, json, actor, body)) return;
+          if (await memories.handle(req, url, json, actor, body)) return;
           if (await sandboxNetwork.handle(req, url, json, actor, body)) return;
           if (await notifications.handle(req, url, json, actor, body, res)) return;
           if (await terminals.handle(req, url, json, actor)) return;
@@ -617,6 +625,9 @@ export async function createApp(options = {}) {
           '.html': 'text/html; charset=utf-8',
           '.js': 'application/javascript',
           '.mjs': 'application/javascript',
+          '.woff': 'font/woff',
+          '.woff2': 'font/woff2',
+          '.ttf': 'font/ttf',
           '.wasm': 'application/wasm',
           '.css': 'text/css',
           '.svg': 'image/svg+xml',

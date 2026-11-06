@@ -4,6 +4,9 @@ export const notificationLabels = {
   input: 'Pi 需要你的回复',
   plugin: 'Pi 发来一条通知',
   test: '通知测试',
+  mail: '收到新邮件',
+  contact: '收到联系人消息',
+  friend: '收到联系人申请',
 };
 export function notificationPayload(notice, owner, preview = false) {
   return {

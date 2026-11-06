@@ -93,10 +93,18 @@ export function MailPage({
   settings,
   session,
   login,
+  openTarget,
 }: {
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
+  openTarget?: {
+    id: string;
+    mailbox: string;
+    uid: number;
+    revision: string;
+    uidValidity: string;
+  } | null;
 }) {
   const cache = useMemo(
     () => new MailCache(JSON.stringify([serverIdentity(settings), session?.user.id || 'guest'])),
@@ -110,7 +118,7 @@ export function MailPage({
     since?: string;
     before?: string;
   }>('view', mailTTL.view)?.value;
-  const firstBox = initial?.mailbox || 'INBOX';
+  const firstBox = openTarget?.mailbox || initial?.mailbox || 'INBOX';
   const firstQuery = initial?.query || '';
   const firstUnread = initial?.unread || false;
   const [since, setSince] = useState(initial?.since || ''),
@@ -355,7 +363,7 @@ export function MailPage({
         setProvider(result.account.provider);
         setSetup(false);
         await loadMailboxes();
-        if (selected) await openMessage(selected);
+        if (selected && !openTarget) await openMessage(selected);
       } else {
         cache.clear();
         setAccount(null);
@@ -382,6 +390,19 @@ export function MailPage({
       cache.dispose();
     };
   }, [session?.user.id, settings.url]);
+  const openedNotice = useRef('');
+  useEffect(() => {
+    if (!openTarget || !account || busy || openedNotice.current === openTarget.id) return;
+    if (mailbox !== openTarget.mailbox) {
+      changeMailbox(openTarget.mailbox);
+      return;
+    }
+    openedNotice.current = openTarget.id;
+    void openMessage(openTarget.uid, true, {
+      revision: openTarget.revision,
+      uidValidity: openTarget.uidValidity,
+    });
+  }, [openTarget, account, mailbox, busy]);
 
   useEffect(() => {
     if (account) cache.set('view', { mailbox, query, selected, unread, since, before });
@@ -512,7 +533,7 @@ export function MailPage({
     return work;
   }
   function markOpenedRead(uid: number) {
-    if (messagesNow.current.find((m) => m.uid === uid)?.seen !== false) return;
+    if (messagesNow.current.find((m) => m.uid === uid)?.seen === true) return;
     const key = mailbox + ':' + uid;
     if (autoReading.current.has(key)) return;
     autoReading.current.add(key);
@@ -667,11 +688,15 @@ export function MailPage({
     }
   }
 
-  async function openMessage(uid: number, refresh = false) {
+  async function openMessage(
+    uid: number,
+    refresh = false,
+    expected?: { revision: string; uidValidity: string },
+  ) {
     const generation = cache.generation;
     const request = ++messageRequest.current;
     const key = bodyKey(mailbox, uid);
-    const hit = cache.get<MailMessage>(key, mailTTL.body);
+    const hit = expected ? null : cache.get<MailMessage>(key, mailTTL.body);
     setSelected(uid);
     setMessage(hit?.value || null);
     const savedSummary = cache.get<string>(summaryKey(mailbox, uid), mailTTL.summary);
@@ -689,7 +714,7 @@ export function MailPage({
     try {
       const result = await api<MailMessage>(
         settings,
-        `/mail/messages/${uid}?mailbox=${encodeURIComponent(mailbox)}${refresh ? '&refresh=1' : ''}`,
+        `/mail/messages/${uid}?mailbox=${encodeURIComponent(mailbox)}${refresh ? '&refresh=1' : ''}${expected ? '&noticeRevision=' + encodeURIComponent(expected.revision) + '&noticeValidity=' + encodeURIComponent(expected.uidValidity) : ''}`,
       );
       cache.set(key, result, generation);
       if (alive.current && request === messageRequest.current && generation === cache.generation) {

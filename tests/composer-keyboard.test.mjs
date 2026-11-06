@@ -77,6 +77,13 @@ test('IME confirmation, held Enter, line breaks and modified keys cannot trigger
   assert.deepEqual(f.submitted, []);
 });
 
+test('history Enter cannot bypass an unavailable but focusable send action', () => {
+  const f = fixture();
+  f.button.getAttribute = (name) => (name === 'aria-disabled' ? 'true' : null);
+  assert.equal(historyComposerEnter(f.event(), f.area, f.history), true);
+  assert.equal(f.submitted.length, 0);
+});
+
 test('temporary history submits its own form while blocking the underlying main conversation and nested dialogs', () => {
   const f = fixture();
   const scope = { closest: () => null, getClientRects: () => [{}], contains: () => false };

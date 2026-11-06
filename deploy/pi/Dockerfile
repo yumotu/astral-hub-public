@@ -17,6 +17,7 @@ COPY --chown=node:node stream-writer.mjs ./
 COPY --chown=node:node activity-deadline.mjs ask-user.mjs ./
 COPY --chown=node:node question-continuation.mjs ./
 COPY --chown=node:node long-goal.mjs ./
+COPY --chown=node:node goal-plan.mjs ./
 COPY --chown=node:node long-goal-command.mjs ./
 COPY --chown=node:node schedule-tools.mjs cron-scope.mjs ./
 COPY --chown=node:node vendor/ vendor/

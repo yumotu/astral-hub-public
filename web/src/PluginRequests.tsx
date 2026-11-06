@@ -37,7 +37,10 @@ function Request({
   const [dismissed, setDismissed] = useState(false),
     [otherAnswer, setOtherAnswer] = useState('');
   const resuming = task.status === 'interrupted';
-  const needsOtherAnswer = resuming && request.method === 'select' && value === '填写其他答案';
+  const needsOtherAnswer =
+    request.method === 'select' &&
+    value === '填写其他答案' &&
+    (resuming || request.source === 'ask_user');
   const waiting = busy || answered || request.status === 'responding';
   const hostApproval = request.id.startsWith('access:');
   const mailApproval = request.id.startsWith('mail:');
@@ -92,18 +95,41 @@ function Request({
         </p>
       )}
       {request.method === 'select' ? (
-        <select
-          aria-label={request.title}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          disabled={waiting}
-        >
-          {request.options?.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+        <div className="question-options" role="group" aria-label={request.title}>
+          {request.options
+            ?.filter((option) => option !== '填写其他答案')
+            .map((option, index) => (
+              <button
+                type="button"
+                key={option + index}
+                aria-pressed={!needsOtherAnswer && value === option}
+                disabled={waiting}
+                onClick={() => {
+                  setValue(option);
+                  setOtherAnswer('');
+                }}
+              >
+                {option}
+              </button>
+            ))}
+          {(request.source === 'ask_user' || resuming) && (
+            <label className="question-other-answer">
+              其他答案
+              <input
+                className="standard-input"
+                aria-label={request.title + '：其他答案'}
+                placeholder="也可以填写你的答案"
+                value={otherAnswer}
+                maxLength={4000}
+                disabled={waiting}
+                onChange={(e) => {
+                  setOtherAnswer(e.target.value);
+                  setValue('填写其他答案');
+                }}
+              />
+            </label>
+          )}
+        </div>
       ) : request.method === 'editor' ? (
         <textarea
           aria-label={request.title}
@@ -125,16 +151,6 @@ function Request({
           autoFocus
         />
       ) : null}
-      {needsOtherAnswer && (
-        <input
-          aria-label={request.title + '：其他答案'}
-          placeholder="请输入你的答案"
-          value={otherAnswer}
-          onChange={(e) => setOtherAnswer(e.target.value)}
-          maxLength={4000}
-          disabled={waiting}
-        />
-      )}
       {hostApproval && (
         <label className="approval-choice">
           此次授权范围
@@ -147,7 +163,7 @@ function Request({
             <option value="full">此环境完全权限，直到撤销</option>
           </select>
           <small className="field-help">
-            限时／完全权限允许此对话在申请的环境中执行其他命令；可在输入框下方「执行授权」撤销。
+            限时／完全权限允许此对话在申请的环境中执行其他命令；可在对话设置中的审核方式撤销。
           </small>
         </label>
       )}
@@ -173,7 +189,11 @@ function Request({
         </button>
         <button
           type="submit"
-          disabled={waiting || (resuming && !(needsOtherAnswer ? otherAnswer : value).trim())}
+          disabled={
+            waiting ||
+            ((resuming || request.source === 'ask_user') &&
+              !(needsOtherAnswer ? otherAnswer : value).trim())
+          }
         >
           {waiting && <LoaderCircle size={14} className="spin" />}
           {resuming

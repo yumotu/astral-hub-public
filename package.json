@@ -1,6 +1,6 @@
 {
   "name": "astral-hub",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,7 +20,7 @@
     "desktop:dev": "npm run build && npm --prefix desktop start",
     "desktop:package": "npm run build && npm --prefix desktop run package",
     "cards": "node scripts/generate-cards.mjs",
-    "prebuild": "npm run cards && node scripts/prepare-preview.mjs && node scripts/package-agent.mjs --web",
+    "prebuild": "npm run cards && node scripts/prepare-preview.mjs && node scripts/prepare-licenses.mjs && node scripts/package-agent.mjs --web",
     "icons": "node scripts/brand-icons.mjs"
   },
   "dependencies": {
@@ -42,6 +42,7 @@
     "fflate": "0.8.3",
     "html-to-text": "^10.0.1",
     "imapflow": "^2.10.0",
+    "katex": "0.19.1",
     "leaflet": "1.9.4",
     "lucide-react": "^0.468.0",
     "mailparser": "^3.14.1",
@@ -52,7 +53,9 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "read-excel-file": "9.3.14",
+    "rehype-katex": "7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "6.0.0",
     "sanitize-html": "2.18.1",
     "web-push": "3.6.7",
     "zod": "^4.6.7"
@@ -67,5 +70,6 @@
     "prettier": "^3.9.10",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
-  }
+  },
+  "license": "MIT"
 }

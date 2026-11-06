@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { metricValues } from '../../shared/pi-activity.mjs';
+import { runState } from '../../shared/run-state.mjs';
 import type { ModelContext, PiContext, PiExecution, PiMetrics, Settings } from './types';
 import { api } from './data';
 const count = (value: number) =>
@@ -35,9 +36,8 @@ export function RunSummary({
   status?: string;
   phase?: string;
 }) {
-  const running = status === 'running';
-  const waiting = running && /^等待你的|^等待用户/.test(phase || '');
-  const queued = ['queued', 'delivering', 'accepted', 'applied', 'stopping'].includes(status);
+  const state = runState(status, phase);
+  const running = status === 'running' || status === 'stopping';
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!running) return;
@@ -48,31 +48,22 @@ export function RunSummary({
   const start = Date.parse(execution?.startedAt || '');
   const end = running ? now : Date.parse(execution?.finishedAt || '');
   const elapsed = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : null;
-  const label =
-    running || queued
-      ? phase || (queued ? '等待执行' : '执行中')
-      : status === 'done'
-        ? '已完成'
-        : status === 'cancelled'
-          ? '已停止'
-          : status === 'interrupted'
-            ? '待核对'
-            : '未完成';
   return (
     <div
-      className={`run-summary ${running && !waiting ? 'is-running' : ''} ${!running && !queued && status !== 'done' ? 'has-error' : ''}`}
-      role={running || queued ? 'status' : undefined}
+      className={`run-summary is-${state.state} ${state.spinning ? 'is-running' : ''} ${!state.busy && status !== 'done' ? 'has-error' : ''}`}
+      role={state.busy ? 'status' : undefined}
+      data-run-state={state.state}
     >
-      {waiting || queued ? (
-        <Clock3 size={13} />
-      ) : running ? (
+      {state.spinning ? (
         <LoaderCircle size={13} className="spin" />
+      ) : state.busy ? (
+        <Clock3 size={13} />
       ) : status === 'done' ? (
         <CheckCircle2 size={13} />
       ) : (
         <CircleAlert size={13} />
       )}
-      <span>Pi · {label}</span>
+      <span>Pi · {state.label}</span>
       {elapsed !== null && (
         <span className="run-elapsed">
           <Clock3 size={11} />
@@ -114,11 +105,13 @@ export function SessionTelemetry({
   metrics,
   settings,
   conversationId,
+  target = 'server',
 }: {
   context: PiContext | null;
   metrics?: PiMetrics;
   settings: Settings;
   conversationId: string;
+  target?: 'server' | 'computer';
 }) {
   const panel = useRef<HTMLDetailsElement>(null);
   const [limits, setLimits] = useState<ModelContext | null>(null);
@@ -136,6 +129,7 @@ export function SessionTelemetry({
   }
   useEffect(() => {
     mounted.current = true;
+    if (target === 'computer') return;
     let cancelled = false;
     void api<ModelContext>(settings, endpoint)
       .then((value) => {
@@ -148,7 +142,7 @@ export function SessionTelemetry({
       cancelled = true;
       mounted.current = false;
     };
-  }, [settings, endpoint]);
+  }, [settings, endpoint, target]);
   async function updateLimits(refresh = false) {
     setSaving(true);
     setFailure('');
@@ -230,8 +224,10 @@ export function SessionTelemetry({
         {cache !== undefined && (
           <span className="telemetry-secondary">缓存命中 {Math.round(cache)}%</span>
         )}
-        {limits && (
-          <span className="telemetry-window">{contextCount(limits.contextWindow)} 上下文</span>
+        {(limits || stats?.contextUsage?.contextWindow) && (
+          <span className="telemetry-window">
+            {contextCount(limits?.contextWindow || stats?.contextUsage?.contextWindow || 0)} 上下文
+          </span>
         )}
         {percent !== null ? (
           <span className="context-indicator">
@@ -254,103 +250,105 @@ export function SessionTelemetry({
         <ChevronDown size={11} />
       </summary>
       <div className="telemetry-panel">
-        <section className="context-settings" aria-label="上下文设置">
-          <div className="context-settings-heading">
-            <h3>上下文窗口</h3>
-            <button type="button" onClick={() => void updateLimits(true)} disabled={saving}>
-              {saving ? '查询中…' : '查询上限'}
-            </button>
-          </div>
-          <p className="context-model">{limits?.model || '正在查询模型…'}</p>
-          <p>
-            模型上限：{limits?.maxContextWindow?.toLocaleString() || '未确认'} tokens
-            {limits?.source === 'cache'
-              ? ' · 缓存'
-              : limits?.source === 'api'
-                ? ' · API 已确认'
-                : ''}
-          </p>
-          <label className="context-follow">
-            <input
-              type="checkbox"
-              checked={automatic}
-              disabled={saving || !limits?.maxContextWindow}
-              onChange={(e) => {
-                setAutomatic(e.target.checked);
-                setNotice('');
-              }}
-            />
-            跟随模型上限
-          </label>
-          <div className="context-size-input">
-            <label htmlFor="context-window-tokens">本对话窗口</label>
-            <input
-              id="context-window-tokens"
-              type="number"
-              inputMode="numeric"
-              step="1"
-              min={limits?.minContextWindow || 16384}
-              max={limits?.maxContextWindow || undefined}
-              value={automatic ? limits?.maxContextWindow || '' : draft}
-              placeholder="Token 数量"
-              disabled={automatic || saving || !limits?.maxContextWindow}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setNotice('');
-              }}
-            />
-            <span>tokens</span>
-          </div>
-          <div className="context-presets" aria-label="常用窗口大小">
-            {[65536, 131072, 262144, 524288]
-              .filter((v) => v <= (limits?.maxContextWindow || 0))
-              .map((v) => (
-                <button
-                  type="button"
-                  key={v}
-                  disabled={saving}
-                  aria-pressed={!automatic && Number(draft) === v}
-                  onClick={() => {
-                    setAutomatic(false);
-                    setDraft(String(v));
-                    setNotice('');
-                  }}
-                >
-                  {v / 1024}K
-                </button>
-              ))}
-          </div>
-          <p>
-            仅调整模型工作窗口，聊天记录仍保留。调小时按 Pi 原生规则自动压缩；界面展示轮数不变。
-          </p>
-          {limits?.activeContextWindow && (
+        {target === 'server' && (
+          <section className="context-settings" aria-label="上下文设置">
+            <div className="context-settings-heading">
+              <h3>上下文窗口</h3>
+              <button type="button" onClick={() => void updateLimits(true)} disabled={saving}>
+                {saving ? '查询中…' : '查询上限'}
+              </button>
+            </div>
+            <p className="context-model">{limits?.model || '正在查询模型…'}</p>
             <p>
-              当前任务窗口：{limits.activeContextWindow.toLocaleString()} tokens；修改用于下一轮。
+              模型上限：{limits?.maxContextWindow?.toLocaleString() || '未确认'} tokens
+              {limits?.source === 'cache'
+                ? ' · 缓存'
+                : limits?.source === 'api'
+                  ? ' · API 已确认'
+                  : ''}
             </p>
-          )}
-          {limits?.warning && <p role="status">{limits.warning}</p>}
-          {failure && (
-            <p className="context-error" role="alert">
-              {failure}
+            <label className="context-follow">
+              <input
+                type="checkbox"
+                checked={automatic}
+                disabled={saving || !limits?.maxContextWindow}
+                onChange={(e) => {
+                  setAutomatic(e.target.checked);
+                  setNotice('');
+                }}
+              />
+              跟随模型上限
+            </label>
+            <div className="context-size-input">
+              <label htmlFor="context-window-tokens">本对话窗口</label>
+              <input
+                id="context-window-tokens"
+                type="number"
+                inputMode="numeric"
+                step="1"
+                min={limits?.minContextWindow || 16384}
+                max={limits?.maxContextWindow || undefined}
+                value={automatic ? limits?.maxContextWindow || '' : draft}
+                placeholder="Token 数量"
+                disabled={automatic || saving || !limits?.maxContextWindow}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setNotice('');
+                }}
+              />
+              <span>tokens</span>
+            </div>
+            <div className="context-presets" aria-label="常用窗口大小">
+              {[65536, 131072, 262144, 524288]
+                .filter((v) => v <= (limits?.maxContextWindow || 0))
+                .map((v) => (
+                  <button
+                    type="button"
+                    key={v}
+                    disabled={saving}
+                    aria-pressed={!automatic && Number(draft) === v}
+                    onClick={() => {
+                      setAutomatic(false);
+                      setDraft(String(v));
+                      setNotice('');
+                    }}
+                  >
+                    {v / 1024}K
+                  </button>
+                ))}
+            </div>
+            <p>
+              仅调整模型工作窗口，聊天记录仍保留。调小时按 Pi 原生规则自动压缩；界面展示轮数不变。
             </p>
-          )}
-          {notice && <p role="status">{notice}</p>}
-          <button
-            type="button"
-            className="context-save"
-            disabled={
-              saving ||
-              !limits?.maxContextWindow ||
-              (!automatic &&
-                (!Number.isSafeInteger(Number(draft)) ||
-                  Number(draft) < limits.minContextWindow ||
-                  Number(draft) > limits.maxContextWindow))
-            }
-            onClick={() => void updateLimits()}
-          >
-            保存上下文设置
-          </button>
-        </section>
+            {limits?.activeContextWindow && (
+              <p>
+                当前任务窗口：{limits.activeContextWindow.toLocaleString()} tokens；修改用于下一轮。
+              </p>
+            )}
+            {limits?.warning && <p role="status">{limits.warning}</p>}
+            {failure && (
+              <p className="context-error" role="alert">
+                {failure}
+              </p>
+            )}
+            {notice && <p role="status">{notice}</p>}
+            <button
+              type="button"
+              className="context-save"
+              disabled={
+                saving ||
+                !limits?.maxContextWindow ||
+                (!automatic &&
+                  (!Number.isSafeInteger(Number(draft)) ||
+                    Number(draft) < limits.minContextWindow ||
+                    Number(draft) > limits.maxContextWindow))
+              }
+              onClick={() => void updateLimits()}
+            >
+              保存上下文设置
+            </button>
+          </section>
+        )}
         <h3>会话用量</h3>
         <dl>
           {rounds !== undefined && (

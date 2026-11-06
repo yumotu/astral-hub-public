@@ -6,8 +6,23 @@ export type LongGoalState = {
   tokenBudget: number | null;
   tokensUsed: number;
   timeUsedSeconds: number;
+  plan?: {
+    goalId: string;
+    revision: number;
+    criteria: string[];
+    items: { id: string; text: string; status: string; evidence?: string }[];
+    verification: { criterion: string; evidence: string }[];
+  } | null;
 };
-export function LongGoalCard({ goal, status }: { goal?: LongGoalState | null; status?: string }) {
+export function LongGoalCard({
+  goal,
+  status,
+  waiting = false,
+}: {
+  goal?: LongGoalState | null;
+  status?: string;
+  waiting?: boolean;
+}) {
   if (!goal) return null;
   const paused =
     goal.status === 'active' && ['cancelled', 'error', 'interrupted'].includes(status || '');
@@ -21,10 +36,39 @@ export function LongGoalCard({ goal, status }: { goal?: LongGoalState | null; st
     <details className="long-goal-card">
       <summary>
         <Flag size={14} />
-        <strong>持续目标 · {paused ? '已暂停' : labels[goal.status]}</strong>
+        <strong>
+          持续目标 ·{' '}
+          {paused
+            ? '已暂停'
+            : waiting && goal.status === 'active'
+              ? '等待你的回复'
+              : labels[goal.status]}
+        </strong>
         <span>{goal.tokensUsed.toLocaleString()} tokens</span>
       </summary>
       <p>{goal.objective}</p>
+      {goal.plan && (
+        <>
+          <p className="field-help">
+            计划版本 {goal.plan.revision} ·{' '}
+            {goal.plan.items.filter((v) => v.status === 'done').length}/{goal.plan.items.length}{' '}
+            项完成
+          </p>
+          <ul>
+            {goal.plan.criteria.map((c) => (
+              <li key={c}>
+                {c}
+                {goal.plan?.verification.some((v) => v.criterion === c) ? ' · 已验证' : ''}
+              </li>
+            ))}
+          </ul>
+          {goal.plan.verification.map((v) => (
+            <p key={v.criterion} className="field-help">
+              {v.criterion}：{v.evidence}
+            </p>
+          ))}
+        </>
+      )}
       <small>
         累计用时 {Math.floor(goal.timeUsedSeconds / 60)} 分钟
         {goal.tokenBudget !== null ? ` · Token 上限 ${goal.tokenBudget.toLocaleString()}` : ''}

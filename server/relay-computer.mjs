@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { createRelayArtifacts } from './relay-artifacts.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
+import { parseGoalPlan } from '../deploy/pi/goal-plan.mjs';
 import { Readable } from 'node:stream';
 import {
   questionReplySchema,
@@ -9,6 +10,38 @@ import {
   continuedQuestions,
 } from './question-continuation.mjs';
 const uuid = z.string().uuid();
+const count = z.number().finite().nonnegative().max(1e12);
+const usageTokens = z
+  .object({
+    input: count.optional(),
+    output: count.optional(),
+    cacheRead: count.optional(),
+    cacheWrite: count.optional(),
+    total: count.optional(),
+  })
+  .strict();
+const sessionContext = z
+  .object({
+    messageCount: count.optional(),
+    stats: z
+      .object({
+        tokens: usageTokens.optional(),
+        userMessages: count.optional(),
+        assistantMessages: count.optional(),
+        toolCalls: count.optional(),
+        contextUsage: z
+          .object({ tokens: count.nullable(), contextWindow: count, percent: count.nullable() })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
+const metrics = usageTokens.omit({ total: true }).extend({
+  modelTurns: count.optional(),
+  toolCalls: count.optional(),
+  responseMs: count.optional(),
+});
 const longGoal = z
   .object({
     version: z.literal(1),
@@ -20,6 +53,18 @@ const longGoal = z
     timeUsedSeconds: z.number().int().nonnegative(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
+    plan: z
+      .unknown()
+      .refine((v) => {
+        try {
+          parseGoalPlan(v);
+          return true;
+        } catch {
+          return false;
+        }
+      }, '目标计划无效')
+      .nullable()
+      .optional(),
   })
   .strict();
 const dialog = z
@@ -68,6 +113,8 @@ const progress = z
     tools: z.array(tool).max(100),
     uiRequests: z.array(dialog).max(100).optional(),
     longGoal: longGoal.nullable().optional(),
+    metrics: metrics.optional(),
+    context: sessionContext.optional(),
   })
   .strict();
 export function createRelayComputer(
@@ -135,6 +182,12 @@ export function createRelayComputer(
       phase: JSON.parse(j.state || '{}').phase || '',
       uiRequests: JSON.parse(j.state || '{}').uiRequests || [],
       longGoal: JSON.parse(j.state || '{}').longGoal,
+      metrics: JSON.parse(j.state || '{}').metrics,
+      context: JSON.parse(j.state || '{}').context,
+      stopPending:
+        j.status === 'cancelled' &&
+        !!JSON.parse(j.state || '{}').stop &&
+        !JSON.parse(j.state || '{}').stop.acknowledgedAt,
       tools: JSON.parse(j.tools),
       artifacts: artifacts.list(j.id),
       error: j.error,
@@ -354,7 +407,7 @@ export function createRelayComputer(
             `SELECT j.* FROM relay_jobs j JOIN relay_projects p ON p.device_id=j.device_id AND p.id=j.project_id AND p.revoked=0
           WHERE j.device_id=? AND j.project_id IS NOT NULL AND j.parent_id IS NULL AND j.status='queued'
           AND NOT EXISTS(SELECT 1 FROM relay_operations o WHERE o.device_id=j.device_id AND o.project_id=j.project_id AND o.status IN ('queued','running') AND json_extract(o.input,'$.kind') IN ('package_install','package_remove','package_enable','package_rollback'))
-          AND NOT EXISTS(SELECT 1 FROM relay_jobs r WHERE r.device_id=j.device_id AND r.conversation_id=j.conversation_id AND r.status='running') ORDER BY j.created_at,j.rowid LIMIT 1`,
+          AND NOT EXISTS(SELECT 1 FROM relay_jobs r WHERE r.device_id=j.device_id AND r.conversation_id=j.conversation_id AND (r.status='running' OR (r.status='cancelled' AND json_extract(r.state,'$.stop.requestedAt') IS NOT NULL AND json_extract(r.state,'$.stop.acknowledgedAt') IS NULL))) ORDER BY j.created_at,j.rowid LIMIT 1`,
           )
           .get(d.id);
         if (!next) {
@@ -409,6 +462,18 @@ export function createRelayComputer(
               })
             : progress;
         const p = schema.parse(await body(req));
+        if (j.status === 'cancelled' && match[2] === 'result' && p.status === 'cancelled') {
+          const state = JSON.parse(j.state || '{}');
+          if (state.stop && !state.stop.acknowledgedAt) {
+            state.stop.acknowledgedAt = new Date(now()).toISOString();
+            state.uiRevision = (state.uiRevision || 0) + 1;
+            db.prepare('UPDATE relay_jobs SET state=?,updated_at=? WHERE id=?').run(
+              JSON.stringify(state),
+              state.stop.acknowledgedAt,
+              j.id,
+            );
+          }
+        }
         if (j.status === 'running') {
           try {
             allowed(j);
@@ -430,6 +495,8 @@ export function createRelayComputer(
                 thinking: p.thinking,
                 phase: p.phase,
                 ...(p.longGoal !== undefined ? { longGoal: p.longGoal } : {}),
+                ...(p.metrics !== undefined ? { metrics: p.metrics } : {}),
+                ...(p.context !== undefined ? { context: p.context } : {}),
                 uiRequests: (p.uiRequests || old.uiRequests || []).map((r) => ({
                   ...r,
                   status:
@@ -458,13 +525,13 @@ export function createRelayComputer(
               j.conversation_id,
             );
             settleChildren(j.id);
-            if (['done', 'error'].includes(p.status))
+            if (p.status === 'error')
               try {
                 notifications?.publish(
                   j.owner,
                   {
-                    kind: p.status === 'done' ? 'completed' : 'error',
-                    title: p.status === 'done' ? '电脑任务已完成' : '电脑任务需要检查',
+                    kind: 'error',
+                    title: '电脑任务需要检查',
                     body: '任务结果已保存到智能助手中原来的电脑项目对话。',
                     conversationId: null,
                     taskId: j.id,
@@ -558,7 +625,13 @@ export function createRelayComputer(
           (request.method === 'confirm'
             ? typeof reply.confirmed !== 'boolean'
             : typeof reply.value !== 'string' ||
-              (request.method === 'select' && !request.options?.includes(reply.value)))
+              (request.method === 'select' &&
+                !request.options?.includes(reply.value) &&
+                !(
+                  request.source === 'ask_user' &&
+                  reply.value.trim().length > 0 &&
+                  reply.value.length <= 4000
+                )))
         )
           throw fail(400, '回答与问题类型不匹配。');
         const value = {

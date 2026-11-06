@@ -62,7 +62,7 @@ test('bulk read acknowledges only the observed owner cursor and preserves newer 
   assert.equal(notices.readAll(owner, cursor).read, 0);
   assert.throws(() => notices.readAll(owner, -1));
 });
-test('task completion and input prompts become notifications; supplements and notify commands do not duplicate', async (t) => {
+test('completion stays silent while input prompts and errors notify without duplicate supplements', async (t) => {
   const { notices } = await fixture(t);
   const task = { id: randomUUID(), conversationId, input: 'work', status: 'running' };
   notices.task(owner, task, {
@@ -94,14 +94,14 @@ test('task completion and input prompts become notifications; supplements and no
       .inbox(owner)
       .notifications.map((n) => n.kind)
       .sort(),
-    ['completed', 'input'],
+    ['input'],
   );
   notices.setPolicy(owner, conversationId, false);
   notices.task(owner, { ...task, id: randomUUID(), status: 'error' }, { type: 'task' });
-  assert.equal(notices.inbox(owner).notifications.length, 2);
+  assert.equal(notices.inbox(owner).notifications.length, 1);
   notices.setPolicy(owner, conversationId, true);
   notices.task(owner, { ...task, id: randomUUID(), status: 'error' }, { type: 'task' });
-  assert.equal(notices.inbox(owner).notifications.length, 3);
+  assert.equal(notices.inbox(owner).notifications.length, 2);
 });
 test('Web Push rejects internal destinations and malformed keys before any outbound request', () => {
   assert.equal(pushSubscriptionSchema.safeParse(subscription).success, true);

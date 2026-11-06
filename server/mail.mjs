@@ -184,7 +184,16 @@ function mapImapError(error) {
 
 export function createMail(
   store,
-  { token, complete, startAgent, imapFactory, smtpFactory, now = Date.now, defaultFactory } = {},
+  {
+    token,
+    complete,
+    startAgent,
+    imapFactory,
+    smtpFactory,
+    now = Date.now,
+    defaultFactory,
+    notify,
+  } = {},
 ) {
   if (!token) throw new Error('mail requires the app token');
   const db = store.db;
@@ -249,6 +258,9 @@ export function createMail(
     owner TEXT NOT NULL, mailbox TEXT NOT NULL, validity TEXT NOT NULL,
     PRIMARY KEY(owner,mailbox));
     CREATE TABLE IF NOT EXISTS mail_cache_preferences(owner TEXT PRIMARY KEY,payload TEXT NOT NULL);`);
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS mail_notice_cursors(owner TEXT PRIMARY KEY,revision TEXT NOT NULL,validity TEXT NOT NULL,last_uid INTEGER NOT NULL,checked_at INTEGER NOT NULL)',
+  );
   const pendingReads = new Map();
   const cacheEpochs = new Map();
   const key = scryptSync(process.env.MAIL_SECRET || token, 'astral-mail-v1', 32);
@@ -646,6 +658,8 @@ export function createMail(
               ),
             ].sort((a, b) => a - b);
             const recent = uids.slice(-p.limit).reverse();
+            if (p.mailbox === 'INBOX' && !p.q && !p.unread && !p.since && !p.before && !p.cursor)
+              await observeInbox(owner, client, uids);
             const messages = [];
             const fields = {
               uid: true,
@@ -744,30 +758,45 @@ export function createMail(
     };
   }
 
-  async function readMessage(owner, input, uid, refresh = false) {
+  async function readMessage(owner, input, uid, refresh = false, expected) {
     const p = messageSchema.parse(input);
     const id = uidSchema.parse(uid);
+    if (expected && expected.revision !== revision(owner))
+      throw fail(409, '邮箱账号已改变，无法打开旧账号的通知。');
+    if (expected) refresh = true;
     if (refresh)
       db.prepare('DELETE FROM mail_cache WHERE owner=? AND cache_key=?').run(
         owner,
         JSON.stringify(['summary', p.mailbox, id]),
       );
-    return cached(owner, 'body-rich-v1', [p.mailbox, id], 24 * 3600000, refresh, () =>
-      withAccount(owner, async (client) => {
-        const lock = await client.getMailboxLock(p.mailbox, { readOnly: true });
-        try {
-          checkValidity(owner, p.mailbox, client);
-          const item = await client.fetchOne(
-            id,
-            { uid: true, source: { maxLength: MAX_SOURCE }, flags: true, internalDate: true },
-            { uid: true },
-          );
-          if (!item?.source) throw fail(404, '邮件不存在或已被移动。');
-          return { uid: id, ...(await parseSource(item.source, item.internalDate, item.size)) };
-        } finally {
-          lock.release();
-        }
-      }),
+    return cached(
+      owner,
+      expected ? 'body-notice-v1' : 'body-rich-v1',
+      expected ? [p.mailbox, id, expected.revision, expected.uidValidity] : [p.mailbox, id],
+      24 * 3600000,
+      refresh,
+      () =>
+        withAccount(owner, async (client) => {
+          const lock = await client.getMailboxLock(p.mailbox, { readOnly: true });
+          try {
+            if (
+              expected &&
+              (expected.revision !== revision(owner) ||
+                expected.uidValidity !== String(client.mailbox?.uidValidity))
+            )
+              throw fail(409, '邮箱或UIDVALIDITY已改变，请从当前邮件列表重新选择。');
+            checkValidity(owner, p.mailbox, client);
+            const item = await client.fetchOne(
+              id,
+              { uid: true, source: { maxLength: MAX_SOURCE }, flags: true, internalDate: true },
+              { uid: true },
+            );
+            if (!item?.source) throw fail(404, '邮件不存在或已被移动。');
+            return { uid: id, ...(await parseSource(item.source, item.internalDate, item.size)) };
+          } finally {
+            lock.release();
+          }
+        }),
     );
   }
 
@@ -1286,11 +1315,89 @@ export function createMail(
 
   let assistantTimer = null;
   let assistantTicking = false;
+  async function observeInbox(owner, client, uids) {
+    if (!notify || client.mailbox?.uidValidity == null) return;
+    const stamp = revision(owner),
+      validity = String(client.mailbox.uidValidity),
+      old = db.prepare('SELECT * FROM mail_notice_cursors WHERE owner=?').get(owner),
+      latest = uids.at(-1) || 0;
+    const save = (uid) =>
+      db
+        .prepare(
+          'INSERT INTO mail_notice_cursors VALUES(?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET last_uid=CASE WHEN revision=excluded.revision AND validity=excluded.validity THEN MAX(last_uid,excluded.last_uid) ELSE excluded.last_uid END,revision=excluded.revision,validity=excluded.validity,checked_at=excluded.checked_at',
+        )
+        .run(owner, stamp, validity, uid, now());
+    if (!old || old.revision !== stamp || old.validity !== validity) {
+      save(latest);
+      return;
+    }
+    const fresh = uids.filter((uid) => uid > old.last_uid).slice(0, 100);
+    let through = old.last_uid;
+    for (const uid of fresh) {
+      const item = await client.fetchOne(
+        uid,
+        { uid: true, envelope: true, flags: true },
+        { uid: true },
+      );
+      if (revision(owner) !== stamp) throw fail(409, '邮箱账号已改变。');
+      if (item && !item.flags?.has?.('\\Seen'))
+        notify(
+          owner,
+          {
+            kind: 'mail',
+            title: '收到新邮件',
+            body: (
+              (item.envelope?.subject || '(无主题)') +
+              ' · ' +
+              addressLabel(item.envelope?.from?.[0])
+            ).slice(0, 1200),
+            target: { type: 'mail', mailbox: 'INBOX', uid, revision: stamp, uidValidity: validity },
+          },
+          'mail:' + stamp + ':' + validity + ':' + uid,
+        );
+      through = uid;
+    }
+    save(through);
+  }
+  async function pollNotifications() {
+    if (!notify) return;
+    const accounts = db
+      .prepare(
+        'SELECT a.owner FROM mail_accounts a LEFT JOIN mail_notice_cursors c ON c.owner=a.owner ORDER BY COALESCE(c.checked_at,0) LIMIT 20',
+      )
+      .all();
+    for (const { owner } of accounts) {
+      try {
+        await withAccount(owner, async (client) => {
+          const lock = await client.getMailboxLock('INBOX', { readOnly: true });
+          try {
+            const found = await client.search({ all: true }, { uid: true });
+            if (!Array.isArray(found)) throw fail(502, '邮箱搜索失败。');
+            await observeInbox(
+              owner,
+              client,
+              [...new Set(found.filter((uid) => Number.isInteger(uid) && uid > 0))].sort(
+                (a, b) => a - b,
+              ),
+            );
+          } finally {
+            lock.release();
+          }
+        });
+      } catch {
+        if (row(owner))
+          db.prepare(
+            'INSERT INTO mail_notice_cursors VALUES(?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET checked_at=excluded.checked_at',
+          ).run(owner, revision(owner), '', 0, now());
+      }
+    }
+  }
 
   async function assistantTick() {
     if (assistantTicking) return;
     assistantTicking = true;
     try {
+      await pollNotifications();
       const rows = db.prepare('SELECT * FROM mail_assistant WHERE enabled=1').all();
       for (const row of rows) {
         if (dailyDue(row, now())) {
@@ -1560,6 +1667,18 @@ export function createMail(
           { mailbox: url.searchParams.get('mailbox') || 'INBOX' },
           single[1],
           url.searchParams.get('refresh') === '1',
+          url.searchParams.has('noticeRevision')
+            ? z
+                .object({
+                  revision: z.string().regex(/^[a-f0-9]{64}$/),
+                  uidValidity: z.string().min(1).max(30),
+                })
+                .strict()
+                .parse({
+                  revision: url.searchParams.get('noticeRevision'),
+                  uidValidity: url.searchParams.get('noticeValidity'),
+                })
+            : undefined,
         ),
       );
       return true;

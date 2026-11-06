@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import webpush from 'web-push';
 import { fail } from './accounts.mjs';
 import { notificationPayload } from '../shared/notifications.mjs';
+import { notificationTargetSchema } from '../shared/notification-target.mjs';
 
 const uuid = z.string().uuid();
 const safeText = (max) =>
@@ -16,11 +17,12 @@ const safeText = (max) =>
     .transform((s) => s.replace(/[\u0000-\u001f\u007f]/g, ' '));
 export const noticeSchema = z
   .object({
-    kind: z.enum(['completed', 'error', 'input', 'plugin', 'test']),
+    kind: z.enum(['completed', 'error', 'input', 'plugin', 'test', 'mail', 'contact', 'friend']),
     title: safeText(120).pipe(z.string().min(1)),
     body: safeText(1200),
     conversationId: uuid.nullable().optional(),
     taskId: uuid.nullable().optional(),
+    target: notificationTargetSchema.optional(),
   })
   .strict();
 const pushEndpoint = z
@@ -254,22 +256,14 @@ export async function createNotifications(db, { root, start = true, sendPush } =
           `${task.id}:input:${event.id}`,
         );
       else if (event.type === 'task' && !/^\/notify(?:\s|$)/.test(task.input || '')) {
-        const kind =
-          task.status === 'done'
-            ? 'completed'
-            : ['error', 'interrupted'].includes(task.status)
-              ? 'error'
-              : null;
+        const kind = ['error', 'interrupted'].includes(task.status) ? 'error' : null;
         if (kind)
           service.publish(
             owner,
             {
               kind,
-              title: kind === 'completed' ? 'Pi 任务已完成' : 'Pi 任务需要检查',
-              body:
-                kind === 'completed'
-                  ? '点击返回对话查看结果。'
-                  : '执行未正常完成，请打开对话检查记录。',
+              title: 'Pi 任务需要检查',
+              body: '执行未正常完成，请打开对话检查记录。',
               ...link,
             },
             `${task.id}:${kind}`,
@@ -438,6 +432,15 @@ export async function createNotifications(db, { root, start = true, sendPush } =
         return true;
       }
       const read = path.match(/^\/api\/notifications\/([^/]+)\/read$/);
+      const single = path.match(/^\/api\/notifications\/([^/]+)$/);
+      if (single && req.method === 'GET') {
+        const n = db
+          .prepare('SELECT * FROM app_notifications WHERE owner=? AND id=?')
+          .get(owner, uuid.parse(single[1]));
+        if (!n) throw fail(404, '通知不存在。');
+        json(200, { notification: decode(n) });
+        return true;
+      }
       if (read && req.method === 'POST') {
         service.read(owner, uuid.parse(read[1]));
         json(200, { ok: true });

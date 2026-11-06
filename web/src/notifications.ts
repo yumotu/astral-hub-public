@@ -24,7 +24,12 @@ export type AppNotification = {
   taskId?: string | null;
   createdAt: string;
   readAt: string | null;
+  target?:
+    | { type: 'mail'; mailbox: string; uid: number; revision: string; uidValidity: string }
+    | { type: 'contact'; contactId: string }
+    | { type: 'contacts' };
 };
+type Navigation = Pick<AppNotification, 'conversationId' | 'taskId' | 'target'> & { id?: string };
 type Prefs = { enabled: boolean; preview: boolean; onlyBackground: boolean; deviceId: string };
 type ServerStatus = {
   scope: string;
@@ -109,7 +114,7 @@ async function permission(request = false) {
 export function useNotifications(
   settings: Settings,
   owner: string | undefined,
-  onOpen: (n: { conversationId?: string | null; taskId?: string | null }) => void,
+  onOpen: (n: Navigation) => void,
 ) {
   const storageKey = `astral.notifications:${settings.url}:${owner || 'guest'}`;
   const [prefs, setPrefs] = useState<Prefs>(() => readPrefs(storageKey));
@@ -125,6 +130,24 @@ export function useNotifications(
   const inboxCursor = useRef(0);
   const live = useRef({ settings, owner, onOpen, prefs });
   live.current = { settings, owner, onOpen, prefs };
+  async function navigate(n: Navigation) {
+    const current = live.current;
+    if (n.id && !/^[a-f0-9-]{36}$/.test(n.id)) return;
+    try {
+      const value = n.id
+        ? (await api<{ notification: AppNotification }>(current.settings, '/notifications/' + n.id))
+            .notification
+        : n;
+      if (
+        live.current.owner === current.owner &&
+        live.current.settings.sessionToken === current.settings.sessionToken &&
+        live.current.settings.url === current.settings.url
+      )
+        live.current.onOpen(value);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   const mounted = useRef(true);
   const registrations = useRef(0);
   const transport = useRef<{ key: string; deliver: (n: AppNotification) => Promise<any> } | null>(
@@ -310,7 +333,7 @@ export function useNotifications(
         active,
         onClick: () => {
           window.focus();
-          live.current.onOpen(data);
+          void navigate(data);
         },
         onlyBackground: current.prefs.onlyBackground,
       });
@@ -338,8 +361,8 @@ export function useNotifications(
         if (!cancelled) setServer(value);
       })
       .catch(() => {});
-    const open = (n: { scope?: string; conversationId?: string; taskId?: string }) => {
-      if (n.scope === owner) live.current.onOpen(n);
+    const open = (n: { id?: string; scope?: string; conversationId?: string; taskId?: string }) => {
+      if (n.scope === owner) void navigate(n);
     };
     const message = (e: MessageEvent) => {
       if (e.data?.type === 'ASTRAL_OPEN_NOTIFICATION') open(e.data);
@@ -532,7 +555,7 @@ export function useNotifications(
       await api(settings, `/notifications/${n.id}/read`, {});
       await refresh();
     } catch {}
-    live.current.onOpen(n);
+    void navigate(n);
   }
   async function readAll() {
     if (readingAll) return;

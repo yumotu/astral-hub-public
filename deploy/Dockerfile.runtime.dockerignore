@@ -11,6 +11,7 @@
 !deploy/pi/attachment-limits.mjs
 !deploy/pi/activity-deadline.mjs
 !deploy/pi/long-goal-command.mjs
+!deploy/pi/goal-plan.mjs
 !deploy/pi/question-continuation.mjs
 !dist/
 !dist/**

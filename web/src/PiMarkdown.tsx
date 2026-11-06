@@ -1,6 +1,10 @@
 import { useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import { normalizeMathDelimiters } from '../../shared/markdown-math.mjs';
 import { Check, Copy } from 'lucide-react';
 function CodeBlock({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLPreElement>(null),
@@ -30,7 +34,8 @@ export function PiMarkdown({ text }: { text: string }) {
   return (
     <div className="pi-markdown">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { trust: false, maxExpand: 1000, maxSize: 20 }]]}
         skipHtml
         components={{
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
@@ -42,7 +47,7 @@ export function PiMarkdown({ text }: { text: string }) {
           img: ({ alt }) => <span className="muted">[图片：{alt || '外部图片'}]</span>,
         }}
       >
-        {text}
+        {normalizeMathDelimiters(text)}
       </Markdown>
     </div>
   );

@@ -141,6 +141,7 @@ export function ComputerAssistantView({
                   }}
                   newConversation={newConversation}
                   capabilities={group.device.capabilities || []}
+                  locationName={(group.device.local ? '本机 · ' : '远程 · ') + group.device.name}
                   titleChanged={titleChanged}
                 />
               </div>

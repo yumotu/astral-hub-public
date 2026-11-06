@@ -35,3 +35,6 @@ backups/
 .codex/
 .claude/
 agent/assets/
+
+# Rebuilt from installed dependency licenses.
+web/public/licenses/

@@ -120,6 +120,7 @@ self.addEventListener('notificationclick', (event) => {
         await target.focus();
       } else {
         const url = new URL('./', self.registration.scope);
+        if (/^[a-f0-9-]{36}$/.test(n.id || '')) url.searchParams.set('notification', n.id);
         if (/^[a-f0-9-]{36}$/.test(n.conversationId || ''))
           url.searchParams.set('piConversation', n.conversationId);
         if (/^[a-f0-9-]{36}$/.test(n.taskId || '')) url.searchParams.set('piTask', n.taskId);

@@ -1,45 +1,49 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { normalizeMessageMode } from '../../shared/pi-conversation.mjs';
-
-const key = 'astral.pi.showThinking';
-const messageModeKey = 'astral.pi.messageMode.v2';
+const thinkingKey = 'astral.pi.showThinking',
+  modeKey = 'astral.pi.messageMode.v2';
+const changed = 'astral:assistant-preferences';
 export type MessageMode = 'steer' | 'queue';
-function load() {
+let fallbackThinking = false,
+  fallbackMode: MessageMode = 'steer';
+function thinking() {
   try {
-    return localStorage.getItem(key) === 'true';
+    return localStorage.getItem(thinkingKey) === 'true';
   } catch {
-    return false;
+    return fallbackThinking;
   }
 }
-function loadMessageMode(): MessageMode {
+function mode(): MessageMode {
   try {
-    return normalizeMessageMode(localStorage.getItem(messageModeKey));
+    return normalizeMessageMode(localStorage.getItem(modeKey));
   } catch {
-    return 'steer';
+    return fallbackMode;
   }
+}
+function subscribe(notify: () => void) {
+  window.addEventListener('storage', notify);
+  window.addEventListener(changed, notify);
+  return () => {
+    window.removeEventListener('storage', notify);
+    window.removeEventListener(changed, notify);
+  };
+}
+function setShowThinking(value: boolean) {
+  fallbackThinking = value;
+  try {
+    localStorage.setItem(thinkingKey, String(value));
+  } catch {}
+  window.dispatchEvent(new Event(changed));
+}
+function setMessageMode(value: MessageMode) {
+  fallbackMode = value;
+  try {
+    localStorage.setItem(modeKey, value);
+  } catch {}
+  window.dispatchEvent(new Event(changed));
 }
 export function useAssistantPreferences() {
-  const [showThinking, setValue] = useState(load);
-  const [messageMode, setMode] = useState<MessageMode>(loadMessageMode);
-  useEffect(() => {
-    const update = (event: StorageEvent) => {
-      if (event.key === key || event.key === null) setValue(load());
-      if (event.key === messageModeKey || event.key === null) setMode(loadMessageMode());
-    };
-    window.addEventListener('storage', update);
-    return () => window.removeEventListener('storage', update);
-  }, []);
-  function setShowThinking(value: boolean) {
-    setValue(value);
-    try {
-      localStorage.setItem(key, String(value));
-    } catch {}
-  }
-  function setMessageMode(value: MessageMode) {
-    setMode(value);
-    try {
-      localStorage.setItem(messageModeKey, value);
-    } catch {}
-  }
+  const showThinking = useSyncExternalStore(subscribe, thinking, () => false);
+  const messageMode = useSyncExternalStore(subscribe, mode, () => 'steer' as MessageMode);
   return { showThinking, setShowThinking, messageMode, setMessageMode };
 }

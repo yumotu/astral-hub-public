@@ -5,6 +5,7 @@ import { fail } from './accounts.mjs';
 const uuid = z.string().uuid();
 const command = z.discriminatedUnion('action', [
   z.object({ action: z.literal('catalog') }).strict(),
+  z.object({ action: z.literal('memory'), query: z.string().max(2000) }).strict(),
   z
     .object({
       action: z.literal('invoke'),
@@ -38,6 +39,7 @@ export function createAppFunctions(
     profile,
     isActive,
     body,
+    readMemory,
     now = Date.now,
     internalUrl = 'http://app:8787/api/pi/app-access',
   },
@@ -127,6 +129,11 @@ export function createAppFunctions(
     const ctx = context(raw);
     limited(ctx);
     const p = command.parse(input);
+    if (p.action === 'memory') {
+      const result = readMemory ? await readMemory(ctx, p.query) : { enabled: false, items: [] };
+      context(ctx);
+      return result;
+    }
     if (p.action === 'catalog')
       return {
         functions: [...functions.values()]

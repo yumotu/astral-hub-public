@@ -25,18 +25,28 @@ async function fixture(t) {
       model: 'synthetic-model',
       fetch: async (_url, options) => {
         calls++;
-        const request = JSON.parse(options.body), input = JSON.parse(request.messages[1].content);
+        const request = JSON.parse(options.body),
+          input = JSON.parse(request.messages[1].content);
         assert.ok([8192, 16384].includes(request.max_tokens));
         let reply;
         if (request.messages[0].content.includes('出题规划者') && !replies[0]?.plan)
-          reply = {plan:Array.from({length:input.choiceCount+input.shortCount},(_,i)=>({slot:i+1,kind:i<input.choiceCount?'choice':'short',objective:`合成独立目标${i+1}：不同情境下的推理判断`}))};
+          reply = {
+            plan: Array.from({ length: input.choiceCount + input.shortCount }, (_, i) => ({
+              slot: i + 1,
+              kind: i < input.choiceCount ? 'choice' : 'short',
+              objective: `合成独立目标${i + 1}：不同情境下的推理判断`,
+            })),
+          };
         else reply = replies.shift();
         if (input.assignedTargets && reply?.questions)
-          reply = {questions:reply.questions.map((q,i)=>({...q,slot:q.slot??input.assignedTargets[i]?.slot}))};
+          reply = {
+            questions: reply.questions.map((q, i) => ({
+              ...q,
+              slot: q.slot ?? input.assignedTargets[i]?.slot,
+            })),
+          };
         return Response.json({
-          choices: [
-            { finish_reason: 'stop', message: { content: JSON.stringify(reply) } },
-          ],
+          choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(reply) } }],
         });
       },
     },
@@ -99,6 +109,144 @@ async function fixture(t) {
     },
   };
 }
+
+test('question edits validate answers, preserve historical grades and reject stale versions across accounts', async (t) => {
+  const f = await fixture(t),
+    lesson = (await f.request('/learning/lessons', f.input, f.owner.token)).body.lesson;
+  const path = '/learning/lessons/' + lesson.id + '/questions/q1';
+  const read = await f.request(path, undefined, f.owner.token);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.question.revision, 1);
+  assert.equal(read.body.question.correctIndex, 0);
+  assert.equal((await f.request(path, undefined, f.other.token)).status, 404);
+  assert.equal((await f.request(path, undefined, adminToken)).status, 403);
+  const before = await f.request(
+    '/learning/attempts',
+    {
+      id: randomUUID(),
+      lessonId: lesson.id,
+      questionId: 'q1',
+      questionRevision: 1,
+      answer: { choiceIndex: 0 },
+    },
+    f.owner.token,
+  );
+  assert.equal(before.status, 201);
+  assert.equal(before.body.attempt.score, 100);
+  const { id, revision, ...question } = read.body.question;
+  const edit = {
+    revision,
+    question: {
+      ...question,
+      prompt: '勘误：正确计算结果是哪一项？',
+      options: ['763ms', '907.2ms'],
+      correctIndex: 1,
+      explanation: '0.18×120 + 0.82×1080 = 907.2ms。',
+    },
+  };
+  assert.equal(
+    (
+      await f.request(
+        path,
+        { ...edit, question: { ...edit.question, correctIndex: 5 } },
+        f.owner.token,
+        'PATCH',
+      )
+    ).status,
+    400,
+  );
+  const changed = await f.request(path, edit, f.owner.token, 'PATCH');
+  assert.equal(changed.status, 200);
+  assert.equal(changed.body.question.revision, 2);
+  assert.equal((await f.request(path, edit, f.owner.token, 'PATCH')).status, 409);
+  assert.equal(
+    (await f.request(path, { ...edit, revision: 2 }, f.other.token, 'PATCH')).status,
+    404,
+  );
+  const stale = await f.request(
+    '/learning/attempts',
+    {
+      id: randomUUID(),
+      lessonId: lesson.id,
+      questionId: 'q1',
+      questionRevision: 1,
+      answer: { choiceIndex: 0 },
+    },
+    f.owner.token,
+  );
+  assert.equal(stale.status, 409);
+  const after = await f.request(
+    '/learning/attempts',
+    {
+      id: randomUUID(),
+      lessonId: lesson.id,
+      questionId: 'q1',
+      questionRevision: 2,
+      answer: { choiceIndex: 0 },
+    },
+    f.owner.token,
+  );
+  assert.equal(after.body.attempt.score, 0);
+  assert.equal(after.body.attempt.questionRevision, 2);
+  const detail = (await f.request('/learning/lessons/' + lesson.id, undefined, f.owner.token)).body
+    .lesson;
+  assert.equal(detail.attempts[0].score, 100);
+  assert.equal(detail.attempts[0].questionRevision, 1);
+  assert.equal(detail.attempts[0].correctIndex, 0);
+  assert.equal(detail.questions[0].revision, 2);
+  assert.equal(detail.questions[0].correctIndex, undefined);
+  const history = await f.request(path + '/history', undefined, f.owner.token);
+  assert.deepEqual(
+    history.body.versions.map((v) => v.revision),
+    [2, 1],
+  );
+  await f.restart();
+  assert.equal((await f.request(path, undefined, f.owner.token)).body.question.revision, 2);
+});
+
+test('short-answer edits replace future rubric without changing old AI feedback or the question kind', async (t) => {
+  const f = await fixture(t),
+    lesson = (await f.request('/learning/lessons', f.input, f.owner.token)).body.lesson,
+    path = '/learning/lessons/' + lesson.id + '/questions/q2';
+  f.replies([{ score: 72, feedback: '原评分反馈' }]);
+  const submitted = await f.request(
+    '/learning/attempts',
+    { id: randomUUID(), lessonId: lesson.id, questionId: 'q2', answer: { text: '我的原答案' } },
+    f.owner.token,
+  );
+  assert.equal(submitted.status, 201);
+  const q = (await f.request(path, undefined, f.owner.token)).body.question;
+  const { id, revision, ...data } = q;
+  assert.equal(
+    (await f.request(path, { revision, question: generated.questions[0] }, f.owner.token, 'PATCH'))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await f.request(
+        path,
+        {
+          revision,
+          question: {
+            ...data,
+            referenceAnswer: '新的严格参考答案',
+            rubric: ['定义与分母', '计算与解释'],
+            explanation: '修正后的具体解析',
+          },
+        },
+        f.owner.token,
+        'PATCH',
+      )
+    ).status,
+    200,
+  );
+  const old = (await f.request('/learning/lessons/' + lesson.id, undefined, f.owner.token)).body
+    .lesson.attempts[0];
+  assert.equal(old.feedback, '原评分反馈');
+  assert.equal(old.referenceAnswer, q.referenceAnswer);
+  assert.equal(old.score, 72);
+});
 
 test('learning generation is authenticated, account-scoped, idempotent and hides quiz answers', async (t) => {
   const f = await fixture(t);
@@ -366,7 +514,14 @@ test('learning accepts twenty and forty questions in batches, reports progress a
   const long = learningFixture(20, 20);
   f.replies([
     { title: long.title, explanation: long.explanation },
-    ...[long.questions.slice(0,8),long.questions.slice(8,16),long.questions.slice(16,20),long.questions.slice(20,28),long.questions.slice(28,36),long.questions.slice(36)].map(questions=>({questions})),
+    ...[
+      long.questions.slice(0, 8),
+      long.questions.slice(8, 16),
+      long.questions.slice(16, 20),
+      long.questions.slice(20, 28),
+      long.questions.slice(28, 36),
+      long.questions.slice(36),
+    ].map((questions) => ({ questions })),
   ]);
   const input = { ...f.input, choiceCount: 20, shortCount: 20, background: true };
   const accepted = await f.request('/learning/lessons', input, f.owner.token);
@@ -512,32 +667,41 @@ test('duplicate questions are repaired from known output without replaying valid
 });
 
 test('large quizzes reject an invalid coverage plan before generating exercises', async (t) => {
-  const f = await fixture(t), lesson = learningFixture(9, 0);
+  const f = await fixture(t),
+    lesson = learningFixture(9, 0);
   f.replies([
     { title: lesson.title, explanation: lesson.explanation },
-    { plan: Array.from({length:9},(_,i)=>({slot:i+1,kind:'choice',objective:'每一项都重复同一个目标'})) },
+    {
+      plan: Array.from({ length: 9 }, (_, i) => ({
+        slot: i + 1,
+        kind: 'choice',
+        objective: '每一项都重复同一个目标',
+      })),
+    },
   ]);
-  const input = {...f.input,choiceCount:9,shortCount:0};
+  const input = { ...f.input, choiceCount: 9, shortCount: 0 };
   const r = await f.request('/learning/lessons', input, f.owner.token);
-  assert.equal(r.status,502);
-  assert.match(r.body.error,/蓝图/);
-  assert.equal(f.calls(),2);
-  assert.equal((await f.request('/learning/lessons',input,f.owner.token)).status,409);
-  assert.equal(f.calls(),2);
+  assert.equal(r.status, 502);
+  assert.match(r.body.error, /蓝图/);
+  assert.equal(f.calls(), 2);
+  assert.equal((await f.request('/learning/lessons', input, f.owner.token)).status, 409);
+  assert.equal(f.calls(), 2);
 });
 
 test('a batch cannot substitute another slot or expose answers from an incomplete quiz', async (t) => {
-  const f = await fixture(t), lesson = learningFixture(9,0);
+  const f = await fixture(t),
+    lesson = learningFixture(9, 0);
   f.replies([
     { title: lesson.title, explanation: lesson.explanation },
-    { questions: lesson.questions.slice(0,8).map((q,i)=>({...q,slot:i?i+1:9})) },
+    { questions: lesson.questions.slice(0, 8).map((q, i) => ({ ...q, slot: i ? i + 1 : 9 })) },
   ]);
-  const input = {...f.input,choiceCount:9,shortCount:0};
-  const r = await f.request('/learning/lessons',input,f.owner.token);
-  assert.equal(r.status,502);
-  assert.match(r.body.error,/蓝图/);
-  const saved=(await f.request('/learning/lessons/'+input.id,undefined,f.owner.token)).body.lesson;
-  assert.equal(saved.status,'error');
-  assert.deepEqual(saved.questions,[]);
-  assert.equal(saved.progress.completed,0);
+  const input = { ...f.input, choiceCount: 9, shortCount: 0 };
+  const r = await f.request('/learning/lessons', input, f.owner.token);
+  assert.equal(r.status, 502);
+  assert.match(r.body.error, /蓝图/);
+  const saved = (await f.request('/learning/lessons/' + input.id, undefined, f.owner.token)).body
+    .lesson;
+  assert.equal(saved.status, 'error');
+  assert.deepEqual(saved.questions, []);
+  assert.equal(saved.progress.completed, 0);
 });

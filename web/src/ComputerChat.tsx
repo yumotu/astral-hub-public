@@ -6,7 +6,8 @@ import { AssistantUserMessage } from './AssistantUserMessage';
 import { AssistantSettings } from './AssistantSettings';
 import { AssistantMode } from './AssistantMode';
 import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
-import { ChevronDown } from 'lucide-react';
+import { computerInputAvailability } from '../../shared/assistant-availability.mjs';
+import { JumpToLatest } from './JumpToLatest';
 import { api } from './data';
 import { peekAPI, invalidateAPI } from './resource-cache';
 import { serverIdentity } from './session';
@@ -18,12 +19,15 @@ import { MessageOutbox } from './MessageOutbox';
 import { AppFunctionRequests } from './AppFunctionRequests';
 import { PluginRequests, type PluginRequest } from './PluginRequests';
 import { LongGoalCard, type LongGoalState } from './LongGoalCard';
-import { RunSummary } from './ExecutionInfo';
+import { RunSummary, RunMetrics, SessionTelemetry } from './ExecutionInfo';
+import { TodoDropdown } from './TodoCard';
+import { conversationTodo } from '../../shared/pi-activity.mjs';
+import type { TodoItem } from './types';
 import { useAssistantPreferences } from './assistant-preferences';
 import { computerChatStorageKey } from '../../shared/assistant-target.mjs';
 import { insertPastedText } from './composer-paste';
 import type { ComputerProject } from './computer-api';
-import type { Settings } from './types';
+import type { Settings, PiMetrics, PiContext } from './types';
 const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
 type Conversation = {
   id: string;
@@ -41,9 +45,12 @@ type Job = {
   output: string;
   thinking: string;
   status: string;
+  stopPending?: boolean;
   phase: string;
   uiRequests?: PluginRequest[];
   longGoal?: LongGoalState | null;
+  metrics?: PiMetrics;
+  context?: PiContext;
   tools: ToolRun[];
   artifacts?: ChatFile[];
   error?: string;
@@ -54,7 +61,7 @@ type Job = {
   createdAt: string;
 };
 const pending = (j: Job) =>
-  ['queued', 'running', 'delivering', 'accepted', 'applied'].includes(j.status);
+  j.stopPending || ['queued', 'running', 'delivering', 'accepted', 'applied'].includes(j.status);
 const phase = (j: Job) =>
   j.status === 'running'
     ? j.phase || '正在执行'
@@ -79,6 +86,7 @@ export function ComputerChat({
   plugins,
   newConversation,
   capabilities,
+  locationName = '电脑',
   titleChanged,
 }: {
   settings: Settings;
@@ -87,6 +95,7 @@ export function ComputerChat({
   project: ComputerProject;
   conversationId: string;
   capabilities: string[];
+  locationName?: string;
   titleChanged: (id: string, title: string) => void;
   settingsContainer: HTMLElement | null;
   terminal: () => void;
@@ -126,7 +135,7 @@ export function ComputerChat({
   const current = useRef(id);
   const titleCallback = useRef(titleChanged);
   titleCallback.current = titleChanged;
-  const { messageMode: mode, setMessageMode: setMode } = useAssistantPreferences();
+  const { messageMode: mode } = useAssistantPreferences();
   const [thinkingLevel, setThinkingLevel] = useState<'off' | 'low' | 'high' | 'max'>(() => {
     try {
       const value = localStorage.getItem('astral.pi.thinkingLevel');
@@ -155,6 +164,12 @@ export function ComputerChat({
   const active = jobs.find((j) => !j.parentId && j.status === 'running'),
     queued = jobs.filter((j) => !j.parentId && j.status === 'queued'),
     working = !!active || queued.length > 0;
+  const unavailable = computerInputAvailability({
+    capabilities,
+    working,
+    uploading,
+    fileCount: staged.length,
+  });
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -324,6 +339,10 @@ export function ComputerChat({
   }
   async function uploadFiles(incoming: File[]) {
     if (!incoming.length) return;
+    if (!capabilities.includes('chat_inputs')) {
+      setUploadError(unavailable.attachment);
+      return;
+    }
     if (uploadBusy.current) {
       setUploadError('请等待当前上传完成，或取消当前上传。');
       return;
@@ -398,118 +417,121 @@ export function ComputerChat({
   }
   return (
     <section className="computer-chat" aria-label="电脑项目对话">
-      <div
-        className="pi-messages computer-messages"
-        data-conversation-swipe
-        ref={scroll}
-        role="log"
-        aria-label="电脑对话消息"
-        onScroll={() => {
-          const e = scroll.current!;
-          follow.current = e.scrollHeight - e.clientHeight - e.scrollTop < 48;
-          setShowLatest(!follow.current);
-        }}
-      >
-        <div ref={content} className="pi-message-content">
-          {older && (
-            <button className="text-link" onClick={() => void loadOlder()}>
-              加载更早记录
-            </button>
-          )}
-          {!jobs.length && (
-            <p className="field-help">
-              当前对话绑定这台电脑的“{project.name}
-              ”。可读取项目、解释代码，或按本机授权修改和执行任务。
-            </p>
-          )}
-          {jobs
-            .filter((j) => !j.parentId)
-            .map((j) => (
-              <article className="pi-turn" data-message-id={j.id} key={j.id}>
-                <AssistantUserMessage
-                  input={j.input}
-                  at={j.createdAt}
-                  files={j.attachments || []}
-                  settings={settings}
-                  conversation={id}
-                />
-                <div className="message assistant">
-                  <RunSummary status={j.status} phase={phase(j)} />
-                  <LongGoalCard goal={j.longGoal} status={j.status} />
-                  {jobs
-                    .filter((c) => c.parentId === j.id)
-                    .map((c) => (
-                      <div className="computer-supplement" key={c.id}>
-                        <small>
-                          {(
-                            {
-                              delivering: '补充送达中',
-                              accepted: '已接受补充',
-                              applied: '已加入当前任务',
-                              done: '任务补充',
-                              interrupted: '补充应用待确认',
-                              error: '补充未送达',
-                            } as Record<string, string>
-                          )[c.status] || c.status}
-                        </small>
-                        <p>{c.input}</p>
-                        {c.error && <p className="error">{c.error}</p>}
-                      </div>
-                    ))}
-                  {j.thinking && (
-                    <details>
-                      <summary>思考过程</summary>
-                      <p>{j.thinking}</p>
-                    </details>
-                  )}
-                  <AppFunctionRequests
-                    settings={settings}
-                    taskId={j.id}
-                    active={j.status === 'running'}
-                  />
-                  <ToolLog tools={j.tools} />
-                  <PluginRequests
-                    settings={settings}
-                    task={j}
-                    target="computer"
-                    onAnswered={() => reload.current()}
-                  />
-                  {j.output && (
-                    <Suspense fallback={<pre>{j.output}</pre>}>
-                      <Markdown text={j.output} />
-                    </Suspense>
-                  )}
-                  {!!j.artifacts?.length && (
-                    <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
-                  )}
-                  {j.error && (
-                    <p role="alert" className="error">
-                      {j.error}
-                    </p>
-                  )}
-                  {j.output && (
-                    <div className="message-actions">
-                      <CopyButton text={j.output} label="复制电脑Agent回复" />
-                    </div>
-                  )}
-                </div>
-              </article>
-            ))}
-        </div>
-      </div>
-      {showLatest && (
-        <button
-          className="text-link"
-          onClick={() => {
-            follow.current = true;
-            scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' });
-            setShowLatest(false);
+      <div className="pi-message-area">
+        <div
+          className="pi-messages computer-messages"
+          data-conversation-swipe
+          ref={scroll}
+          role="log"
+          aria-label="电脑对话消息"
+          onScroll={() => {
+            const e = scroll.current!;
+            follow.current = e.scrollHeight - e.clientHeight - e.scrollTop < 48;
+            setShowLatest(!follow.current);
           }}
         >
-          <ChevronDown size={14} />
-          回到最新
-        </button>
-      )}
+          <div ref={content} className="pi-message-content">
+            {older && (
+              <button className="text-link" onClick={() => void loadOlder()}>
+                加载更早记录
+              </button>
+            )}
+            {!jobs.length && (
+              <p className="field-help">
+                当前对话绑定这台电脑的“{project.name}
+                ”。可读取项目、解释代码，或按本机授权修改和执行任务。
+              </p>
+            )}
+            {jobs
+              .filter((j) => !j.parentId)
+              .map((j) => (
+                <article className="pi-turn" data-message-id={j.id} key={j.id}>
+                  <AssistantUserMessage
+                    input={j.input}
+                    at={j.createdAt}
+                    files={j.attachments || []}
+                    settings={settings}
+                    conversation={id}
+                  />
+                  <div className="message assistant">
+                    <RunSummary status={j.stopPending ? 'stopping' : j.status} phase={phase(j)} />
+                    <LongGoalCard
+                      goal={j.longGoal}
+                      status={j.status}
+                      waiting={j.uiRequests?.some((q) => q.status === 'pending')}
+                    />
+                    {jobs
+                      .filter((c) => c.parentId === j.id)
+                      .map((c) => (
+                        <div className="computer-supplement" key={c.id}>
+                          <small>
+                            {(
+                              {
+                                delivering: '补充送达中',
+                                accepted: '已接受补充',
+                                applied: '已加入当前任务',
+                                done: '任务补充',
+                                interrupted: '补充应用待确认',
+                                error: '补充未送达',
+                              } as Record<string, string>
+                            )[c.status] || c.status}
+                          </small>
+                          <p>{c.input}</p>
+                          {c.error && <p className="error">{c.error}</p>}
+                        </div>
+                      ))}
+                    {j.thinking && (
+                      <details>
+                        <summary>思考过程</summary>
+                        <p>{j.thinking}</p>
+                      </details>
+                    )}
+                    <AppFunctionRequests
+                      settings={settings}
+                      taskId={j.id}
+                      active={j.status === 'running'}
+                    />
+                    <ToolLog tools={j.tools} />
+                    <PluginRequests
+                      settings={settings}
+                      task={j}
+                      target="computer"
+                      onAnswered={() => reload.current()}
+                    />
+                    {j.output && (
+                      <Suspense fallback={<pre>{j.output}</pre>}>
+                        <Markdown text={j.output} />
+                      </Suspense>
+                    )}
+                    {!!j.artifacts?.length && (
+                      <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
+                    )}
+                    {j.error && (
+                      <p role="alert" className="error">
+                        {j.error}
+                      </p>
+                    )}
+                    {!pending(j) && <RunMetrics metrics={j.metrics} />}
+                    {j.output && !pending(j) && (
+                      <div className="message-actions">
+                        <CopyButton text={j.output} label="复制电脑Agent回复" />
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+          </div>
+        </div>
+        {showLatest && (
+          <JumpToLatest
+            onClick={() => {
+              follow.current = true;
+              scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' });
+              setShowLatest(false);
+            }}
+          />
+        )}
+      </div>
       <MessageOutbox
         rows={rows.filter((r) => r.payload.conversationId === id)}
         retry={outbox.retry}
@@ -529,6 +551,10 @@ export function ComputerChat({
         </p>
       )}
       <AssistantComposer
+        header={(() => {
+          const todo = conversationTodo([], jobs, id);
+          return todo ? <TodoDropdown items={todo.items as TodoItem[]} /> : null;
+        })()}
         area={area}
         history={scroll}
         value={input}
@@ -623,7 +649,8 @@ export function ComputerChat({
             setThinkingLevel(level);
             localStorage.setItem('astral.pi.thinkingLevel', level);
           }}
-          thinkingDisabled={working || !capabilities.includes('thinking_levels')}
+          thinkingDisabled={!!unavailable.thinking}
+          thinkingDisabledReason={unavailable.thinking}
           insertVoice={(text) =>
             setInput(
               (old) =>
@@ -636,10 +663,11 @@ export function ComputerChat({
             )
           }
           terminal={terminal}
+          terminalDisabled={!project.allowExecute}
+          terminalDisabledReason="此项目尚未在目标电脑授权终端执行。请在目标电脑的本机设置中授权。"
           attach={() => fileInput.current?.click()}
-          attachmentDisabled={
-            uploading || staged.length >= 8 || !capabilities.includes('chat_inputs')
-          }
+          attachmentDisabled={!!unavailable.attachment}
+          attachmentDisabledReason={unavailable.attachment}
           attachmentTitle={
             capabilities.includes('chat_inputs')
               ? `上传图片、PDF或文件。${attachmentSizeMessage}`
@@ -657,9 +685,29 @@ export function ComputerChat({
           sendLabel={active ? (mode === 'steer' && !staged.length ? '立即补充' : '排队') : '发送'}
         />
       </AssistantComposer>
+      <div className="assistant-statusbar">
+        <SessionTelemetry
+          target="computer"
+          settings={settings}
+          conversationId={id}
+          context={
+            jobs
+              .slice()
+              .reverse()
+              .find((j) => !j.parentId && j.context)?.context || null
+          }
+          metrics={
+            active?.metrics ||
+            jobs
+              .slice()
+              .reverse()
+              .find((j) => !j.parentId && j.metrics)?.metrics
+          }
+        />
+      </div>
       {settingsContainer &&
         createPortal(
-          <AssistantSettings>
+          <AssistantSettings location={locationName}>
             <AssistantMode
               value={access}
               projectName={project.name}
@@ -681,20 +729,6 @@ export function ComputerChat({
                 ? '命令以目标电脑当前系统用户权限和网络运行；项目目录不是Shell沙箱。'
                 : '此项目未在目标电脑授权执行命令，可在目标电脑的本机设置中授权。'}
               服务器Bash联网开关不控制这台电脑。
-            </p>
-            <label>
-              连续发送
-              <select
-                aria-label="连续发送方式"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as 'steer' | 'queue')}
-              >
-                <option value="steer">立即补充</option>
-                <option value="queue">下一任务</option>
-              </select>
-            </label>
-            <p className="field-help">
-              带新附件的补充会作为下一任务执行，附件不会在文字补充中遗漏。
             </p>
           </AssistantSettings>,
           settingsContainer,

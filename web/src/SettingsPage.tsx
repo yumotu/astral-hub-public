@@ -22,6 +22,8 @@ import type { NotificationModel } from './notifications';
 import { MobileNavigationSettings } from './MobilePanels';
 import { ThemeSettings } from './Theme';
 import { UsagePanel } from './UsagePanel';
+import { AdminPermissions } from './AdminPermissions';
+import { MemorySettings } from './MemorySettings';
 export function SettingsPage({
   settings,
   save,
@@ -33,6 +35,7 @@ export function SettingsPage({
   lastSync,
   notify,
   notifications,
+  admin = false,
 }: {
   settings: Settings;
   save: (s: Settings) => void;
@@ -44,6 +47,7 @@ export function SettingsPage({
   lastSync: string;
   notify: (s: string) => void;
   notifications: NotificationModel;
+  admin?: boolean;
 }) {
   const [draft, setDraft] = useState(settings);
   const { showThinking, setShowThinking, messageMode, setMessageMode } = useAssistantPreferences();
@@ -132,7 +136,7 @@ export function SettingsPage({
           <section className="surface" aria-label="智能助手设置">
             <div className="section-title">
               <Bot size={21} />
-              <h2>智能助手</h2>
+              <h2>智能助手偏好</h2>
               <span className="tag">当前设备 · 立即生效</span>
             </div>
             <label className="check-line">
@@ -147,7 +151,7 @@ export function SettingsPage({
               </span>
             </label>
             <label className="field-label" htmlFor="pi-message-mode">
-              执行中新指令的处理方式
+              连续发送
             </label>
             <select
               id="pi-message-mode"
@@ -166,6 +170,8 @@ export function SettingsPage({
             </p>
           </section>
           <MobileNavigationSettings />
+          <MemorySettings settings={settings} />
+          {admin && <AdminPermissions settings={settings} />}
           <NotificationSettings model={notifications} />
           <AppUpdates settings={settings} />
           <UsagePanel settings={settings} />

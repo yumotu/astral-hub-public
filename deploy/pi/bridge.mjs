@@ -296,7 +296,7 @@ async function execute(p, event) {
           ASTRAL_GOAL_TOKEN: p.goalAccess?.token || '',
           ASTRAL_LONG_GOAL_ALLOWED:
             p.toolAllowlist &&
-            !['create_goal', 'get_goal', 'update_goal'].every((name) =>
+            !['create_goal', 'get_goal', 'update_goal', 'goal_plan'].every((name) =>
               p.toolAllowlist.includes(name),
             )
               ? '0'

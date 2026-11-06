@@ -16,6 +16,7 @@ COPY --from=build --chown=node:node /app/deploy/pi/concurrency.mjs ./deploy/pi/c
 COPY --from=build --chown=node:node /app/deploy/pi/attachment-limits.mjs ./deploy/pi/attachment-limits.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/activity-deadline.mjs ./deploy/pi/activity-deadline.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/long-goal-command.mjs ./deploy/pi/long-goal-command.mjs
+COPY --from=build --chown=node:node /app/deploy/pi/goal-plan.mjs ./deploy/pi/goal-plan.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/question-continuation.mjs ./deploy/pi/question-continuation.mjs
 COPY --from=build --chown=node:node /app/dist ./dist
 RUN mkdir data files && chown node:node data files

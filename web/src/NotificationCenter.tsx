@@ -48,7 +48,7 @@ export function NotificationButton({ model }: { model: NotificationModel }) {
           </p>
         )}
         {!model.items.length && (
-          <p className="notification-empty">任务完成、需要回复和插件通知会保存在这里。</p>
+          <p className="notification-empty">新邮件、联系人消息、需要回复和插件通知会保存在这里。</p>
         )}
         {model.items.map((n) => (
           <button
@@ -90,7 +90,8 @@ export function NotificationSettings({ model }: { model: NotificationModel }) {
         <span className="tag">当前设备</span>
       </div>
       <p className="field-help">
-        任务完成、执行失败、等待回复和 Pi 插件消息统一进入通知中心。系统通知需在每台设备分别开启。
+        新邮件、联系人消息、好友申请、执行失败、等待回复和 Pi
+        插件消息进入通知中心。任务完成不提醒；系统通知需在每台设备分别开启。
       </p>
       {!model.signedIn ? (
         <p className="inline-hint">登录独立账号后可启用通知。</p>

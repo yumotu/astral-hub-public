@@ -350,7 +350,7 @@
   .assistant-statusbar .session-telemetry > summary .telemetry-counts,
   .assistant-statusbar .session-telemetry > summary .telemetry-secondary,
   .assistant-statusbar .session-telemetry > summary .telemetry-tokens {
-    display: none;
+    display: inline-flex;
   }
   .assistant-statusbar .session-telemetry > summary {
     gap: 6px;

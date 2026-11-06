@@ -112,6 +112,7 @@ ipcMain.handle('astral:notifications:show', async (event, value) => {
         window.show();
         window.focus();
         window.webContents.send('astral:notification:click', {
+          id: value.id,
           scope: value.scope,
           conversationId: value.conversationId,
           taskId: value.taskId,

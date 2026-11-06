@@ -89,6 +89,13 @@ export function createRelay(db, { body, config, options = {} }) {
     return j;
   }
   function cancel(id) {
+    const j = db.prepare('SELECT status,project_id,state FROM relay_jobs WHERE id=?').get(id);
+    if (j?.status === 'running' && j.project_id) {
+      const state = JSON.parse(j.state || '{}');
+      state.stop = { requestedAt: new Date(now()).toISOString(), acknowledgedAt: null };
+      state.uiRevision = (state.uiRevision || 0) + 1;
+      db.prepare('UPDATE relay_jobs SET state=? WHERE id=?').run(JSON.stringify(state), id);
+    }
     db.prepare(
       "UPDATE relay_jobs SET status='cancelled',updated_at=? WHERE id=? AND status IN ('queued','running')",
     ).run(new Date(now()).toISOString(), id);

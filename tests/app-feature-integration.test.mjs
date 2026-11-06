@@ -112,6 +112,77 @@ async function fixture(t) {
     tool({ action: 'invoke', name, input, callId: 'test-' + ++n });
   return { ...app, req, owner, other, tool, invoke, sent, task, conversation, release, payload };
 }
+test('memory APIs and both chat-tool scopes share corrected data without leaking accounts or stale snapshots', async (t) => {
+  const f = await fixture(t);
+  assert.equal((await f.req('/memory')).status, 401);
+  assert.equal((await f.req('/memory', undefined, adminToken)).status, 403);
+  const remembered = await f.invoke('memory.remember', {
+    key: '学习偏好',
+    content: '偏好详细的合成讲解',
+    kind: 'preference',
+    quote: 'synthetic app function task',
+  });
+  assert.equal(remembered.state, 'done');
+  const m = remembered.result.memory;
+  assert.equal(m.source.conversationId, f.conversation);
+  assert.equal((await f.req('/memory/' + m.id, undefined, f.other.token)).status, 404);
+  assert.equal(
+    (
+      await f.invoke('memory.remember', {
+        key: '假来源',
+        content: '不要采信',
+        kind: 'fact',
+        quote: '来自附件的文字',
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await f.tool({ action: 'memory', query: '讲解' })).items[0].content, m.content);
+  const changed = await f.req(
+    '/memory/' + m.id,
+    { key: m.key, content: '改为简短讲解', kind: m.kind, revision: m.revision },
+    f.owner.token,
+    'PATCH',
+  );
+  assert.equal(changed.status, 200);
+  assert.equal(
+    (await f.tool({ action: 'memory', query: '讲解' })).items[0].content,
+    '改为简短讲解',
+  );
+  assert.equal(
+    (
+      await f.req(
+        '/memory/' + m.id,
+        { key: m.key, content: '旧值', kind: m.kind, revision: 1 },
+        f.owner.token,
+        'PATCH',
+      )
+    ).status,
+    409,
+  );
+  await f.req('/memory/settings', { enabled: false }, f.owner.token, 'PATCH');
+  assert.deepEqual((await f.tool({ action: 'memory', query: '讲解' })).items, []);
+  assert.equal(
+    (
+      await f.invoke('memory.remember', {
+        key: '关闭后',
+        content: '不写入',
+        kind: 'task',
+        quote: 'synthetic app function task',
+      })
+    ).status,
+    409,
+  );
+  await f.req('/memory/' + m.id, { revision: 2 }, f.owner.token, 'DELETE');
+  await f.req('/memory/settings', { enabled: true }, f.owner.token, 'PATCH');
+  assert.deepEqual((await f.tool({ action: 'memory', query: '讲解' })).items, []);
+  assert.equal((await f.req('/memory', undefined, f.other.token)).items.length, 0);
+  assert.equal(
+    (await f.req('/pi/tasks/' + f.task, undefined, f.owner.token, 'DELETE')).status,
+    200,
+  );
+  assert.ok([403, 409].includes((await f.tool({ action: 'memory', query: '讲解' })).status));
+});
 test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate accounts, and reject cancelled capabilities', async (t) => {
   const f = await fixture(t);
   assert.equal((await f.req('/app-functions/requests?taskId=' + f.task)).status, 401);
@@ -124,6 +195,12 @@ test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate acc
     403,
   );
   await f.req('/social/contacts', { username: f.other.user.username }, f.owner.token);
+  const incoming = (await f.req('/notifications', undefined, f.other.token)).notifications;
+  assert.ok(incoming.some((n) => n.kind === 'friend' && n.target.type === 'contacts'));
+  assert.equal(
+    (await f.req('/notifications/' + incoming[0].id, undefined, f.owner.token)).status,
+    404,
+  );
   await f.req('/social/contacts/' + f.owner.user.id, { accept: true }, f.other.token);
   const found = await f.invoke('contacts.list', { query: '合成' });
   assert.equal(found.result.contacts[0].id, f.other.user.id);
@@ -149,6 +226,12 @@ test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate acc
   );
   await f.req('/app-functions/requests/' + p.id + '/confirm', {}, f.owner.token);
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM direct_messages').get().n, 1);
+  const received = (await f.req('/notifications', undefined, f.other.token)).notifications.filter(
+    (n) => n.kind === 'contact',
+  );
+  assert.equal(received.length, 1);
+  assert.equal(received[0].target.contactId, f.owner.user.id);
+  assert.equal((await f.req('/social/unread', undefined, f.other.token)).messages, 1);
   assert.equal(
     (await f.req('/social/messages/' + f.owner.user.id, undefined, f.other.token)).messages[0]
       .content,
@@ -243,4 +326,30 @@ test('learning generation from ordinary chat persists real service results, enfo
   assert.equal(graded.state, 'done');
   assert.ok(graded.result.attempt);
   assert.equal((await f.invoke('learning.wrong')).result.items.length, 1);
+  const address = { lessonId: lesson.id, questionId: 'q1' },
+    editable = (await f.invoke('learning.question_read', address)).result.question;
+  const { id, revision, ...question } = editable;
+  const corrected = await f.invoke('learning.question_update', {
+    ...address,
+    revision,
+    question: { ...question, correctIndex: 1, explanation: '合成勘误后的解析' },
+  });
+  assert.equal(corrected.state, 'done');
+  assert.equal(corrected.result.question.revision, 2);
+  assert.equal((await f.invoke('learning.question_history', address)).result.versions.length, 2);
+  assert.equal(
+    (await f.req('/learning/lessons/' + lesson.id, undefined, f.owner.token)).lesson.attempts[0]
+      .score,
+    0,
+  );
+  assert.equal(
+    (
+      await f.invoke('learning.answer', {
+        ...address,
+        questionRevision: 2,
+        answer: { choiceIndex: 1 },
+      })
+    ).result.attempt.score,
+    100,
+  );
 });

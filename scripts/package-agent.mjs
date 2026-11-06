@@ -8,6 +8,8 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
   const manifest = JSON.parse(readFileSync(join(root, 'agent/package.json'), 'utf8'));
   if (manifest.version !== version) throw new Error('远程执行器版本与应用版本不一致。');
   mkdirSync(join(root, 'agent/assets'), { recursive: true });
+  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md'])
+    cpSync(join(root, name), join(root, 'agent', name));
   const resources = [
     'project-files.mjs',
     'project-lock.mjs',
@@ -20,6 +22,7 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
     'activity-deadline.mjs',
     'ask-user.mjs',
     'long-goal.mjs',
+    'goal-plan.mjs',
     'long-goal-command.mjs',
     'schedule-tools.mjs',
     ...['index.ts', 'goal-state.ts', 'usage.ts', 'LICENSE', 'UPSTREAM.json'].map(
@@ -66,6 +69,8 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
     ].join(lf) + lf,
   );
   const names = [
+    'LICENSE',
+    'THIRD_PARTY_NOTICES.md',
     'relay-agent.mjs',
     'workspace.mjs',
     'config.mjs',

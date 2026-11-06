@@ -30,6 +30,9 @@ const question = z.discriminatedUnion('kind', [
     })
     .strict(),
 ]);
+export const questionEditSchema = z
+  .object({ revision: z.number().int().positive(), question })
+  .strict();
 const explanationSchema = z
   .object({
     title: z.string().trim().min(1).max(160),
@@ -70,6 +73,7 @@ const submission = z
     id: uuid,
     lessonId: uuid,
     questionId: z.string().regex(/^q[1-9][0-9]{0,2}$/),
+    questionRevision: z.number().int().positive().optional(),
     answer: z.union([
       z.object({ choiceIndex: z.number().int().min(0).max(5) }).strict(),
       z.object({ text: z.string().trim().min(1).max(6000) }).strict(),
@@ -102,6 +106,7 @@ export function createLearning(db, { complete }) {
     CREATE TABLE IF NOT EXISTS learning_attempts(owner TEXT NOT NULL,id TEXT NOT NULL,lesson_id TEXT NOT NULL,question_id TEXT NOT NULL,input TEXT NOT NULL,status TEXT NOT NULL,result TEXT,created_at TEXT NOT NULL,PRIMARY KEY(owner,id));
     CREATE TABLE IF NOT EXISTS learning_wrong(owner TEXT NOT NULL,lesson_id TEXT NOT NULL,question_id TEXT NOT NULL,attempt_id TEXT NOT NULL,wrong_count INTEGER NOT NULL,review_count INTEGER NOT NULL,resolved INTEGER NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(owner,lesson_id,question_id));
     CREATE TABLE IF NOT EXISTS learning_settings(id INTEGER PRIMARY KEY CHECK(id=1),max_questions INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS learning_question_revisions(owner TEXT NOT NULL,lesson_id TEXT NOT NULL,question_id TEXT NOT NULL,revision INTEGER NOT NULL,question TEXT NOT NULL,source TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner,lesson_id,question_id,revision));
     INSERT OR IGNORE INTO learning_settings VALUES(1,40);
     CREATE INDEX IF NOT EXISTS learning_owner_lessons ON learning_lessons(owner,created_at);
     CREATE INDEX IF NOT EXISTS learning_owner_attempts ON learning_attempts(owner,lesson_id,created_at);
@@ -132,10 +137,11 @@ export function createLearning(db, { complete }) {
     if (detail && data) {
       result.explanation = data.explanation;
       result.questions = (row.status === 'ready' ? data.questions : []).map(
-        ({ kind, prompt, options }, i) => ({
+        ({ kind, prompt, options, revision }, i) => ({
           id: `q${i + 1}`,
           kind,
           prompt,
+          revision: revision || 1,
           ...(options ? { options } : {}),
         }),
       );
@@ -144,7 +150,10 @@ export function createLearning(db, { complete }) {
           "SELECT result FROM learning_attempts WHERE owner=? AND lesson_id=? AND status='done' ORDER BY created_at,rowid",
         )
         .all(row.owner, row.id)
-        .map((r) => JSON.parse(r.result));
+        .map((r) => {
+          const a = JSON.parse(r.result);
+          return { ...a, questionRevision: a.questionRevision || 1 };
+        });
     }
     return result;
   }
@@ -353,7 +362,7 @@ export function createLearning(db, { complete }) {
       closed = true;
       controller.abort();
     },
-    async handle(req, url, json, actor, body) {
+    async handle(req, url, json, actor, body, source = { origin: 'manual' }) {
       const path = url.pathname;
       if (!path.startsWith('/api/learning/')) return false;
       if (!actor) throw fail(403, '学习记录需要独立账号登录。');
@@ -419,6 +428,106 @@ export function createLearning(db, { complete }) {
         }
         return true;
       }
+      const questionRoute = path.match(
+        /^\/api\/learning\/lessons\/([^/]+)\/questions\/(q[1-9][0-9]{0,2})(\/history)?$/,
+      );
+      if (questionRoute) {
+        const lessonId = uuid.parse(questionRoute[1]),
+          questionId = questionRoute[2],
+          index = Number(questionId.slice(1)) - 1;
+        const p = req.method === 'PATCH' ? questionEditSchema.parse(await body(req)) : null;
+        const { row, data } = storedLesson(owner, lessonId),
+          old = data.questions[index];
+        if (!old) throw fail(404, '题目不存在。');
+        const revision = old.revision || 1,
+          full = { ...old, id: questionId, revision };
+        if (questionRoute[3]) {
+          if (req.method !== 'GET') throw fail(405, '题目历史只支持读取。');
+          const before = z.coerce
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .parse(url.searchParams.has('before') ? url.searchParams.get('before') : undefined);
+          const rows = db
+            .prepare(
+              `SELECT * FROM learning_question_revisions WHERE owner=? AND lesson_id=? AND question_id=? ${before ? 'AND revision<?' : ''} ORDER BY revision DESC LIMIT 101`,
+            )
+            .all(owner, lessonId, questionId, ...(before ? [before] : []));
+          let versions = rows.map((r) => ({
+            ...JSON.parse(r.question),
+            id: questionId,
+            revision: r.revision,
+            source: JSON.parse(r.source),
+            updatedAt: r.created_at,
+          }));
+          if (!before && !versions.some((v) => v.revision === revision))
+            versions.unshift({
+              ...full,
+              source: { origin: 'generated' },
+              updatedAt: row.created_at,
+            });
+          json(200, {
+            versions: versions.slice(0, 100),
+            next: versions.length > 100 ? versions[99].revision : null,
+          });
+          return true;
+        }
+        if (req.method === 'GET') {
+          json(200, { question: full });
+          return true;
+        }
+        if (req.method !== 'PATCH') throw fail(405, '题目仅支持读取或修改。');
+        if (p.revision !== revision) throw fail(409, '题目已更新，请重新读取后修改。');
+        if (
+          p.question.kind !== old.kind ||
+          (p.question.slot !== undefined && p.question.slot !== old.slot)
+        )
+          throw fail(400, '题型和题号不能修改；请选择原题型的完整内容。');
+        const changed = {
+            ...p.question,
+            ...(old.slot ? { slot: old.slot } : {}),
+            revision: revision + 1,
+          },
+          at = new Date().toISOString();
+        data.questions[index] = changed;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (
+            !db
+              .prepare('UPDATE learning_lessons SET data=? WHERE owner=? AND id=? AND data=?')
+              .run(JSON.stringify(data), owner, lessonId, row.data).changes
+          )
+            throw fail(409, '讲义已变化，请重新读取。');
+          const insert = db.prepare(
+            'INSERT OR IGNORE INTO learning_question_revisions VALUES(?,?,?,?,?,?,?)',
+          );
+          insert.run(
+            owner,
+            lessonId,
+            questionId,
+            revision,
+            JSON.stringify(old),
+            JSON.stringify({ origin: revision === 1 ? 'generated' : 'previous' }),
+            row.created_at,
+          );
+          insert.run(
+            owner,
+            lessonId,
+            questionId,
+            revision + 1,
+            JSON.stringify(changed),
+            JSON.stringify(source),
+            at,
+          );
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+        json(200, { question: { ...changed, id: questionId }, previousRevision: revision });
+        return true;
+      }
       const lessonRoute = path.match(/^\/api\/learning\/lessons\/([^/]+)$/);
       if (lessonRoute && req.method === 'GET') {
         const row = rowFor(owner, uuid.parse(lessonRoute[1]));
@@ -442,6 +551,8 @@ export function createLearning(db, { complete }) {
         const { data } = storedLesson(owner, p.lessonId),
           q = data.questions[Number(p.questionId.slice(1)) - 1];
         if (!q) throw fail(404, '题目不存在。');
+        if (p.questionRevision !== undefined && p.questionRevision !== (q.revision || 1))
+          throw fail(409, '题目已更新，请刷新讲义后按新版重新作答。');
         if (
           q.kind === 'choice'
             ? !('choiceIndex' in p.answer) || p.answer.choiceIndex >= q.options.length
@@ -483,6 +594,12 @@ export function createLearning(db, { complete }) {
             id: p.id,
             lessonId: p.lessonId,
             questionId: p.questionId,
+            questionRevision: q.revision || 1,
+            question: {
+              kind: q.kind,
+              prompt: q.prompt,
+              ...(q.options ? { options: q.options } : {}),
+            },
             answer: p.answer,
             ...graded,
             passed: graded.score >= 80,

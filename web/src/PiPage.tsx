@@ -39,7 +39,6 @@ import type { Settings, AuthSession, PiTurn, PiContext, PiSessionContext, TodoIt
 import { FileWorkbenchProvider, FileWorkbenchPanel } from './FileWorkbench';
 import { ApprovalControl } from './ApprovalControl';
 import { SandboxNetworkControl } from './SandboxNetworkControl';
-import { TaskActivity } from './TaskActivity';
 import type { ServerProject } from './ProjectBrowser';
 import { ProjectSummary } from './ProjectSummary';
 import { ToolLog } from './ToolLog';
@@ -87,7 +86,8 @@ const TerminalPanel = lazy(() =>
   import('./TerminalPanel').then((module) => ({ default: module.TerminalPanel })),
 );
 import { MailAssistant } from './MailAssistant';
-import { NewProject, ProjectPermissions } from './ProjectManager';
+import { NewProject } from './ProjectManager';
+import { JumpToLatest } from './JumpToLatest';
 import { ChatFiles, uploadChatFile, type ChatFile } from './ChatFiles';
 import { AssistantComposerActions } from './AssistantComposerActions';
 import { AssistantSettings } from './AssistantSettings';
@@ -420,8 +420,7 @@ function ServerPiPage({
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [navigationOpen]);
-  const [newProject, setNewProject] = useState(false),
-    [permissions, setPermissions] = useState(false);
+  const [newProject, setNewProject] = useState(false);
   const [staged, setStaged] = useState<ChatFile[]>([]),
     [uploadError, setUploadError] = useState(''),
     [uploadLabel, setUploadLabel] = useState(''),
@@ -1315,18 +1314,6 @@ function ServerPiPage({
           }}
         />
       )}
-      {permissions && project && (
-        <ProjectPermissions
-          settings={settings}
-          project={project}
-          projects={projects}
-          close={() => setPermissions(false)}
-          saved={() => {
-            setPermissions(false);
-            void refreshProjects().catch((e) => setError(e.message));
-          }}
-        />
-      )}
       <header className="assistant-workspace-heading chat-heading">
         <button className="mobile-menu icon-btn" aria-label="打开导航" onClick={openNavigation}>
           <Menu size={19} />
@@ -1697,26 +1684,6 @@ function ServerPiPage({
                 conversation={conversation}
                 admin={session.user.role === 'owner'}
               />
-              {project && session.user.role === 'owner' && (
-                <button
-                  disabled={uploading || manualCompacting}
-                  onClick={() => setPermissions(true)}
-                >
-                  <ShieldCheck size={15} />
-                  授权
-                </button>
-              )}
-              <label>
-                连续发送
-                <select
-                  aria-label="连续发送方式"
-                  value={sendMode}
-                  onChange={(e) => setSendMode(e.target.value as 'queue' | 'steer')}
-                >
-                  <option value="steer">立即补充</option>
-                  <option value="queue">下一任务</option>
-                </select>
-              </label>
             </AssistantSettings>
           </div>
           <div className="pi-message-area" data-conversation-swipe>
@@ -1803,10 +1770,14 @@ function ServerPiPage({
                       <div className="message assistant">
                         <RunSummary
                           execution={t.execution}
-                          status={running ? 'running' : taskState?.status || 'done'}
+                          status={taskState?.status || 'done'}
                           phase={taskState?.compacting ? '压缩中…' : taskState?.phase}
                         />
-                        <LongGoalCard goal={taskState?.longGoal} status={taskState?.status} />
+                        <LongGoalCard
+                          goal={taskState?.longGoal}
+                          status={taskState?.status}
+                          waiting={taskState?.uiRequests?.some((q) => q.status === 'pending')}
+                        />
                         {taskState?.status === 'interrupted' && (
                           <PluginRequests task={taskState} settings={settings} />
                         )}
@@ -1850,7 +1821,6 @@ function ServerPiPage({
                             {taskState?.compacting ? '压缩中…' : taskState?.phase || '正在处理'}
                           </p>
                         )}
-                        {running && taskState && <TaskActivity task={taskState} />}
                         {entry.supplements.map((s) => (
                           <div className="task-supplement" key={s.id}>
                             <small>{taskLabel(s)}</small>
@@ -1898,11 +1868,13 @@ function ServerPiPage({
                           settings={settings}
                           conversation={conversation}
                         />
-                        <FileChanges
-                          tools={t.tools || []}
-                          settings={settings}
-                          projectId={t.projectId}
-                        />
+                        {!running && (
+                          <FileChanges
+                            tools={t.tools || []}
+                            settings={settings}
+                            projectId={t.projectId}
+                          />
+                        )}
                         {!t.timeline?.length && (
                           <ToolLog
                             tools={t.tools || []}
@@ -1910,22 +1882,24 @@ function ServerPiPage({
                             settings={settings}
                           />
                         )}
-                        <RunMetrics metrics={t.execution?.metrics} />
-                        <div className="message-actions">
-                          <CopyButton text={t.output} label="复制 Agent 回复" />
-                          {!running && !unfinished && (
-                            <button
-                              type="button"
-                              className="message-action"
-                              disabled={!!forking || uploading || manualCompacting}
-                              onClick={() => void forkMessage(t, 'after')}
-                              title="保留此处之前的原生上下文，在新对话继续"
-                            >
-                              <GitBranch size={14} />
-                              <span>从这里分支</span>
-                            </button>
-                          )}
-                        </div>
+                        {!running && <RunMetrics metrics={t.execution?.metrics} />}
+                        {!running && (
+                          <div className="message-actions">
+                            <CopyButton text={t.output} label="复制 Agent 回复" />
+                            {!running && !unfinished && (
+                              <button
+                                type="button"
+                                className="message-action"
+                                disabled={!!forking || uploading || manualCompacting}
+                                onClick={() => void forkMessage(t, 'after')}
+                                title="保留此处之前的原生上下文，在新对话继续"
+                              >
+                                <GitBranch size={14} />
+                                <span>从这里分支</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1950,12 +1924,7 @@ function ServerPiPage({
                 <PluginRequests task={activeTask} settings={settings} />
               </div>
             </div>
-            {showLatest && (
-              <button type="button" className="pi-jump-latest" onClick={jumpToLatest}>
-                <ChevronsDown size={14} />
-                回到最新
-              </button>
-            )}
+            {showLatest && <JumpToLatest onClick={jumpToLatest} />}
           </div>
           {terminalOpen && session?.user.role === 'owner' && (
             <Suspense fallback={<p className="field-help">正在载入终端…</p>}>
@@ -2147,6 +2116,7 @@ function ServerPiPage({
               scope={`${viewKey}:${conversation}`}
               thinkingLevel={thinkingLevel}
               thinkingDisabled={manualCompacting}
+              thinkingDisabledReason="正在压缩上下文，完成后可调整下一任务的思考强度。"
               changeThinking={(level) => {
                 pending.current = null;
                 setThinkingLevel(level);
@@ -2169,8 +2139,14 @@ function ServerPiPage({
               }}
               terminal={() => setTerminalOpen((value) => !value)}
               terminalDisabled={session.user.role !== 'owner'}
+              terminalDisabledReason="服务器终端仅向独立管理员账号开放。项目内的已授权文件操作仍可正常使用。"
               attach={() => fileInput.current?.click()}
               attachmentDisabled={uploading || staged.length >= 8}
+              attachmentDisabledReason={
+                uploading
+                  ? '正在上传附件，请等待完成或取消当前上传。'
+                  : '每条消息最多附加 8 个文件，请先移除附件或发送当前消息。'
+              }
               attachmentTitle={`上传图片、PDF或文件，也可直接粘贴或拖到聊天窗口。${attachmentSizeMessage}`}
               commands={() => {
                 setInput('/');
@@ -2178,6 +2154,7 @@ function ServerPiPage({
                 if (!generating) void inspect().catch(() => {});
               }}
               commandsDisabled={busy}
+              commandsDisabledReason="正在处理当前请求，完成后可打开命令。"
               working={generating || compacting}
               hasContent={!!input.trim() || !!staged.length}
               stop={() => void stopCurrent().catch((e) => setError(e.message))}
@@ -2189,6 +2166,17 @@ function ServerPiPage({
                 !status?.available
               }
               sendAria="发送给 Pi"
+              sendDisabledReason={
+                uploading
+                  ? '请等待附件上传完成，或取消上传后发送。'
+                  : loadingHistory
+                    ? '正在恢复当前对话历史，请稍候。'
+                    : manualCompacting
+                      ? '正在压缩上下文，完成后可以发送。'
+                      : !status?.available
+                        ? '服务器 Pi 当前不可用，请在连接与设置中检查服务连接。'
+                        : '请输入消息或添加附件后发送。'
+              }
               sendLabel={activeTask ? (sendMode === 'steer' ? '立即补充' : '排队') : '发送'}
             />
           </AssistantComposer>

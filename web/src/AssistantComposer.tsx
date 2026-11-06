@@ -33,12 +33,19 @@ export function AssistantComposer({
 }) {
   useHistoryComposerEnter(area, history, active);
   useComposerSize(area, value, { enabled: active });
+  const submit = () => {
+    const button = area.current?.form?.querySelector<HTMLButtonElement>(
+      '.composer-primary-action:not(.stop-task)',
+    );
+    if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+    return send();
+  };
   return (
     <form
       className="message-composer assistant-composer"
       onSubmit={(event) => {
         event.preventDefault();
-        void send();
+        void submit();
       }}
     >
       {header}
@@ -79,7 +86,7 @@ export function AssistantComposer({
             return;
           }
           onKeyDown?.(event);
-          editorComposerEnter(event, send);
+          editorComposerEnter(event, submit);
         }}
       />
       {children}

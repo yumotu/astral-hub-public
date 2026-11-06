@@ -1120,7 +1120,7 @@ test('broken Pi streams never save a fabricated completed reply and release requ
     .trim()
     .split('\n')
     .map((s) => JSON.parse(s));
-  assert.equal(events.at(-1).type, 'error');
+  assert.equal(events.at(-1).type, 'error', JSON.stringify({status:response.status,events}));
   assert.equal(
     (await request('/pi/conversations/' + conversationId, undefined, owner.token)).body.turns
       .length,

@@ -1,7 +1,11 @@
 # Third-party notices
 
-经典牌面由 Pamela Colman Smith / A. E. Waite 创作，图片来自 Wikimedia Commons。每张牌的来源、作者、许可元数据和文件摘要保存在 `web/public/cards/classic/sources.json`；不得删除该归属文件。来源页面列明 Public domain 状态，使用者应核对所在地规则。
+Original Astral Hub source is licensed under the root MIT LICENSE. Third-party packages and assets retain their own copyrights and licenses; the project license does not replace them.
 
-项目自带的现代 SVG 牌面由 `scripts/generate-cards.mjs` 生成；品牌图标由 `scripts/brand-icons.mjs` 生成。第三方 npm、Go、Electron、Android 与容器依赖遵循其各自许可证，锁文件保留准确版本与来源。依赖的许可证不自动成为本项目原创源码的许可证。
+- The vendored `pi-goal` 0.1.7 source remains unchanged under MIT. Its license and provenance are in `deploy/pi/vendor/pi-goal/LICENSE` and `UPSTREAM.json`; the computer executor retains copies in `agent/assets/vendor/pi-goal/`.
+- The Lucide-derived brand icon retains its ISC/Feather attribution in `web/public/brand-icon-LICENSE.txt`.
+- PDF.js resources retain the upstream license at `web/public/pdfjs/LICENSE` and the notices shipped with their fonts and other assets.
+- Web builds generate `licenses/dependencies.txt` and `licenses/dependencies.json` from the installed production dependencies and their license/notice files. They also include `licenses/astral-hub-LICENSE.txt`. These resources travel with the web, Electron and Android web bundles.
+- Electron and its Chromium runtime retain the license and credit files included by Electron packaging. The bundled computer executor installs its pinned npm dependencies with their original license files; the bundled Node distribution retains its own license. OCR data and native runtimes retain their upstream notices in those distributions.
 
-持续目标适配使用 pi-goal 0.1.7，上游完整源码、MIT许可证、来源和摘要保存在 deploy/pi/vendor/pi-goal/。离线文档识别使用固定 unpdf、Tesseract.js、Tesseract 语言数据、PDF.js 和 @napi-rs/canvas，保留各 npm 包的许可证和锁文件；这些依赖的许可不改变本项目原创代码许可。
+Dependency versions are recorded in each package-lock.json. Generated dependency notices report the installed packages and their declared licenses; custom plugins installed by users retain the licenses and obligations of their respective authors.

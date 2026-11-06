@@ -35,6 +35,17 @@ const diagnosticSchema = z
   })
   .strict();
 export function createCommunity(store, { token, body, options = {} }) {
+  function withNotice(work) {
+    store.db.exec('SAVEPOINT social_notice');
+    try {
+      const result = work();
+      store.db.exec('RELEASE social_notice');
+      return result;
+    } catch (e) {
+      store.db.exec('ROLLBACK TO social_notice; RELEASE social_notice');
+      throw e;
+    }
+  }
   const accounts = createAccounts(store.db, { now: options.now });
   const projectLabels = createProjectLabels(store.db);
   store.db.exec(
@@ -1114,7 +1125,29 @@ export function createCommunity(store, { token, body, options = {} }) {
           .object({ username })
           .strict()
           .parse(await body(req));
-        accounts.request(actor.id, p.username);
+        withNotice(() => {
+          accounts.request(actor.id, p.username);
+          const recipient = store.db
+            .prepare('SELECT id FROM users WHERE username=?')
+            .get(p.username);
+          options.notifications?.publish(
+            recipient.id,
+            {
+              kind: 'friend',
+              title: '新的联系人申请',
+              body: `${actor.displayName} 请求添加你为联系人。`,
+              target: { type: 'contacts' },
+            },
+            'friend:' +
+              actor.id +
+              ':' +
+              recipient.id +
+              ':' +
+              store.db
+                .prepare('SELECT created_at FROM contacts WHERE requester=? AND (a=? OR b=?)')
+                .get(actor.id, recipient.id, recipient.id).created_at,
+          );
+        });
         json(201, { ok: true });
         return true;
       }
@@ -1155,7 +1188,21 @@ export function createCommunity(store, { token, body, options = {} }) {
             .object({ id: uuid, content: z.string().trim().min(1).max(5000) })
             .strict()
             .parse(await body(req));
-          json(201, { messages: accounts.send(actor.id, other, p) });
+          const sent = withNotice(() => {
+            const messages = accounts.send(actor.id, other, p);
+            options.notifications?.publish(
+              other,
+              {
+                kind: 'contact',
+                title: actor.displayName + ' 发来消息',
+                body: p.content.slice(0, 1200),
+                target: { type: 'contact', contactId: actor.id },
+              },
+              'message:' + actor.id + ':' + p.id,
+            );
+            return messages;
+          });
+          json(201, { messages: sent });
           return true;
         }
       }

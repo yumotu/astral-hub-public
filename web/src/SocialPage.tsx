@@ -26,11 +26,13 @@ export function SocialPage({
   session,
   login,
   notify,
+  openTarget,
 }: {
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
   notify: (s: string) => void;
+  openTarget?: { id: string; contactId?: string } | null;
 }) {
   const [tab, setTab] = useState<'chat' | 'contacts' | 'map'>('chat'),
     [overview, setOverview] = useState<SocialOverview | null>(null),
@@ -47,6 +49,18 @@ export function SocialPage({
     scroll = useRef<HTMLDivElement>(null),
     pendingId = useRef<string | null>(null);
   selectedRef.current = selected;
+  const opened = useRef('');
+  useEffect(() => {
+    if (!openTarget || !overview || opened.current === openTarget.id) return;
+    opened.current = openTarget.id;
+    if (openTarget.contactId && overview.contacts.some((c) => c.id === openTarget.contactId)) {
+      setTab('chat');
+      setSelected(openTarget.contactId);
+    } else {
+      setTab('contacts');
+      setSelected('');
+    }
+  }, [openTarget, overview]);
   useBackLayer(!!selected, () => setSelected(''), 40);
   useBackLayer(tab !== 'chat', () => setTab('chat'), 30);
   const refresh = useCallback(async () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { activityDeadline } from './activity-deadline.mjs';
+import { parseGoalPlan } from './goal-plan.mjs';
 const written = new WeakMap();
 
 export function strictLines(input, maxBytes = 4 * 1024 * 1024) {
@@ -122,7 +123,7 @@ export function longGoalEvent(event) {
     event.method !== 'setStatus' ||
     event.statusKey !== 'astral-long-goal' ||
     typeof event.statusText !== 'string' ||
-    event.statusText.length > 20000
+    event.statusText.length > 48000
   )
     return null;
   try {
@@ -161,7 +162,9 @@ export function longGoalEvent(event) {
           'timeUsedSeconds',
           'createdAt',
           'updatedAt',
-        ].map((k) => [k, goal[k]]),
+        ]
+          .map((k) => [k, goal[k]])
+          .concat([['plan', goal.plan ? parseGoalPlan(goal.plan) : null]]),
       ),
       triggerTurn: triggerTurn === true,
     };

@@ -350,6 +350,43 @@ test('plugin dialogs replay after disconnect and require the task owner, matchin
   f.finish(p.id);
 });
 
+test('tagged assistant questions accept inline other answers once while native plugin choices stay strict', async (t) => {
+  const f = await fixture(t),
+    p = message(randomUUID(), 'Question');
+  await f.req('/pi/tasks', p, f.owner);
+  await eventually(() => f.calls.length);
+  const meta = {
+    questionId: randomUUID(),
+    toolCallId: 'ask-user',
+    question: '选择范围',
+    context: '合成问题',
+  };
+  f.emit(p.id, {
+    type: 'extension_ui_request',
+    id: 'inline-other',
+    method: 'select',
+    title: meta.question,
+    source: 'ask_user',
+    questionId: meta.questionId,
+    toolCallId: meta.toolCallId,
+    options: ['仅摘要', '全文', '填写其他答案'],
+  });
+  await eventually(
+    () => f.task(p.id),
+    (task) => task.uiRequests?.length,
+  );
+  const path = `/pi/tasks/${p.id}/ui`;
+  assert.equal(
+    (await f.req(path, { id: 'inline-other', value: '仅检查第二页中的公式' }, f.owner)).status,
+    200,
+  );
+  assert.equal(
+    (await f.req(path, { id: 'inline-other', value: '不要重复提交' }, f.owner)).status,
+    409,
+  );
+  f.finish(p.id);
+});
+
 test('background queue survives view disconnects, edits/withdrawals, cursor replay and duplicate submits', async (t) => {
   const f = await fixture(t),
     a = randomUUID(),
