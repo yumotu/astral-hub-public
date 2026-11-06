@@ -1,4 +1,16 @@
 // Sidebar metadata must survive history refreshes and task snapshot recovery.
+export function compareConversations(a, b) {
+  return (
+    Number(!!b.pinnedAt) - Number(!!a.pinnedAt) ||
+    (b.pinnedAt || '').localeCompare(a.pinnedAt || '') ||
+    b.updatedAt.localeCompare(a.updatedAt) ||
+    a.id.localeCompare(b.id)
+  );
+}
+/** @template T @param {T[]} items @param {boolean} archived @returns {T[]} */
+export function visibleConversations(items, archived = false) {
+  return items.filter((c) => !!c.archivedAt === archived).sort(compareConversations);
+}
 /**
  * @typedef {{ id: string, title?: string|null, projectId?: string|null, access?: string,
  * updatedAt: string, createdAt?: string, pinnedAt?: string|null, archivedAt?: string|null }} Summary
@@ -43,11 +55,5 @@ export function conversationList({ history = [], tasks = [], metadata = [], draf
       updatedAt: [previous?.updatedAt || '', c.updatedAt].sort().at(-1),
     });
   }
-  return [...conversations.values()].sort(
-    (a, b) =>
-      Number(!!b.pinnedAt) - Number(!!a.pinnedAt) ||
-      (b.pinnedAt || '').localeCompare(a.pinnedAt || '') ||
-      b.updatedAt.localeCompare(a.updatedAt) ||
-      a.id.localeCompare(b.id),
-  );
+  return [...conversations.values()].sort(compareConversations);
 }

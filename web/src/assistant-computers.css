@@ -73,23 +73,6 @@
   min-height: 0;
   padding: 0 0 14px;
 }
-.assistant-computer-view .computer-messages {
-  padding: 20px 0;
-}
-.assistant-computer-view .computer-messages > div {
-  max-width: 860px;
-  margin: 0 auto;
-}
-.assistant-computer-view .computer-user-message {
-  width: fit-content;
-  max-width: 90%;
-  margin-left: auto;
-}
-.assistant-computer-view .computer-turn {
-  border: 0;
-  padding: 15px 0;
-  line-height: 1.7;
-}
 .computer-unified-panel {
   flex: 1;
   min-height: 0;
@@ -159,18 +142,5 @@
   }
   html[data-keyboard='open'] .assistant-computer-view > .assistant-toolbar {
     display: none;
-  }
-}
-
-.assistant-computer-view .computer-messages {
-  padding: 18px 20px 12px;
-}
-.assistant-computer-view .computer-message-content {
-  max-width: 1000px;
-  margin: 0 auto;
-}
-@media (max-width: 700px) {
-  .assistant-computer-view .computer-messages {
-    padding: 18px 16px 12px;
   }
 }

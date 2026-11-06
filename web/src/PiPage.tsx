@@ -30,7 +30,8 @@ import {
 } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 import { useMobilePanels } from './MobilePanels';
-import { useHistoryComposerEnter } from './composer-keyboard';
+import { AssistantComposer } from './AssistantComposer';
+import { AssistantUserMessage } from './AssistantUserMessage';
 import './message-actions.css';
 import { api, dateLabel } from './data';
 import { peekAPI } from './resource-cache';
@@ -66,7 +67,7 @@ import {
   mergeSessionContext,
   messageDelivery,
 } from '../../shared/pi-conversation.mjs';
-import { conversationList } from '../../shared/pi-conversation-list.mjs';
+import { conversationList, visibleConversations } from '../../shared/pi-conversation-list.mjs';
 import {
   ConversationRow,
   ConversationMenu,
@@ -91,9 +92,8 @@ import { AssistantComposerActions } from './AssistantComposerActions';
 import { AssistantSettings } from './AssistantSettings';
 import { ProjectConversationList } from './ProjectConversationList';
 import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
-import { pastedFiles, insertPastedText } from './composer-paste';
+import { insertPastedText } from './composer-paste';
 import { useBackLayer } from './back-navigation';
-import { useComposerSize } from './mobile-viewport';
 const MarkdownView = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
 function PiMarkdown({ text }: { text: string }) {
   return (
@@ -508,8 +508,8 @@ function ServerPiPage({
       drafts: draftConversations,
     }) as Conversation[]
   ).filter((c) => !deletedConversations.includes(c.id));
-  const conversations = allConversations.filter((c) => !c.archivedAt);
-  const archivedConversations = allConversations.filter((c) => c.archivedAt);
+  const conversations = visibleConversations(allConversations);
+  const archivedConversations = visibleConversations(allConversations, true);
   const conversationState = (id: string) => {
     const list = tasks.filter((t) => t.conversationId === id && taskPending(t) && !t.parentId);
     return list.find((t) => t.status !== 'queued') || list[0];
@@ -541,7 +541,6 @@ function ServerPiPage({
   const [commandIndex, setCommandIndex] = useState(0),
     [commandDismissed, setCommandDismissed] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
-  useComposerSize(composer, input);
   const menu = commandMenu(input, commands, availableSkills, session?.user.role === 'owner');
   const menuOpen = !commandDismissed && menu.kind !== null;
   const matchingCommands = menuOpen ? menu.items : [];
@@ -676,7 +675,6 @@ function ServerPiPage({
   const pending = useRef<string | null>(null),
     scroll = useRef<HTMLDivElement>(null),
     alive = useRef(true);
-  useHistoryComposerEnter(composer, scroll, !computerTarget);
   useEffect(() => {
     pending.current = null;
   }, [sendMode]);
@@ -1780,32 +1778,27 @@ function ServerPiPage({
                       data-message-id={t.id}
                       className={`pi-turn${running ? ' streaming-turn' : ''}${unfinished ? ' task-incomplete' : ''}`}
                     >
-                      <div className="message mine">
-                        <small>
-                          {taskState?.parentId ? '任务补充' : '我'} · {dateLabel(entry.submittedAt)}
-                        </small>
-                        <p>{t.input}</p>
-                        <ChatFiles
-                          files={t.attachments || []}
-                          settings={settings}
-                          conversation={conversation}
-                        />
-                        <div className="message-actions">
-                          <CopyButton text={t.input} label="复制我的消息" />
-                          {!taskState?.parentId && (
-                            <button
-                              type="button"
-                              className="message-action"
-                              disabled={!!forking || uploading || manualCompacting}
-                              onClick={() => void forkMessage(t, 'before')}
-                              title="保留原对话，从这条消息之前分支并编辑"
-                            >
-                              <Pencil size={14} />
-                              <span>编辑并分支</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                      <AssistantUserMessage
+                        input={t.input}
+                        at={entry.submittedAt}
+                        label={taskState?.parentId ? '任务补充' : '我'}
+                        files={t.attachments || []}
+                        settings={settings}
+                        conversation={conversation}
+                      >
+                        {!taskState?.parentId && (
+                          <button
+                            type="button"
+                            className="message-action"
+                            disabled={!!forking || uploading || manualCompacting}
+                            onClick={() => void forkMessage(t, 'before')}
+                            title="保留原对话，从这条消息之前分支并编辑"
+                          >
+                            <Pencil size={14} />
+                            <span>编辑并分支</span>
+                          </button>
+                        )}
+                      </AssistantUserMessage>
                       <div className="message assistant">
                         <RunSummary
                           execution={t.execution}
@@ -1986,140 +1979,111 @@ function ServerPiPage({
               composer.current?.focus();
             }}
           />
-          <form
-            className="message-composer assistant-composer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
+          <AssistantComposer
+            area={composer}
+            history={scroll}
+            active={!computerTarget}
+            value={input}
+            send={send}
+            upload={uploadFiles}
+            onValue={(value) => {
+              setInput(value);
+              if (value === '/' && !generating) void inspect().catch(() => {});
+              pending.current = null;
             }}
-          >
-            {todo && <TodoDropdown key={`todo:${conversation}`} items={todo.items} />}
-            {menuOpen && (
-              <div className="pi-command-menu" id="pi-command-menu">
-                <div className="pi-command-heading" aria-hidden="true">
-                  <b>{menu.kind === 'skills' ? '技能' : '命令'}</b>
-                  <small>↑↓ 选择 · Tab / ↵ 插入 · Esc 关闭</small>
-                </div>
-                {skillsError && (
-                  <p className="pi-command-feedback" role="alert">
-                    技能加载失败：{skillsError}。重新输入 / 可重试。
-                  </p>
-                )}
-                {skillsWarning && (
-                  <p className="pi-command-feedback" role="status">
-                    {skillsWarning}
-                  </p>
-                )}
-                {!matchingCommands.length && (
-                  <p className="pi-command-feedback" role="status">
-                    {skillsLoading
-                      ? '正在加载技能…'
-                      : skillsError
-                        ? '暂时无法获取技能列表。'
-                        : menu.kind === 'skills'
-                          ? availableSkills.some((s) => s.enabled)
-                            ? '没有匹配的技能，试试名称或用途。'
-                            : `尚未启用技能。${session.user.role === 'owner' ? '可在聊天中让助手创建或导入技能。' : ''}`
-                          : '没有匹配的命令。'}
-                  </p>
-                )}
-                <div
-                  role="listbox"
-                  id="pi-command-options"
-                  aria-label={menu.kind === 'skills' ? '选择技能' : 'Pi 命令'}
-                >
-                  {matchingCommands.map((c, index) => (
-                    <button
-                      type="button"
-                      key={c.name}
-                      role="option"
-                      id={`pi-command-${index}`}
-                      aria-selected={index === selectedCommand}
-                      title={c.description}
-                      className={index === selectedCommand ? 'selected' : ''}
-                      onMouseEnter={() => setCommandIndex(index)}
-                      onClick={() => chooseCommand(c)}
-                    >
-                      <code>/{c.name}</code>
-                      <span>{c.description || c.source}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <textarea
-              ref={composer}
-              data-quote-input
-              aria-label="发送给 Pi 的问题"
-              aria-controls={menuOpen ? 'pi-command-options' : undefined}
-              aria-activedescendant={
-                matchingCommands.length ? `pi-command-${selectedCommand}` : undefined
+            attributes={{
+              'data-quote-input': true,
+              'aria-label': '发送给 Pi 的问题',
+              'aria-controls': menuOpen ? 'pi-command-options' : undefined,
+              'aria-activedescendant': matchingCommands.length
+                ? `pi-command-${selectedCommand}`
+                : undefined,
+              'aria-autocomplete': 'list',
+              disabled: manualCompacting,
+            }}
+            onKeyDown={(e) => {
+              if (menuOpen && e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setCommandDismissed(true);
+                return;
               }
-              aria-autocomplete="list"
-              rows={2}
-              maxLength={8000}
-              placeholder="发送消息… 输入 / 查看命令"
-              aria-description="可直接粘贴图片、文件和文字，附件预览后再发送。"
-              value={input}
-              disabled={manualCompacting}
-              onPaste={(event) => {
-                const files = pastedFiles(event.clipboardData);
-                if (!files.length) return;
-                event.preventDefault();
-                event.stopPropagation();
-                const text = event.clipboardData.getData('text/plain');
-                const field = event.currentTarget;
-                if (text) {
-                  const result = insertPastedText(
-                    field.value,
-                    text,
-                    field.selectionStart,
-                    field.selectionEnd,
-                  );
-                  setInput(result.value);
-                  pending.current = null;
-                  requestAnimationFrame(() => {
-                    if (composer.current === field)
-                      field.setSelectionRange(result.cursor, result.cursor);
-                  });
-                }
-                void uploadFiles(files);
-              }}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing) return;
-                if (menuOpen && e.key === 'Escape') {
+              if (matchingCommands.length) {
+                if (['ArrowUp', 'ArrowDown'].includes(e.key)) {
                   e.preventDefault();
-                  e.stopPropagation();
-                  setCommandDismissed(true);
+                  setCommandIndex(
+                    (i) =>
+                      (i + (e.key === 'ArrowDown' ? 1 : -1) + matchingCommands.length) %
+                      matchingCommands.length,
+                  );
                   return;
                 }
-                if (matchingCommands.length) {
-                  if (['ArrowUp', 'ArrowDown'].includes(e.key)) {
-                    e.preventDefault();
-                    setCommandIndex(
-                      (i) =>
-                        (i + (e.key === 'ArrowDown' ? 1 : -1) + matchingCommands.length) %
-                        matchingCommands.length,
-                    );
-                    return;
-                  }
-                  if (['Enter', 'Tab'].includes(e.key) && !e.shiftKey) {
-                    e.preventDefault();
-                    chooseCommand(matchingCommands[selectedCommand]);
-                    return;
-                  }
-                }
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (['Enter', 'Tab'].includes(e.key) && !e.shiftKey) {
                   e.preventDefault();
-                  void send();
+                  chooseCommand(matchingCommands[selectedCommand]);
+                  return;
                 }
-              }}
-              onChange={(e) => {
-                setInput(e.target.value);
-                if (e.target.value === '/' && !generating) void inspect().catch(() => {});
-                pending.current = null;
-              }}
-            />
+              }
+            }}
+            header={
+              <>
+                {todo && <TodoDropdown key={`todo:${conversation}`} items={todo.items} />}
+                {menuOpen && (
+                  <div className="pi-command-menu" id="pi-command-menu">
+                    <div className="pi-command-heading" aria-hidden="true">
+                      <b>{menu.kind === 'skills' ? '技能' : '命令'}</b>
+                      <small>↑↓ 选择 · Tab / ↵ 插入 · Esc 关闭</small>
+                    </div>
+                    {skillsError && (
+                      <p className="pi-command-feedback" role="alert">
+                        技能加载失败：{skillsError}。重新输入 / 可重试。
+                      </p>
+                    )}
+                    {skillsWarning && (
+                      <p className="pi-command-feedback" role="status">
+                        {skillsWarning}
+                      </p>
+                    )}
+                    {!matchingCommands.length && (
+                      <p className="pi-command-feedback" role="status">
+                        {skillsLoading
+                          ? '正在加载技能…'
+                          : skillsError
+                            ? '暂时无法获取技能列表。'
+                            : menu.kind === 'skills'
+                              ? availableSkills.some((s) => s.enabled)
+                                ? '没有匹配的技能，试试名称或用途。'
+                                : `尚未启用技能。${session.user.role === 'owner' ? '可在聊天中让助手创建或导入技能。' : ''}`
+                              : '没有匹配的命令。'}
+                      </p>
+                    )}
+                    <div
+                      role="listbox"
+                      id="pi-command-options"
+                      aria-label={menu.kind === 'skills' ? '选择技能' : 'Pi 命令'}
+                    >
+                      {matchingCommands.map((c, index) => (
+                        <button
+                          type="button"
+                          key={c.name}
+                          role="option"
+                          id={`pi-command-${index}`}
+                          aria-selected={index === selectedCommand}
+                          title={c.description}
+                          className={index === selectedCommand ? 'selected' : ''}
+                          onMouseEnter={() => setCommandIndex(index)}
+                          onClick={() => chooseCommand(c)}
+                        >
+                          <code>/{c.name}</code>
+                          <span>{c.description || c.source}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            }
+          >
             {uploadError && (
               <div className="composer-attachment-error" role="alert">
                 <span>{uploadError}</span>
@@ -2222,7 +2186,7 @@ function ServerPiPage({
               sendAria="发送给 Pi"
               sendLabel={activeTask ? (sendMode === 'steer' ? '立即补充' : '排队') : '发送'}
             />
-          </form>
+          </AssistantComposer>
           <div className="assistant-statusbar">
             <SessionTelemetry
               key={`telemetry:${conversation}`}

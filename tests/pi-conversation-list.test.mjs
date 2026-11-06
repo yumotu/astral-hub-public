@@ -3,7 +3,32 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { createAccounts } from '../server/accounts.mjs';
 import { createPiConversations } from '../server/pi-conversations.mjs';
-import { conversationList } from '../shared/pi-conversation-list.mjs';
+import { conversationList, visibleConversations } from '../shared/pi-conversation-list.mjs';
+
+test('server and computer categories share pin/archive ordering without mutating cached metadata', () => {
+  const items = [
+    { id: 'z', updatedAt: '2026-11-06', pinnedAt: '2026-11-03', active: 2 },
+    { id: 'b', updatedAt: '2026-11-05' },
+    { id: 'a', updatedAt: '2026-11-05' },
+    { id: 'recent-pin', updatedAt: '2026-11-01', pinnedAt: '2026-11-04', active: 1 },
+    { id: 'archived', updatedAt: '2026-11-07', archivedAt: '2026-11-07' },
+  ];
+  const original = structuredClone(items);
+  assert.deepEqual(
+    visibleConversations(items).map((c) => c.id),
+    ['recent-pin', 'z', 'a', 'b'],
+  );
+  assert.deepEqual(
+    visibleConversations(items, true).map((c) => c.id),
+    ['archived'],
+  );
+  assert.equal(visibleConversations(items)[0].active, 1);
+  assert.deepEqual(
+    visibleConversations(conversationList({ metadata: items })).map((c) => c.id),
+    visibleConversations(items).map((c) => c.id),
+  );
+  assert.deepEqual(items, original);
+});
 
 test('conversation metadata and default directory are account scoped and survive reopening the store', () => {
   const db = new DatabaseSync(':memory:');

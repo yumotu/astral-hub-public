@@ -278,41 +278,9 @@
   padding: 12px 4px;
   overflow-wrap: anywhere;
 }
-.computer-turn {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 14px;
-}
-.computer-user-message {
-  border-radius: 14px;
-  background: var(--surface-soft);
-  padding: 10px 12px;
-  margin-bottom: 10px;
-}
-.computer-user-message p {
-  margin: 0 0 6px;
-  white-space: pre-wrap;
-}
-.computer-turn pre {
-  max-width: 100%;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-.computer-turn .table-scroll {
-  max-width: 100%;
-  overflow: auto;
-}
 .computer-supplement {
   border-left: 2px solid var(--accent);
   padding: 8px;
-  margin: 8px 0;
-}
-.computer-stream-state {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  color: var(--muted);
-  font-size: 12px;
   margin: 8px 0;
 }
 .computer-chat > .message-delivery-recovery {

@@ -1,13 +1,13 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AssistantComposerActions } from './AssistantComposerActions';
-import { useHistoryComposerEnter } from './composer-keyboard';
+import { AssistantComposer } from './AssistantComposer';
+import { AssistantUserMessage } from './AssistantUserMessage';
 import { AssistantSettings } from './AssistantSettings';
 import { AssistantMode } from './AssistantMode';
 import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
-import { pastedFiles } from './composer-paste';
-import { LoaderCircle, ChevronDown } from 'lucide-react';
-import { api, dateLabel } from './data';
+import { ChevronDown } from 'lucide-react';
+import { api } from './data';
 import { peekAPI, invalidateAPI } from './resource-cache';
 import { serverIdentity } from './session';
 import { CopyButton } from './CopyButton';
@@ -16,7 +16,7 @@ import { ToolLog, type ToolRun } from './ToolLog';
 import { useMessageOutbox } from './message-outbox';
 import { MessageOutbox } from './MessageOutbox';
 import { AppFunctionRequests } from './AppFunctionRequests';
-import { useComposerSize } from './mobile-viewport';
+import { RunSummary } from './ExecutionInfo';
 import { useAssistantPreferences } from './assistant-preferences';
 import { computerChatStorageKey } from '../../shared/assistant-target.mjs';
 import { insertPastedText } from './composer-paste';
@@ -144,12 +144,10 @@ export function ComputerChat({
     area = useRef<HTMLTextAreaElement>(null),
     follow = useRef(true),
     alive = useRef(true);
-  useHistoryComposerEnter(area, scroll);
   const { manager: outbox, rows } = useMessageOutbox(settings, owner, {
     deviceId,
     projectId: project.id,
   });
-  useComposerSize(area, input);
   const active = jobs.find((j) => !j.parentId && j.status === 'running'),
     queued = jobs.filter((j) => !j.parentId && j.status === 'queued'),
     working = !!active || queued.length > 0;
@@ -397,7 +395,7 @@ export function ComputerChat({
   return (
     <section className="computer-chat" aria-label="电脑项目对话">
       <div
-        className="computer-messages"
+        className="pi-messages computer-messages"
         data-conversation-swipe
         ref={scroll}
         role="log"
@@ -408,7 +406,7 @@ export function ComputerChat({
           setShowLatest(!follow.current);
         }}
       >
-        <div ref={content}>
+        <div ref={content} className="pi-message-content">
           {older && (
             <button className="text-link" onClick={() => void loadOlder()}>
               加载更早记录
@@ -423,69 +421,67 @@ export function ComputerChat({
           {jobs
             .filter((j) => !j.parentId)
             .map((j) => (
-              <article className="computer-turn" key={j.id}>
-                <div className="computer-user-message">
-                  <p>{j.input}</p>
-                  {!!j.attachments?.length && (
-                    <ChatFiles files={j.attachments} settings={settings} conversation={id} />
-                  )}
-                  <CopyButton text={j.input} label="复制我的电脑消息" />
-                </div>
-                <small>
-                  {dateLabel(j.createdAt)} · {phase(j)}
-                </small>
-                {jobs
-                  .filter((c) => c.parentId === j.id)
-                  .map((c) => (
-                    <div className="computer-supplement" key={c.id}>
-                      <small>
-                        {(
-                          {
-                            delivering: '补充送达中',
-                            accepted: '已接受补充',
-                            applied: '已加入当前任务',
-                            done: '任务补充',
-                            interrupted: '补充应用待确认',
-                            error: '补充未送达',
-                          } as Record<string, string>
-                        )[c.status] || c.status}
-                      </small>
-                      <p>{c.input}</p>
-                      {c.error && <p className="error">{c.error}</p>}
-                    </div>
-                  ))}
-                {j.thinking && (
-                  <details>
-                    <summary>思考过程</summary>
-                    <p>{j.thinking}</p>
-                  </details>
-                )}
-                <AppFunctionRequests
+              <article className="pi-turn" data-message-id={j.id} key={j.id}>
+                <AssistantUserMessage
+                  input={j.input}
+                  at={j.createdAt}
+                  files={j.attachments || []}
                   settings={settings}
-                  taskId={j.id}
-                  active={j.status === 'running'}
+                  conversation={id}
                 />
-                <ToolLog tools={j.tools} />
-                {j.output && (
-                  <Suspense fallback={<pre>{j.output}</pre>}>
-                    <Markdown text={j.output} />
-                  </Suspense>
-                )}
-                {!!j.artifacts?.length && (
-                  <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
-                )}
-                {pending(j) && (
-                  <span className="computer-stream-state">
-                    <LoaderCircle size={14} className="spin" />
-                    {j.phase || '等待目标电脑'}
-                  </span>
-                )}
-                {j.error && (
-                  <p role="alert" className="error">
-                    {j.error}
-                  </p>
-                )}
-                {j.output && <CopyButton text={j.output} label="复制电脑Agent回复" />}
+                <div className="message assistant">
+                  <RunSummary status={j.status} phase={phase(j)} />
+                  {jobs
+                    .filter((c) => c.parentId === j.id)
+                    .map((c) => (
+                      <div className="computer-supplement" key={c.id}>
+                        <small>
+                          {(
+                            {
+                              delivering: '补充送达中',
+                              accepted: '已接受补充',
+                              applied: '已加入当前任务',
+                              done: '任务补充',
+                              interrupted: '补充应用待确认',
+                              error: '补充未送达',
+                            } as Record<string, string>
+                          )[c.status] || c.status}
+                        </small>
+                        <p>{c.input}</p>
+                        {c.error && <p className="error">{c.error}</p>}
+                      </div>
+                    ))}
+                  {j.thinking && (
+                    <details>
+                      <summary>思考过程</summary>
+                      <p>{j.thinking}</p>
+                    </details>
+                  )}
+                  <AppFunctionRequests
+                    settings={settings}
+                    taskId={j.id}
+                    active={j.status === 'running'}
+                  />
+                  <ToolLog tools={j.tools} />
+                  {j.output && (
+                    <Suspense fallback={<pre>{j.output}</pre>}>
+                      <Markdown text={j.output} />
+                    </Suspense>
+                  )}
+                  {!!j.artifacts?.length && (
+                    <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
+                  )}
+                  {j.error && (
+                    <p role="alert" className="error">
+                      {j.error}
+                    </p>
+                  )}
+                  {j.output && (
+                    <div className="message-actions">
+                      <CopyButton text={j.output} label="复制电脑Agent回复" />
+                    </div>
+                  )}
+                </div>
               </article>
             ))}
         </div>
@@ -521,56 +517,25 @@ export function ComputerChat({
           {error}
         </p>
       )}
-      <form
-        className="message-composer assistant-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send();
+      <AssistantComposer
+        area={area}
+        history={scroll}
+        value={input}
+        send={send}
+        upload={uploadFiles}
+        attributes={{ 'aria-label': '发送给电脑Agent' }}
+        onValue={(value) => {
+          setInput(value);
+          setCommandsOpen(value === '/');
+        }}
+        onKeyDown={(e) => {
+          if (commandsOpen && e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            setCommandsOpen(false);
+          }
         }}
       >
-        <textarea
-          ref={area}
-          aria-label="发送给电脑Agent"
-          placeholder="发送消息… 输入 / 查看命令"
-          rows={2}
-          value={input}
-          maxLength={8000}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setCommandsOpen(e.target.value === '/');
-          }}
-          onPaste={(e) => {
-            const incoming = pastedFiles(e.clipboardData);
-            if (incoming.length) {
-              e.preventDefault();
-              const text = e.clipboardData.getData('text/plain');
-              if (text)
-                setInput(
-                  (old) =>
-                    insertPastedText(
-                      old,
-                      text,
-                      area.current?.selectionStart ?? old.length,
-                      area.current?.selectionEnd ?? old.length,
-                    ).value,
-                );
-              void uploadFiles(incoming);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (commandsOpen && e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              setCommandsOpen(false);
-              return;
-            }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
         {commandsOpen && (
           <div className="pi-command-menu" aria-label="电脑项目命令">
             <div className="pi-command-heading">
@@ -680,7 +645,7 @@ export function ComputerChat({
           sendAria="发送给电脑Agent"
           sendLabel={active ? (mode === 'steer' && !staged.length ? '立即补充' : '排队') : '发送'}
         />
-      </form>
+      </AssistantComposer>
       {settingsContainer &&
         createPortal(
           <AssistantSettings>

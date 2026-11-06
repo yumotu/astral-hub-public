@@ -36,6 +36,8 @@ export function RunSummary({
   phase?: string;
 }) {
   const running = status === 'running';
+  const waiting = running && /^等待你的|^等待用户/.test(phase || '');
+  const queued = ['queued', 'delivering', 'accepted', 'applied', 'stopping'].includes(status);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!running) return;
@@ -46,21 +48,24 @@ export function RunSummary({
   const start = Date.parse(execution?.startedAt || '');
   const end = running ? now : Date.parse(execution?.finishedAt || '');
   const elapsed = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : null;
-  const label = running
-    ? phase || '执行中'
-    : status === 'done'
-      ? '已完成'
-      : status === 'cancelled'
-        ? '已停止'
-        : status === 'interrupted'
-          ? '待核对'
-          : '未完成';
+  const label =
+    running || queued
+      ? phase || (queued ? '等待执行' : '执行中')
+      : status === 'done'
+        ? '已完成'
+        : status === 'cancelled'
+          ? '已停止'
+          : status === 'interrupted'
+            ? '待核对'
+            : '未完成';
   return (
     <div
-      className={`run-summary ${running ? 'is-running' : ''} ${!running && status !== 'done' ? 'has-error' : ''}`}
-      role={running ? 'status' : undefined}
+      className={`run-summary ${running && !waiting ? 'is-running' : ''} ${!running && !queued && status !== 'done' ? 'has-error' : ''}`}
+      role={running || queued ? 'status' : undefined}
     >
-      {running ? (
+      {waiting || queued ? (
+        <Clock3 size={13} />
+      ) : running ? (
         <LoaderCircle size={13} className="spin" />
       ) : status === 'done' ? (
         <CheckCircle2 size={13} />

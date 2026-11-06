@@ -10,6 +10,7 @@ import {
   type ConversationAction,
 } from './ConversationMenu';
 import { ProjectConversationList } from './ProjectConversationList';
+import { visibleConversations } from '../../shared/pi-conversation-list.mjs';
 import { peekAPI } from './resource-cache';
 import { ProjectSummary } from './ProjectSummary';
 import { serverIdentity } from './session';
@@ -51,10 +52,10 @@ export function AssistantComputerProjects({
 }) {
   if (!groups.length) return null;
   return (
-    <section className="assistant-computer-projects" aria-label="远程电脑项目">
+    <section className="assistant-computer-projects" aria-label="电脑项目">
       <div className="project-tree-heading">
         <h2>
-          <Monitor size={13} /> 远程电脑
+          <Monitor size={13} /> 电脑
         </h2>
         <button className="icon-btn" aria-label="连接另一台电脑" onClick={connect}>
           <Plus size={16} />
@@ -139,12 +140,7 @@ function ComputerProjectTree({
       kind: 'rename' | 'delete';
       conversation: Conversation;
     } | null>(null);
-  const visible = conversations
-    .filter((c) => !!c.archivedAt === showArchived)
-    .sort(
-      (a, b) =>
-        Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || b.updatedAt.localeCompare(a.updatedAt),
-    );
+  const visible = visibleConversations(conversations, showArchived);
   async function change(
     c: Conversation,
     patch: { title?: string; pinned?: boolean; archived?: boolean },
