@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { createRelayArtifacts } from './relay-artifacts.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
+import { Readable } from 'node:stream';
 const uuid = z.string().uuid();
 const longGoal = z
   .object({
@@ -81,6 +82,7 @@ export function createRelayComputer(
     ['submission', 'TEXT'],
     ['attachments', "TEXT NOT NULL DEFAULT '[]'"],
     ['thinking_level', "TEXT NOT NULL DEFAULT 'off'"],
+    ['scheduled', 'TEXT'],
   ])
     if (!columns.has(name)) db.exec(`ALTER TABLE relay_jobs ADD COLUMN ${name} ${type}`);
   db.exec(`CREATE TABLE IF NOT EXISTS relay_conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,manual INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -107,6 +109,13 @@ export function createRelayComputer(
       input: j.input,
       access: j.access,
       thinkingLevel: j.thinking_level || 'off',
+      canSchedule: db.prepare('SELECT role FROM users WHERE id=?').get(j.owner)?.role === 'owner',
+      ...(j.scheduled
+        ? {
+            schedule: JSON.parse(j.scheduled),
+            toolAllowlist: JSON.parse(j.scheduled).toolAllowlist,
+          }
+        : {}),
       attachments:
         chatFiles?.selected(j.owner, j.conversation_id, JSON.parse(j.attachments || '[]')) || [],
       execute: !!j.execute,
@@ -196,6 +205,75 @@ export function createRelayComputer(
     }
   }
   return {
+    async schedule(run) {
+      if (run.target?.kind !== 'computer' || !run.projectId)
+        throw fail(400, '电脑定时任务缺少固定执行位置。');
+      const actor = db.prepare('SELECT id,role FROM users WHERE id=?').get(run.ownerId);
+      if (actor?.role !== 'owner') throw fail(403, '定时账号已失效。');
+      const schedule = {
+        jobId: run.jobId,
+        jobName: run.jobName,
+        scheduledAt: run.scheduledAt,
+        timeZone: run.timeZone,
+        toolAllowlist: run.toolAllowlist,
+      };
+      const old = db.prepare('SELECT * FROM relay_jobs WHERE id=?').get(run.id);
+      if (old) {
+        if (
+          old.owner !== actor.id ||
+          old.device_id !== run.target.deviceId ||
+          old.project_id !== run.projectId ||
+          old.conversation_id !== run.conversationId ||
+          old.input !== run.input ||
+          old.access !== run.access ||
+          !!old.execute !== run.target.execute ||
+          old.scheduled !== JSON.stringify(schedule)
+        )
+          throw fail(409, '定时请求编号已绑定其他内容。');
+        if (['queued', 'running'].includes(old.status)) {
+          try {
+            ownedDevice(old.device_id, actor.id);
+            const pr = project(old.device_id, old.project_id);
+            if ((old.access === 'edit' && !pr.allow_write) || (old.execute && !pr.allow_execute))
+              throw fail(403, '定时任务的电脑授权已撤销。');
+          } catch (e) {
+            cancel(old.id);
+            throw e;
+          }
+        }
+        return view(old);
+      }
+      if (run.skills.length) throw fail(400, '电脑定时计划不能加载服务器技能路径。');
+      const input = {
+        id: run.id,
+        deviceId: run.target.deviceId,
+        projectId: run.projectId,
+        conversationId: run.conversationId,
+        input: run.input,
+        access: run.access,
+        execute: run.target.execute,
+        thinkingLevel: run.thinkingLevel,
+        attachments: [],
+        deliveryPreference: 'queue',
+      };
+      const req = Readable.from([Buffer.from(JSON.stringify(input))]);
+      req.method = 'POST';
+      req.headers = {};
+      let value, status;
+      const handled = await this.after(
+        req,
+        new URL('http://internal/api/relay/submissions'),
+        (code, result) => {
+          status = code;
+          value = result;
+        },
+        actor,
+        { schedule },
+      );
+      if (!handled || status >= 400)
+        throw fail(status || 500, value?.error || '电脑定时请求失败。');
+      return value.job;
+    },
     view,
     allowed,
     controls,
@@ -393,7 +471,7 @@ export function createRelayComputer(
       }
       return false;
     },
-    async after(req, url, json, actor) {
+    async after(req, url, json, actor, internal = {}) {
       const path = url.pathname;
       const replyRoute = path.match(/^\/api\/relay\/jobs\/([^/]+)\/ui$/);
       if (replyRoute && req.method === 'POST') {
@@ -476,6 +554,11 @@ export function createRelayComputer(
         const signature = JSON.stringify(p),
           old = db.prepare('SELECT * FROM relay_jobs WHERE id=?').get(p.id);
         if (old) {
+          if (
+            (old.scheduled || null) !==
+            (internal.schedule ? JSON.stringify(internal.schedule) : null)
+          )
+            throw fail(409, '此请求已绑定其他定时上下文。');
           const previous = old.submission && JSON.parse(old.submission);
           const normalized = previous && {
             ...previous,
@@ -497,6 +580,8 @@ export function createRelayComputer(
           return true;
         }
         const capabilities = JSON.parse(device.capabilities || '[]');
+        if (internal.schedule && !capabilities.includes('scheduled_tasks'))
+          throw fail(409, '请先更新目标电脑，以使用绑定权限的定时任务。');
         if (p.attachments.length && !capabilities.includes('chat_inputs'))
           throw fail(409, '请先更新目标电脑的星屿客户端或执行器，以读取对话附件。');
         if (p.thinkingLevel !== 'off' && !capabilities.includes('thinking_levels'))
@@ -558,7 +643,7 @@ export function createRelayComputer(
               at,
             );
           db.prepare(
-            'INSERT INTO relay_jobs(id,owner,device_id,project_id,conversation_id,parent_id,execute,input,access,status,submission,created_at,updated_at,attachments,thinking_level) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO relay_jobs(id,owner,device_id,project_id,conversation_id,parent_id,execute,input,access,status,submission,created_at,updated_at,attachments,thinking_level,scheduled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
           ).run(
             p.id,
             actor.id,
@@ -575,6 +660,7 @@ export function createRelayComputer(
             at,
             JSON.stringify(p.attachments),
             p.thinkingLevel,
+            internal.schedule ? JSON.stringify(internal.schedule) : null,
           );
           db.prepare('UPDATE relay_conversations SET updated_at=? WHERE id=?').run(
             at,

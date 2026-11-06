@@ -17,8 +17,17 @@ export const scheduledRunSchema = z
     thinkingLevel: z.enum(['off', 'low', 'high', 'max']),
     model: z.string().max(100).optional(),
     timeZone: z.string().max(100),
-    toolAllowlist: z.array(z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/)).max(300),
+    toolAllowlist: z
+      .array(z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/))
+      .max(300)
+      .nullable(),
     skills: z.array(z.string().max(1000)).max(100),
+    target: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('server') }).strict(),
+        z.object({ kind: z.literal('computer'), deviceId: uuid, execute: z.boolean() }).strict(),
+      ])
+      .optional(),
     status: z.string().max(30),
     createdAt: z.string(),
     updatedAt: z.string().optional(),
@@ -35,6 +44,7 @@ export function createPiSchedulePump({
   ownerAllowed,
   scope,
   completed,
+  computer,
   interval = 1000,
 }) {
   let busy = false,
@@ -51,7 +61,15 @@ export function createPiSchedulePump({
         const run = parsed.data;
         try {
           if (!ownerAllowed(run.ownerId)) throw new Error('计划所属账号已停用或不再是管理员。');
-          let task = tasks.get(run.ownerId, run.id);
+          let task;
+          if (run.target?.kind === 'computer') {
+            if (!computer) throw Object.assign(Error('电脑定时任务分发不可用。'), { status: 503 });
+            task = await computer(run);
+            if (!task)
+              throw Object.assign(Error('目标电脑队列未就绪，保持等待；不会改发服务器。'), {
+                status: 503,
+              });
+          } else task = tasks.get(run.ownerId, run.id);
           if (!task) {
             const saved = completed(run.ownerId, run.id);
             if (saved) {
@@ -110,6 +128,7 @@ export function createPiSchedulePump({
             id: run.id,
             status: 'error',
             error: String(e.message).slice(0, 2000),
+            disablePlan: true,
             finishedAt: new Date().toISOString(),
           }).catch(() => {});
         }

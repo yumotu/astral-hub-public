@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import { scheduleTarget } from './cron-scope.mjs';
 
 export const cronTerminal = new Set(['done', 'error', 'cancelled', 'interrupted']);
 export function scheduledId(owner, job, slot) {
@@ -48,9 +49,12 @@ export function createCronLedger(file, ownerId) {
         thinkingLevel: context.thinkingLevel || 'off',
         timeZone: context.timeZone || 'Asia/Shanghai',
         model: context.model,
-        toolAllowlist: job.tools ?? context.toolNames,
+        toolAllowlist: job.tools ?? context.toolNames ?? null,
+        target: scheduleTarget(context),
         skills: job.skills || [],
-        input: `【定时任务：${job.name}】\n${job.prompt}`,
+        input: job.prompt.startsWith('/long-goal ')
+          ? `/long-goal 【定时任务：${job.name}】\n${job.prompt.slice(11)}`
+          : `【定时任务：${job.name}】\n${job.prompt}`,
       };
       const state = {
         status: 'queued',

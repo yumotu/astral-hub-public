@@ -4,6 +4,7 @@ import { createAccounts, equal, fail } from './accounts.mjs';
 import { createChatFiles, readUpload } from './files.mjs';
 import { createPiTasks } from './pi-tasks.mjs';
 import { createPiSchedulePump } from './pi-schedules.mjs';
+import { cronAction } from './schedule-actions.mjs';
 import { createPiConversations } from './pi-conversations.mjs';
 import { createPiTitles } from './pi-titles.mjs';
 import { createPiBranches } from './pi-branches.mjs';
@@ -562,8 +563,34 @@ export function createCommunity(store, { token, body, options = {} }) {
       store.db.prepare('SELECT role FROM users WHERE id=?').get(owner)?.role === 'owner',
     scope: (owner, id) => accounts.piScope(owner, id) || tasks.scope(owner, id),
     completed: (owner, id) => accounts.piTurn(owner, id),
+    computer: (run) => options.scheduleComputer?.(run),
   });
   return {
+    async manageSchedule(ctx, input, callId, computerJob) {
+      if (store.db.prepare('SELECT role FROM users WHERE id=?').get(ctx.owner)?.role !== 'owner')
+        throw fail(403, '当前仅管理员可使用定时任务。');
+      const task = ctx.origin === 'computer' ? computerJob : tasks.get(ctx.owner, ctx.task);
+      if (
+        !task ||
+        task.id !== ctx.task ||
+        task.conversationId !== ctx.conversation ||
+        task.status !== 'running' ||
+        task.assistance
+      )
+        throw fail(403, '定时任务必须由当前运行中的主对话创建或管理。');
+      const context = {
+        ownerId: ctx.owner,
+        conversationId: task.conversationId,
+        projectId: task.projectId || null,
+        access: task.access || 'read',
+        thinkingLevel: task.thinkingLevel || 'off',
+        target:
+          ctx.origin === 'computer'
+            ? { kind: 'computer', deviceId: task.deviceId, execute: !!task.execute }
+            : { kind: 'server' },
+      };
+      return bridge('/schedules/manage', { context, data: cronAction(input, callId) }, 25000);
+    },
     chatFiles,
     accounts,
     piReady,
@@ -733,8 +760,18 @@ export function createCommunity(store, { token, body, options = {} }) {
             .find((t) => !t.parentId && t.status === 'running');
           p = {
             ...p,
-            mode: (deliveryPreference === 'steer' || (!p.attachments.length && longGoalControl(p.input))) && current ? 'steer' : 'queue',
-            parentId: (deliveryPreference === 'steer' || (!p.attachments.length && longGoalControl(p.input))) && current ? current.id : null,
+            mode:
+              (deliveryPreference === 'steer' ||
+                (!p.attachments.length && longGoalControl(p.input))) &&
+              current
+                ? 'steer'
+                : 'queue',
+            parentId:
+              (deliveryPreference === 'steer' ||
+                (!p.attachments.length && longGoalControl(p.input))) &&
+              current
+                ? current.id
+                : null,
           };
         }
         if (p.mode === 'steer') {

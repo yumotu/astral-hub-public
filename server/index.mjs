@@ -107,7 +107,7 @@ export async function createApp(options = {}) {
     location: 'server',
     usageMeter: usage,
   };
-  let mailAgent, appFunctions;
+  let mailAgent, appFunctions, relay;
   const community = createCommunity(store, {
     token,
     body,
@@ -122,6 +122,7 @@ export async function createApp(options = {}) {
         scope: (...a) => appFunctions?.scope(...a),
         revoke: (...a) => appFunctions?.revoke(...a),
       },
+      scheduleComputer: (run) => relay?.schedule(run),
       mailAgent: {
         scope: (...args) => mailAgent?.scope(...args),
         revoke: (...args) => mailAgent?.revoke(...args),
@@ -192,7 +193,7 @@ export async function createApp(options = {}) {
         return parsePluginJSON(text);
       }),
   });
-  const relay = createRelay(store.db, {
+  relay = createRelay(store.db, {
     body,
     config,
     options: {

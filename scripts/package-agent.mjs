@@ -20,6 +20,7 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
     'ask-user.mjs',
     'long-goal.mjs',
     'long-goal-command.mjs',
+    'schedule-tools.mjs',
     ...['index.ts', 'goal-state.ts', 'usage.ts', 'LICENSE', 'UPSTREAM.json'].map(
       (name) => 'vendor/pi-goal/' + name,
     ),

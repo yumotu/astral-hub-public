@@ -115,6 +115,7 @@ test('web and release executors share deterministic bytes, the current version a
     'ask-user.mjs',
     'long-goal.mjs',
     'long-goal-command.mjs',
+    'schedule-tools.mjs',
     ...['index.ts','goal-state.ts','usage.ts','LICENSE','UPSTREAM.json'].map(name=>'vendor/pi-goal/'+name),
     'stream-writer.mjs',
     'package-transaction.mjs',

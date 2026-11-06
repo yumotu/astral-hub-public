@@ -199,6 +199,11 @@ jobs:
           docker run --rm --init --memory=768m --cpus=1.5 --pids-limit=512
           --cap-drop=ALL --security-opt=no-new-privileges --security-opt=seccomp=unconfined --security-opt=apparmor=astral-pi-qa
           -e ASTRAL_RUNTIME_QA=1 --entrypoint=node astral-pi-qa /bridge/verify-runtime.mjs
+      - name: Verify bundled document recognition without network access
+        run: >-
+          docker run --rm --init --network=none --memory=768m --cpus=1.5 --pids-limit=128
+          --cap-drop=ALL --security-opt=no-new-privileges -e ASTRAL_RUNTIME_QA=1
+          --entrypoint=node astral-pi-qa /bridge/verify-documents.mjs
       - name: Collect namespace diagnostics on failure
         if: failure()
         run: |

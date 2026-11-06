@@ -25,6 +25,54 @@ const submission = () => ({
   output: '',
   error: '',
 });
+
+test('computer schedules only enter their bound computer queue; offline/unavailable targets never fall back to Pi', async () => {
+  const run = {
+      ...submission(),
+      projectId: randomUUID(),
+      target: { kind: 'computer', deviceId: randomUUID(), execute: false },
+      toolAllowlist: null,
+    },
+    ack = [];
+  let admissions = 0,
+    available = true,
+    revoked = false;
+  const pump = createPiSchedulePump({
+    bridge: async (path, p) => (path.endsWith('/pending') ? { runs: [run] } : (ack.push(p), {})),
+    tasks: {
+      get: () => {
+        throw Error('server fallback');
+      },
+      add: () => {
+        throw Error('server fallback');
+      },
+    },
+    ownerAllowed: () => true,
+    scope: () => null,
+    completed: () => null,
+    computer: async (actual) => {
+      admissions++;
+      assert.deepEqual(actual.target, run.target);
+      if (revoked) throw Object.assign(Error('authorization revoked'), { status: 403 });
+      return available ? { id: run.id, status: 'queued' } : undefined;
+    },
+  });
+  try {
+    await pump.tick();
+    assert.equal(ack.at(-1).status, 'accepted');
+    available = false;
+    ack.length = 0;
+    await pump.tick();
+    assert.equal(ack.length, 0);
+    revoked = true;
+    await pump.tick();
+    assert.equal(ack.at(-1).status, 'error');
+    assert.equal(ack.at(-1).disablePlan, true);
+    assert.equal(admissions, 3);
+  } finally {
+    pump.close();
+  }
+});
 test('schedule admissions reuse the durable chat queue and never replay an uncertain execution on restart', async () => {
   const db = new DatabaseSync(':memory:'),
     run = submission(),

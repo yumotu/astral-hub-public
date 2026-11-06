@@ -113,6 +113,7 @@ export function createRelay(db, { body, config, options = {} }) {
   }, 5000);
   leaseTimer.unref();
   return {
+    schedule: (run) => workspace.computer.schedule(run),
     async before(req, url, res, json) {
       const path = url.pathname;
       if (path === '/api/relay/device/enroll' && req.method === 'POST') {

@@ -31,7 +31,8 @@ test('managed web, cron and notification adapters each load once with all other 
     { owner: true, cronRoot: root + '@patimweb/pi-cron' },
   );
   assert.equal(plan.extensions.filter((p) => p.endsWith('/web-tools.mjs')).length, 1);
-  assert.equal(plan.extensions.filter((p) => p.endsWith('/cron-tools.mjs')).length, 1);
+  assert.equal(plan.extensions.filter((p) => p.endsWith('/schedule-tools.mjs')).length, 1);
+  assert.ok(!plan.extensions.some((p) => p.endsWith('/cron-tools.mjs')));
   assert.equal(plan.extensions.filter((p) => p === native).length, 1);
   assert.ok(!plan.extensions.some((p) => p.endsWith('/pi-web-access/dist/index.js')));
   assert.ok(!plan.extensions.some((p) => p.endsWith('/pi-notify/index.js')));

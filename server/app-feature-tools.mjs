@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { mailHistorySchema } from '../shared/mail-history.mjs';
 import { mailOperationSchema } from '../shared/mail-actions.mjs';
+import { scheduleActionSchema } from './schedule-actions.mjs';
 
 const empty = z.object({}).strict(),
   uuid = z.string().uuid();
@@ -279,6 +280,20 @@ export function registerAppFeatures(engine, { community, mail, learning, body, r
   });
   const computer = (ctx, path, input, method) =>
     request((req, url, json, c) => relay.after(req, url, json, c.actor), ctx, path, input, method);
+  engine.register({
+    name: 'schedules.manage',
+    description:
+      '管理员在当前任务的账号、项目、对话和执行位置管理定时任务。先list避免重复；电脑离线只等待指定电脑，授权撤销会停用。create填写name/schedule/prompt，可longGoal:true每次持续到验收；默认Asia/Shanghai。结果回原对话；发消息和邮件仍需实际用户确认。remove不取消已开始任务，未知结果只查原调用，不重放。',
+    schema: scheduleActionSchema,
+    available: (ctx) => ctx.actor?.role === 'owner',
+    execute: async (ctx, p, id) =>
+      community.manageSchedule(
+        ctx,
+        p,
+        id,
+        ctx.origin === 'computer' ? (await computer(ctx, '/api/relay/jobs/' + ctx.task)).job : null,
+      ),
+  });
   engine.register({
     name: 'assistant.questions',
     description:

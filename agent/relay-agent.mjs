@@ -433,6 +433,7 @@ async function workspaceLoop() {
             'app_functions',
             'interactive_questions',
             'long_goals',
+            'scheduled_tasks',
           ],
           projects: config.projects.map(({ id, name, allowWrite, allowExecute }) => ({
             id,

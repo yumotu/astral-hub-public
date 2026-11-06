@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { createProjects } from './projects.mjs';
 import { createSandboxOperations } from './bash-sandbox.mjs';
 import { checkPackageActivation } from './package-preflight.mjs';
+import { verifySchedules } from './verify-schedules.mjs';
 
 if (process.platform !== 'linux' || process.env.ASTRAL_RUNTIME_QA !== '1')
   throw Error('Run only in a disposable Linux QA container with ASTRAL_RUNTIME_QA=1.');
@@ -120,6 +121,7 @@ try {
   const activation = await checkPackageActivation(packages, { coreOnly: true });
   assert.equal(activation.ready, true);
   proof.realPiRpcActivation = true;
+  proof.scheduling = await verifySchedules(join(base, 'cron-acceptance'));
   proof.note =
     'Synthetic accounts in a fresh Linux container. Real DNS/HTTPS and Pi RPC; no model task or formal plugins.';
   console.log(JSON.stringify(proof, null, 2));

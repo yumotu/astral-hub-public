@@ -17,6 +17,7 @@ COPY --chown=node:node stream-writer.mjs ./
 COPY --chown=node:node activity-deadline.mjs ask-user.mjs ./
 COPY --chown=node:node long-goal.mjs ./
 COPY --chown=node:node long-goal-command.mjs ./
+COPY --chown=node:node schedule-tools.mjs cron-scope.mjs ./
 COPY --chown=node:node vendor/ vendor/
 COPY --chown=node:node office-content.mjs document-text.mjs ./
 COPY --chown=node:node pdf-content.mjs pdf-document.mjs chat-content.mjs ./
@@ -27,6 +28,8 @@ COPY --chown=node:node session-fork.mjs goal-command.mjs goal-tools.mjs steer-co
 COPY --chown=node:node bash-network.mjs ./
 COPY --chown=node:node mail-tools.mjs app-tools.mjs ./
 COPY --chown=node:node verify-runtime.mjs ./
+COPY --chown=node:node verify-schedules.mjs ./
+COPY --chown=node:node verify-documents.mjs qa-ocr.jpg qa-scanned-pdf.mjs ./
 RUN ln -s /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules /bridge/node_modules && mkdir -p /uploads /workspace /home/node/.pi/agent /projects/astral-hub /projects/workspace /projects/server-workspace && chown -R node:node /uploads /workspace /home/node/.pi /projects
 USER node
 ENV PI_CODING_AGENT_DIR=/home/node/.pi/agent PI_OFFLINE=1 NODE_OPTIONS=--max-old-space-size=384

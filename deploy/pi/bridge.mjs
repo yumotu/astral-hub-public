@@ -301,6 +301,12 @@ async function execute(p, event) {
               : '1',
           ASTRAL_APP_ACCESS_URL: p.appAccess?.url || '',
           ASTRAL_APP_ACCESS_TOKEN: p.appAccess?.token || '',
+          ASTRAL_CAN_SCHEDULE:
+            p.canManageSkills &&
+            (!Array.isArray(p.toolAllowlist) ||
+              p.toolAllowlist.some((name) => ['schedule_manage', 'app_functions'].includes(name)))
+              ? '1'
+              : '0',
           ASTRAL_MAIL_ACCESS_URL: p.mailAccess?.url || '',
           ASTRAL_MAIL_ACCESS_TOKEN: p.mailAccess?.token || '',
           TZ: 'Asia/Shanghai',
@@ -640,6 +646,65 @@ const server = createServer(async (req, res) => {
       json(200, await cronService.request(context, p));
       return;
     }
+    if (url.pathname === '/schedules/manage' && req.method === 'POST') {
+      const p = z
+        .object({
+          context: z
+            .object({
+              ownerId: z.string().uuid(),
+              conversationId: z.string().uuid(),
+              projectId: z
+                .string()
+                .regex(/^[a-z0-9-]{1,50}$/)
+                .nullable(),
+              access: z.enum(['read', 'edit']),
+              thinkingLevel: z.enum(['off', 'low', 'high', 'max']),
+              target: z.discriminatedUnion('kind', [
+                z.object({ kind: z.literal('server') }).strict(),
+                z
+                  .object({
+                    kind: z.literal('computer'),
+                    deviceId: z.string().uuid(),
+                    execute: z.boolean(),
+                  })
+                  .strict(),
+              ]),
+            })
+            .strict(),
+          data: z
+            .object({
+              action: z.enum(['tool', 'status']),
+              name: z.string().max(30).optional(),
+              params: z.record(z.string(), z.unknown()).optional(),
+              callId: z.string().max(128).optional(),
+            })
+            .strict(),
+        })
+        .strict()
+        .parse(await readJSON(req, 30000));
+      const context = {
+        ...p.context,
+        model,
+        timeZone: 'Asia/Shanghai',
+        toolNames: null,
+        skills: [],
+        cwd: '/workspace',
+      };
+      if (context.target.kind === 'server') {
+        const projects = await registry.authorize(
+          { id: context.ownerId, admin: true },
+          context.projectId,
+          context.access,
+        );
+        const selected = projects.find((project) => project.id === context.projectId);
+        if (selected?.readOnly && context.access === 'edit')
+          throw Object.assign(Error('项目为只读。'), { status: 403 });
+        context.cwd = selected?.root || join(privateRoot, 'schedule-workspace');
+        await mkdir(context.cwd, { recursive: true, mode: 0o700 });
+      }
+      json(200, await cronService.request(context, p.data));
+      return;
+    }
     if (url.pathname === '/schedules/pending' && req.method === 'GET') {
       json(200, await cronService.pending());
       return;
@@ -670,6 +735,7 @@ const server = createServer(async (req, res) => {
           error: z.string().max(2000).optional(),
           startedAt: z.string().optional(),
           finishedAt: z.string().optional(),
+          disablePlan: z.boolean().optional(),
         })
         .strict()
         .parse(await readJSON(req, 60000));

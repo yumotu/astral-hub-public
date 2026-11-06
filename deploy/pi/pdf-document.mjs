@@ -15,6 +15,11 @@ export async function readDocumentPages(bytes, options = {}, { signal, onProgres
     return await new Promise((resolve, reject) => {
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bytes, options: { ...options, ocrDirectory: directory } },
+        env: {
+          ASTRAL_DOCUMENT_DEPS: process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json',
+          DISABLE_SYSTEM_FONTS_LOAD: '1',
+        },
+        execArgv: [],
         resourceLimits: { maxOldGenerationSizeMb: 192 },
       });
       let settled = false;

@@ -6,6 +6,8 @@ export function readOfficeAttachment(bytes, name) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), {
       workerData: { bytes, name },
+      env: { ASTRAL_DOCUMENT_DEPS: process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json' },
+      execArgv: [],
       resourceLimits: { maxOldGenerationSizeMb: 128 },
     });
     const timer = setTimeout(() => {

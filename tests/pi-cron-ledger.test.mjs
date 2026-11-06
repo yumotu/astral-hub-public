@@ -55,6 +55,26 @@ test('slot keys include owner, job and scheduled time', () => {
   assert.equal(id, scheduledId('a', 'b', 'c'));
 });
 
+test('computer target and native goal mode are persisted in each durable occurrence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'astral-cron-target-')),
+    ledger = createCronLedger(join(dir, 'ledger.sqlite'), owner);
+  try {
+    const target = { kind: 'computer', deviceId: 'computer-one', execute: false };
+    const run = ledger.enqueue(
+      { ...job, prompt: '/long-goal Verify actual output', tools: null },
+      'slot',
+      { ...scope, target, toolNames: null },
+    );
+    assert.deepEqual(run.target, target);
+    assert.equal(run.toolAllowlist, null);
+    assert.match(run.input, /^\/long-goal 【定时任务/);
+    assert.match(run.input, /Verify actual output/);
+  } finally {
+    ledger.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cron adapter respects configured packages and rejects unvalidated versions', async () => {
   const { installedCron } = await import('../deploy/pi/cron-service.mjs');
   const { mkdir, writeFile } = await import('node:fs/promises');

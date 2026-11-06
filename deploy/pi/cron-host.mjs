@@ -5,6 +5,7 @@ import { attachJsonlLineReader } from '/usr/local/lib/node_modules/@earendil-wor
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCronLedger, cronTerminal } from './cron-ledger.mjs';
+import { sameScheduleScope, ownsScheduleScope } from './cron-scope.mjs';
 const { createCronTools } = await loadCron('src/tools.ts');
 const store = await loadCron('src/core/store.ts');
 const { planTick } = await loadCron('src/core/scheduler.ts');
@@ -114,6 +115,14 @@ async function request(p) {
     return { runs: ledger.pending(), status: status() };
   }
   if (p.action === 'ack') {
+    if (p.run.disablePlan) {
+      const run = ledger.get(p.run.id);
+      if (run)
+        store.mutateJobs((jobs) => ({
+          jobs: jobs.map((j) => (j.id === run.jobId ? { ...j, enabled: false } : j)),
+          result: undefined,
+        }));
+    }
     ledger.update(p.run.id, p.run);
     reportCompleted();
     return { ok: true };
@@ -122,7 +131,30 @@ async function request(p) {
   if (p.action !== 'tool') throw new Error('不支持的调度操作。');
   const context = p.context,
     params = p.params || {};
-  const pi = { getAllTools: () => context.toolNames.map((name) => ({ name })) };
+  const pi = {
+    getAllTools: () => (context.toolNames || params.tools || []).map((name) => ({ name })),
+  };
+  const scopedJobs = store
+    .loadJobs()
+    .filter((j) => ownsScheduleScope(ledger.context(j.id), context));
+  if (params.job) {
+    const target = store.findJob(scopedJobs, params.job);
+    if (!target) throw new Error('当前对话、项目和执行位置没有这个计划。');
+    params.job = target.id;
+  }
+  if (p.name === 'cron_results') {
+    const ids = new Set(
+      scopedJobs.filter((j) => !params.job || j.id === params.job).map((j) => j.id),
+    );
+    const runs = ledger
+      .all()
+      .filter((r) => ids.has(r.jobId))
+      .slice(-50);
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ runs }) }],
+      details: { runs, scheduler: status() },
+    };
+  }
   const tools = Object.values(
     createCronTools(pi, {
       schedulerActive: () => true,
@@ -147,14 +179,27 @@ async function request(p) {
     if (params.skills?.some((s) => !context.skills.includes(s)))
       throw new Error('定时任务只能加载当前已启用的技能路径。');
   }
-  if (['cron_update', 'cron_run'].includes(p.name)) {
+  const toggle =
+    p.name === 'cron_update' &&
+    params.enabled !== undefined &&
+    Object.keys(params).every((k) => ['job', 'enabled'].includes(k));
+  if (['cron_update', 'cron_run'].includes(p.name) && !(toggle && params.enabled === false)) {
     const target = store.findJob(store.loadJobs(), params.job);
     const scope = target && ledger.context(target.id);
-    if (scope && (scope.projectId !== context.projectId || scope.access !== context.access))
+    if (scope && !sameScheduleScope(scope, context))
       throw new Error('请在创建此计划的项目与模式中修改计划。');
   }
   const result = await tool.execute(p.callId, params, undefined, undefined, { cwd: context.cwd });
-  if (['cron_create', 'cron_update'].includes(p.name) && result.details?.job)
+  if (p.name === 'cron_list') {
+    const jobs = (result.details?.jobs || []).filter((j) =>
+      ownsScheduleScope(ledger.context(j.id), context),
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ jobs }) }],
+      details: { jobs, scheduler: status() },
+    };
+  }
+  if ((p.name === 'cron_create' || (p.name === 'cron_update' && !toggle)) && result.details?.job)
     ledger.bind(result.details.job.id, context);
   // Do not auto-trigger between creation and the durable context binding.
   tick();

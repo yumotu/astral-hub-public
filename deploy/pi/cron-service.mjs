@@ -11,14 +11,30 @@ export async function installedCron(packagesRoot) {
         /^npm:@patimweb\/pi-cron(?:@|$)/.test(typeof p === 'string' ? p : p.source || '') &&
         !(Array.isArray(p.extensions) && p.extensions.length === 0),
     );
-    if (!enabled) return null;
+    if (!enabled) {
+      const configured = settings.packages?.some((p) =>
+        /^npm:@patimweb\/pi-cron(?:@|$)/.test(typeof p === 'string' ? p : p.source || ''),
+      );
+      if (configured) return null;
+      const root = '/extensions/node_modules/@patimweb/pi-cron';
+      const meta = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+      return meta.version === '2.2.0' ? { root, version: meta.version } : null;
+    }
     const root = join(packagesRoot, 'npm/node_modules/@patimweb/pi-cron');
     const meta = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
     if (meta.version !== '2.2.0')
       throw new Error(`pi-cron ${meta.version} 尚未通过星屿适配验收，当前支持 2.2.0。`);
     return { root, version: meta.version };
   } catch (e) {
-    if (e.code === 'ENOENT') return null;
+    if (e.code === 'ENOENT') {
+      try {
+        const root = '/extensions/node_modules/@patimweb/pi-cron',
+          meta = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+        return meta.version === '2.2.0' ? { root, version: meta.version } : null;
+      } catch {
+        return null;
+      }
+    }
     throw e;
   }
 }

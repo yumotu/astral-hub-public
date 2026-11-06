@@ -5,11 +5,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/index.mjs';
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'astral-computer-chats-'));
   let time = Date.now();
   const adminToken = 'synthetic-computer-chats-admin-token-12345678';
-  const app = await createApp({ token: adminToken, dataDir: dir, now: () => time });
+  const app = await createApp({ ...options, token: adminToken, dataDir: dir, now: () => time });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const req = async (path, data, auth, method) => {
     const r = await fetch(`http://127.0.0.1:${app.server.address().port}/api` + path, {
@@ -172,6 +172,137 @@ test('remote main conversations can invoke current-account app functions without
     409,
   );
   assert.equal(f.db.prepare('SELECT count(*) n FROM direct_messages').get().n, 1);
+});
+
+test('natural-language scheduling captures the live computer scope and durable occurrences remain on that target through offline and revocation', async (t) => {
+  const runs = [],
+    requests = [],
+    acks = [];
+  const f = await fixture(t, {
+    piConfig: {
+      url: 'http://synthetic-scheduler',
+      token: 'synthetic-only',
+      fetch: async (url, options) => {
+        if (url.endsWith('/health')) return Response.json({ ready: true, scheduledTasks: true });
+        if (url.endsWith('/schedules/pending')) return Response.json({ runs });
+        const p = options?.body ? JSON.parse(options.body) : {};
+        if (url.endsWith('/schedules/manage')) {
+          requests.push(p);
+          return Response.json({
+            content: [{ type: 'text', text: 'Bound synthetic plan' }],
+            details: { job: { id: 'synthetic-plan' } },
+          });
+        }
+        if (url.endsWith('/schedules/ack')) {
+          acks.push(p);
+          return Response.json({ ok: true });
+        }
+        return Response.json({});
+      },
+    },
+  });
+  await f.req(
+    '/relay/device/workspace/announce',
+    { version: 2, projects: f.projects, capabilities: ['scheduled_tasks', 'thinking_levels'] },
+    f.device.token,
+  );
+  const p = f.submit(undefined, 'create a bound schedule', { projectId: f.projects[1].id });
+  await f.req('/relay/submissions', p, f.owner.token);
+  await f.poll();
+  const path = '/relay/device/workspace/jobs/' + p.id + '/app-functions';
+  const input = {
+    action: 'create',
+    name: 'check',
+    schedule: 'every 30m',
+    prompt: 'Verify the project',
+    longGoal: true,
+  };
+  const command = { action: 'invoke', name: 'schedules.manage', input, callId: 'create-plan' };
+  const result = await f.req(path, command, f.device.token);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.state, 'done', JSON.stringify(result.body));
+  assert.deepEqual(requests[0].context.target, {
+    kind: 'computer',
+    deviceId: f.device.deviceId,
+    execute: false,
+  });
+  assert.equal(requests[0].context.projectId, p.projectId);
+  assert.equal(requests[0].context.access, 'read');
+  assert.match(requests[0].data.params.prompt, /^\/long-goal /);
+  assert.equal((await f.req(path, command, f.device.token)).body.id, result.body.id);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    (
+      await f.req(
+        path,
+        { ...command, callId: 'forge', input: { ...input, execute: true } },
+        f.device.token,
+      )
+    ).status,
+    400,
+  );
+  assert.equal((await f.req(path, command, f.other.token)).status, 401);
+  await f.req(
+    '/relay/device/workspace/jobs/' + p.id + '/result',
+    { ...f.state, status: 'done' },
+    f.device.token,
+  );
+  const run = {
+    id: randomUUID(),
+    ownerId: f.owner.user.id,
+    conversationId: p.conversationId,
+    projectId: p.projectId,
+    jobId: 'synthetic-plan',
+    jobName: 'check',
+    scheduledAt: 'synthetic-slot',
+    input: '/long-goal Verify the project',
+    access: 'read',
+    thinkingLevel: 'off',
+    timeZone: 'Asia/Shanghai',
+    toolAllowlist: ['project_read'],
+    skills: [],
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+    output: '',
+    error: '',
+    target: requests[0].context.target,
+  };
+  f.tick(60000); // Target is offline; admission may queue it, never execute on Pi.
+  runs.push(run);
+  const wait = async (check) => {
+    for (let i = 0; i < 80; i++) {
+      if (check()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw Error('schedule dispatch timeout');
+  };
+  await wait(() => !!f.db.prepare('SELECT 1 FROM relay_jobs WHERE id=?').get(run.id));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM pi_tasks WHERE id=?').get(run.id).n, 0);
+  const stored = f.db.prepare('SELECT * FROM relay_jobs WHERE id=?').get(run.id);
+  assert.equal(stored.status, 'queued');
+  assert.equal(stored.device_id, f.device.deviceId);
+  assert.equal(stored.execute, 0);
+  assert.deepEqual(JSON.parse(stored.scheduled).toolAllowlist, ['project_read']);
+  await wait(() => acks.some((a) => a.id === run.id && a.status === 'accepted'));
+  assert.equal((await f.poll()).body.job.id, run.id);
+  await f.req(
+    '/relay/device/workspace/jobs/' + run.id + '/result',
+    { ...f.state, status: 'done' },
+    f.device.token,
+  );
+  await wait(() => acks.some((a) => a.id === run.id && a.status === 'done'));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM relay_jobs WHERE id=?').get(run.id).n, 1);
+  runs.length = 0;
+  await f.req(
+    '/relay/device/workspace/announce',
+    { version: 2, projects: [f.projects[0]], capabilities: ['scheduled_tasks'] },
+    f.device.token,
+  );
+  const revoked = { ...run, id: randomUUID(), scheduledAt: 'next-slot' };
+  runs.push(revoked);
+  await wait(() => acks.some((a) => a.id === revoked.id && a.status === 'error' && a.disablePlan));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM relay_jobs WHERE id=?').get(revoked.id).n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM pi_tasks WHERE id=?').get(revoked.id).n, 0);
 });
 test('computer conversations keep project/account bindings, independent lanes, progress and idempotent submissions', async (t) => {
   const f = await fixture(t),

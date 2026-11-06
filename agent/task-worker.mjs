@@ -206,7 +206,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       if (/^[a-zA-Z0-9._-]+\.jsonl$/.test(f))
         sessions.push({ path: join(sessionDir, f), at: (await stat(join(sessionDir, f))).mtimeMs });
     sessions.sort((a, b) => b.at - a.at);
-    const names = [
+    let names = [
       'project_list',
       'project_read',
       'project_search',
@@ -220,6 +220,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       'create_goal',
       'get_goal',
       'update_goal',
+      ...(job.canSchedule ? ['schedule_manage'] : []),
       ...extraToolNames,
       ...(job.access === 'edit' ? ['project_write', 'project_edit'] : []),
       ...(job.access === 'edit' ? extraWriteToolNames : []),
@@ -234,7 +235,13 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
         )
         .map((p) => 'custom_' + p.manifest.id),
     ];
+    if (Array.isArray(job.toolAllowlist)) {
+      if (job.toolAllowlist.some((name) => !names.includes(name)))
+        throw Error('定时任务要求的工具在此电脑或权限下不可用，请修改计划。');
+      names = names.filter((name) => job.toolAllowlist.includes(name));
+    }
     const args = [
+      ...(!names.length ? ['--no-tools'] : []),
       ...(sessions.length ? ['--session', sessions[0].path] : ['--session-id', job.conversationId]),
       '--session-dir',
       sessionDir,
@@ -249,6 +256,8 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       join(here, 'computer-tools.mjs'),
       '--extension',
       join(here, 'assets/long-goal.mjs'),
+      '--extension',
+      join(here, 'assets/schedule-tools.mjs'),
       ...installed.roots.flatMap((root) => ['--extension', root]),
       '--no-skills',
       '--no-prompt-templates',
@@ -276,6 +285,16 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
           job.id +
           '/app-functions',
         ASTRAL_APP_ACCESS_TOKEN: config.token,
+        ASTRAL_CAN_SCHEDULE:
+          job.canSchedule &&
+          names.some((name) => ['schedule_manage', 'app_functions'].includes(name))
+            ? '1'
+            : '0',
+        ASTRAL_LONG_GOAL_ALLOWED: ['create_goal', 'get_goal', 'update_goal'].every((name) =>
+          names.includes(name),
+        )
+          ? '1'
+          : '0',
         ASTRAL_DEVICE_CONFIG: configPath,
         ASTRAL_DEVICE_JOB: job.id,
         ASTRAL_DEVICE_PROJECT: grant.id,

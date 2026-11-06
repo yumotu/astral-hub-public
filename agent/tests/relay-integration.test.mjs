@@ -31,7 +31,10 @@ test(
     await writeFile(join(root, 'README.txt'), 'Actual file tool sentinel ' + randomUUID());
     const binary = Buffer.alloc(3 * 1024 * 1024, 0x61);
     await writeFile(join(root, 'existing-image.png'), binary);
-    const calls = [];
+    const calls = [],
+      scheduleCalls = [],
+      scheduledRuns = [],
+      scheduleAcks = [];
     const provider = async (_url, init) => {
       const p = JSON.parse(init.body),
         users = p.messages.filter((m) => m.role === 'user').map(text),
@@ -42,6 +45,7 @@ test(
       const pluginCall = input.includes('PLUGIN_FILE');
       const nativeCall = input.includes('ONLINE_PACKAGE_CALL');
       const appCall = input.includes('APP_FUNCTIONS');
+      const scheduleCall = input.includes('SCHEDULE_NATIVE');
       const ask = input.includes('ASK_USER_NATIVE');
       const longGoal = users.some((u) => u.includes('LONG_GOAL_NATIVE'));
       const checkpoint = p.messages.some(
@@ -57,6 +61,7 @@ test(
             pluginCall ||
             nativeCall ||
             appCall ||
+            scheduleCall ||
             ask));
       if (ask && last.role === 'tool')
         assert.ok(
@@ -67,6 +72,17 @@ test(
         assert.ok(
           p.tools.some((t) => t.function.name === 'app_functions'),
           'application tool missing from actual remote Pi schema',
+        );
+      if (scheduleCall)
+        assert.ok(
+          p.tools.some((t) => t.function.name === 'schedule_manage'),
+          'schedule tool missing from native model schema',
+        );
+      if (input.includes('SCHEDULED_TOOLS'))
+        assert.deepEqual(
+          p.tools.map((t) => t.function.name),
+          ['project_read'],
+          'scheduled tool subset expanded in the actual native session',
         );
       if (nativeCall)
         assert.ok(
@@ -103,21 +119,27 @@ test(
                               arguments:
                                 '{"question":"请选要继续的方案","options":["用户选择甲","用户选择乙"]}',
                             }
-                          : appCall
-                            ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
-                            : nativeCall
-                              ? { name: 'native_online_fixture', arguments: '{}' }
-                              : pluginCall
-                                ? {
-                                    name: 'custom_inspect_readme',
-                                    arguments: '{"input":"README.txt"}',
-                                  }
-                                : exportFile
+                          : scheduleCall
+                            ? {
+                                name: 'schedule_manage',
+                                arguments:
+                                  '{"action":"create","name":"native-check","prompt":"Verify synthetic project state","schedule":"every 30m","longGoal":true}',
+                              }
+                            : appCall
+                              ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
+                              : nativeCall
+                                ? { name: 'native_online_fixture', arguments: '{}' }
+                                : pluginCall
                                   ? {
-                                      name: 'chat_export',
-                                      arguments: '{"path":"existing-image.png"}',
+                                      name: 'custom_inspect_readme',
+                                      arguments: '{"input":"README.txt"}',
                                     }
-                                  : { name: 'project_read', arguments: '{"path":"README.txt"}' },
+                                  : exportFile
+                                    ? {
+                                        name: 'chat_export',
+                                        arguments: '{"path":"existing-image.png"}',
+                                      }
+                                    : { name: 'project_read', arguments: '{"path":"README.txt"}' },
                     },
                   ],
                 },
@@ -184,6 +206,27 @@ test(
       dataDir: join(dir, 'server'),
       relayFetch: provider,
       aiConfig: { apiKey: 'synthetic-only', model: 'deepseek-flash' },
+      piConfig: {
+        url: 'http://synthetic-cron-host',
+        token: 'synthetic-only',
+        fetch: async (url, options) => {
+          if (url.endsWith('/health')) return Response.json({ ready: true, scheduledTasks: true });
+          if (url.endsWith('/schedules/pending')) return Response.json({ runs: scheduledRuns });
+          if (url.endsWith('/schedules/ack')) {
+            scheduleAcks.push(JSON.parse(options.body));
+            return Response.json({ ok: true });
+          }
+          if (url.endsWith('/schedules/manage')) {
+            const value = JSON.parse(options.body);
+            scheduleCalls.push(value);
+            return Response.json({
+              content: [{ type: 'text', text: 'Native schedule confirmed' }],
+              details: { job: { id: 'native-check' } },
+            });
+          }
+          return Response.json({});
+        },
+      },
     });
     await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
     const base = 'http://127.0.0.1:' + app.server.address().port;
@@ -223,6 +266,7 @@ test(
       '/relay/device/workspace/announce',
       {
         version: 2,
+        capabilities: ['scheduled_tasks'],
         projects: [{ id: grant.id, name: 'project', allowWrite: false, allowExecute: false }],
       },
       device.token,
@@ -349,6 +393,85 @@ test(
       ),
       JSON.stringify(appResult),
     );
+    const scheduleJob = submit(randomUUID(), 'SCHEDULE_NATIVE_' + randomUUID());
+    await request('/relay/submissions', scheduleJob, owner.token);
+    const [scheduleResult] = await pollUntil(
+      [scheduleJob],
+      (rows) => !['queued', 'running'].includes(rows[0].status),
+    );
+    assert.equal(scheduleResult.status, 'done', JSON.stringify(scheduleResult));
+    assert.ok(
+      scheduleResult.tools.some(
+        (t) =>
+          t.name === 'schedule_manage' &&
+          t.status === 'done' &&
+          t.output.includes('Native schedule confirmed'),
+      ),
+      JSON.stringify(scheduleResult),
+    );
+    assert.equal(scheduleCalls.length, 1);
+    assert.deepEqual(scheduleCalls[0].context.target, {
+      kind: 'computer',
+      deviceId: device.deviceId,
+      execute: false,
+    });
+    assert.equal(scheduleCalls[0].context.conversationId, scheduleJob.conversationId);
+    assert.equal(scheduleCalls[0].context.projectId, grant.id);
+    assert.match(scheduleCalls[0].data.params.prompt, /^\/long-goal /);
+    const beforeCronList = calls.length;
+    const cronList = submit(scheduleJob.conversationId, '/cron list');
+    await request('/relay/submissions', cronList, owner.token);
+    const [cronListResult] = await pollUntil(
+      [cronList],
+      (rows) => !['queued', 'running'].includes(rows[0].status),
+    );
+    assert.equal(cronListResult.status, 'done', JSON.stringify(cronListResult));
+    assert.match(cronListResult.output, /Native schedule confirmed/);
+    assert.equal(calls.length, beforeCronList, 'model-free cron list invoked the model');
+    const occurrence = {
+      id: randomUUID(),
+      ownerId: owner.user.id,
+      conversationId: scheduleJob.conversationId,
+      projectId: grant.id,
+      jobId: 'native-check',
+      jobName: 'native-check',
+      scheduledAt: new Date().toISOString(),
+      input: 'READ_FILE SCHEDULED_TOOLS_' + randomUUID(),
+      access: 'read',
+      thinkingLevel: 'off',
+      timeZone: 'Asia/Shanghai',
+      toolAllowlist: ['project_read'],
+      skills: [],
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      output: '',
+      error: '',
+      target: scheduleCalls[0].context.target,
+    };
+    scheduledRuns.push(occurrence);
+    // The real App pump admits this occurrence onto the same device; the actual
+    // native Pi worker must see precisely the captured, narrower tool subset.
+    for (
+      let i = 0;
+      i < 100 && !app.store.db.prepare('SELECT 1 FROM relay_jobs WHERE id=?').get(occurrence.id);
+      i++
+    )
+      await pause(100);
+    const [occurrenceResult] = await pollUntil(
+      [occurrence],
+      (rows) => !['queued', 'running'].includes(rows[0].status),
+    );
+    assert.equal(occurrenceResult.status, 'done', JSON.stringify(occurrenceResult));
+    assert.ok(
+      occurrenceResult.tools.some(
+        (t) => t.name === 'project_read' && t.output.includes('Actual file tool sentinel'),
+      ),
+    );
+    assert.equal(
+      app.store.db.prepare('SELECT count(*) n FROM pi_tasks WHERE id=?').get(occurrence.id).n,
+      0,
+    );
+    scheduledRuns.length = 0;
     const questionJob = submit(randomUUID(), 'ASK_USER_NATIVE_' + randomUUID());
     await request('/relay/submissions', questionJob, owner.token);
     const [questionState] = await pollUntil([questionJob], (rows) =>

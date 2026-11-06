@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@napi-rs/canvas": "1.1.0",
+    "@patimweb/pi-cron": "2.2.0",
     "@tesseract.js-data/chi_sim": "1.0.0",
     "@tesseract.js-data/eng": "1.0.0",
     "fflate": "0.8.3",

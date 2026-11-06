@@ -13,6 +13,7 @@ export function pluginLoadPlan(resources = {}, { owner = false, cronRoot, coreOn
     'app-tools',
     'ask-user',
     'long-goal',
+    'schedule-tools',
   ].map((name) => `/bridge/${name}.mjs`);
   const warnings = [],
     adapted = [];
@@ -33,7 +34,7 @@ export function pluginLoadPlan(resources = {}, { owner = false, cronRoot, coreOn
         continue;
       }
       if (normalized.includes('/node_modules/@patimweb/pi-cron/')) {
-        if (cronRoot) extensions.push('/bridge/cron-tools.mjs');
+        // The builtin app adapter binds server/local/remote targets alike.
         adapted.push('@patimweb/pi-cron');
         continue;
       }
