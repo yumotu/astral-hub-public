@@ -1,0 +1,102 @@
+/* All interface icons use Lucide's rounded outline, independently of theme. */
+:root {
+  --icon-stroke: 1.75;
+}
+.lucide {
+  stroke-width: var(--icon-stroke);
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+button > .lucide,
+summary > .lucide {
+  pointer-events: none;
+}
+.brand-symbol,
+.sidebar-note > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mobile-nav-close {
+  display: none;
+}
+.project-tree > summary::before {
+  content: none;
+}
+.project-tree > summary .project-tree-caret {
+  transition: transform 150ms ease;
+}
+.project-tree[open] > summary .project-tree-caret {
+  transform: rotate(90deg);
+}
+@keyframes conversation-panel-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@media (max-width: 700px) {
+  .mobile-nav-close {
+    display: inline-flex;
+    position: absolute;
+    top: max(12px, env(safe-area-inset-top));
+    right: 12px;
+  }
+  .sidebar {
+    width: min(280px, calc(100vw - 40px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-conversation-list.is-open {
+    animation: none !important;
+  }
+  .sidebar {
+    transition: none !important;
+  }
+}
+/* Keep generic-page titles readable when notification and connection controls share the header. */
+.topbar .crumb {
+  min-width: 0;
+}
+.topbar .crumb b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar .topbar-actions {
+  flex-shrink: 0;
+}
+@media (max-width: 700px) {
+  .topbar {
+    height: calc(56px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 12px 0;
+    gap: 12px;
+  }
+  .topbar .crumb {
+    gap: 10px;
+    font-size: 14px;
+  }
+  .topbar .crumb > span,
+  .topbar .crumb > .lucide-chevron-right {
+    display: none;
+  }
+  .topbar .crumb b {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .topbar .topbar-actions {
+    gap: 6px;
+  }
+  .topbar .connection-pill {
+    width: 40px;
+    height: 36px;
+    justify-content: center;
+    gap: 4px;
+    padding: 0;
+  }
+  .topbar .connection-label {
+    display: none;
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "astral-pi-extensions",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fflate": "0.8.3",
+    "mammoth": "1.13.0",
+    "node-pty": "1.1.0",
+    "pi-web-access": "0.46.0",
+    "read-excel-file": "9.3.14",
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,435 @@
+.computer-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  min-width: 0;
+}
+.computer-page > .remote-pair {
+  order: 2;
+}
+.computer-page > .surface:not(.remote-pair) {
+  order: 1;
+}
+.computer-page.has-target > .surface:not(.remote-pair) {
+  margin-top: 0;
+}
+.computer-page > .surface {
+  padding: 20px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.computer-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+  min-width: 0;
+}
+.computer-toolbar > label {
+  flex: 1;
+  min-width: 160px;
+}
+.computer-toolbar > label select {
+  margin-top: 6px;
+  width: 100%;
+}
+.computer-toolbar h2,
+.computer-toolbar strong {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.computer-toolbar > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.computer-workspace,
+.computer-files,
+.computer-editor {
+  min-width: 0;
+}
+.computer-file-list {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 12px 0;
+}
+.computer-file-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  color: var(--text);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+}
+.computer-file-row svg {
+  flex: none;
+}
+.computer-file-row span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.computer-file-row:hover {
+  background: var(--surface-soft);
+}
+.computer-editor textarea {
+  width: 100%;
+  min-height: 200px;
+  max-height: 50dvh;
+  resize: vertical;
+  line-height: 1.6;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.computer-page .action-row {
+  flex-wrap: wrap;
+}
+.computer-page .action-row button,
+.computer-page .action-row a {
+  width: auto;
+  max-width: 100%;
+}
+.computer-page pre {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.computer-page .remote-pair > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.computer-page .pair-command {
+  min-width: 0;
+}
+.project-tree > .project-display-name {
+  padding: 8px 12px;
+  margin: 0 8px;
+}
+.computer-workspace > .project-display-name {
+  margin: 8px 0;
+}
+.computer-files > p[role='status'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 700px) {
+  .computer-page > .surface {
+    padding: 14px;
+  }
+  .computer-toolbar {
+    gap: 8px;
+  }
+  .computer-toolbar h2 {
+    font-size: 18px;
+  }
+  .computer-page .page-heading h1 {
+    font-size: 28px;
+  }
+  .computer-page .action-row > * {
+    flex: 1 1 auto;
+  }
+  .computer-page .action-row > button {
+    font-size: 13px;
+    padding: 9px 12px;
+  }
+  .computer-file-list {
+    max-height: 220px;
+  }
+}
+.computer-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 0;
+}
+.computer-plugins {
+  min-width: 0;
+  padding: 0 20px 20px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.computer-plugin-pane[hidden] {
+  display: none;
+}
+.computer-online-packages,
+.computer-plugin-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.computer-online-packages .checkbox-label {
+  align-items: flex-start;
+  line-height: 1.7;
+  font-size: 12px;
+}
+.computer-online-packages .checkbox-label input {
+  flex: none;
+  margin-top: 4px;
+}
+.computer-online-packages textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+}
+.computer-online-packages .computer-plugin-card {
+  overflow-wrap: anywhere;
+}
+.computer-package-integrity {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.computer-plugins > textarea {
+  width: 100%;
+  min-height: 90px;
+  max-height: 28dvh;
+  resize: vertical;
+}
+.computer-plugin-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.computer-plugin-card {
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.computer-plugin-card h3,
+.computer-plugin-card h4 {
+  margin: 0 0 8px;
+}
+.computer-plugin-card h4 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+}
+.computer-plugin-card small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.computer-plugin-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 260px;
+  overflow: auto;
+}
+.computer-plugin-card button {
+  max-width: 100%;
+  white-space: normal;
+}
+@media (max-width: 700px) {
+  .computer-plugins {
+    padding: 0 12px 14px;
+  }
+  .computer-plugin-actions > button {
+    flex: 1 1 auto;
+  }
+}
+.computer-tabs button {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.computer-tabs [aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.computer-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: clamp(320px, calc(var(--app-height, 100dvh) - 360px), 700px);
+  min-height: 280px;
+}
+.computer-chat > .computer-toolbar {
+  flex: 0 0 auto;
+}
+.computer-chat > .computer-toolbar select {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+}
+.computer-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 4px;
+  overflow-wrap: anywhere;
+}
+.computer-turn {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.computer-user-message {
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.computer-user-message p {
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+}
+.computer-turn pre {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.computer-turn .table-scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+.computer-supplement {
+  border-left: 2px solid var(--accent);
+  padding: 8px;
+  margin: 8px 0;
+}
+.computer-stream-state {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.computer-chat > .message-delivery-recovery {
+  flex: 0 1 auto;
+  max-height: 20dvh;
+  min-height: 0;
+  overflow: auto;
+  margin: 6px 0;
+}
+.computer-terminal-screen {
+  height: min(460px, 65dvh);
+  min-height: 150px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 5px;
+  background: var(--surface);
+}
+.computer-terminal-screen .xterm {
+  height: 100%;
+}
+.computer-terminal-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.computer-terminal .computer-toolbar > select {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+@media (max-width: 700px) {
+  .computer-terminal-screen {
+    height: clamp(180px, calc(var(--app-height, 100dvh) - 525px), 460px);
+  }
+  .computer-chat {
+    height: clamp(300px, calc(var(--app-height, 100dvh) - 410px), 700px);
+  }
+  .computer-device-meta {
+    font-size: 11px;
+    margin: 6px 0;
+  }
+  .computer-device-meta h2,
+  .computer-device-meta > .tag {
+    display: none;
+  }
+  .computer-workspace > .computer-toolbar .project-display-name {
+    font-size: 0;
+    width: 28px;
+    height: 28px;
+    padding: 5px;
+  }
+  .computer-workspace > .computer-toolbar > label {
+    min-width: 0;
+  }
+  html[data-keyboard='open'] .computer-page .page-heading,
+  html[data-keyboard='open'] .computer-page .remote-pair,
+  html[data-keyboard='open'] .computer-page .computer-toolbar,
+  html[data-keyboard='open'] .computer-page .computer-tabs,
+  html[data-keyboard='open'] .computer-workspace > button,
+  html[data-keyboard='open'] .computer-page .field-help {
+    display: none;
+  }
+  html[data-keyboard='open'] .computer-page > .surface {
+    padding: 0;
+    margin: 0;
+  }
+  html[data-keyboard='open'] .computer-chat {
+    height: calc(var(--app-height, 100dvh) - 90px);
+    min-height: 0;
+  }
+  html[data-keyboard='open'] .computer-terminal-screen {
+    height: calc(var(--app-height, 100dvh) - 140px);
+    min-height: 60px;
+  }
+}
+@media (max-width: 700px) and (max-height: 320px) {
+  html[data-keyboard='open'] .assistant-workspace-heading {
+    display: none;
+  }
+  html[data-keyboard='open'] .computer-chat {
+    height: calc(var(--app-height, 100dvh) - 12px);
+  }
+  html[data-keyboard='open'] .computer-terminal-actions span {
+    display: none;
+  }
+  html[data-keyboard='open'] .computer-terminal-screen {
+    height: calc(var(--app-height, 100dvh) - 48px);
+    min-height: 24px;
+  }
+}
+.local-computer-settings .local-project-grant {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.local-computer-settings .local-project-grant code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+}
+.local-computer-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.local-computer-settings input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+.local-grant-options {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}

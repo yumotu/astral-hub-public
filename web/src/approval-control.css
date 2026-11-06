@@ -1,0 +1,101 @@
+.approval-control {
+  flex-shrink: 0;
+}
+.approval-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 5px 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  border-radius: 6px;
+}
+.approval-trigger:hover {
+  background: var(--surface-active);
+}
+.approval-trigger.full {
+  color: var(--accent);
+}
+.approval-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 310;
+  background: #10182755;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.approval-dialog {
+  width: min(440px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 16px 60px #0003;
+  font-size: 13px;
+}
+.approval-dialog header,
+.approval-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.approval-dialog h3 {
+  font-size: 16px;
+  margin: 0;
+}
+.approval-dialog > label {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+}
+.approval-dialog select,
+.plugin-request .approval-choice select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 6px 9px;
+}
+.approval-dialog fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  border: 1px solid var(--border);
+  padding: 10px;
+  border-radius: 8px;
+}
+.approval-dialog fieldset label,
+.approval-dialog .approval-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.approval-dialog input[type='checkbox'] {
+  margin: 2px 0 0;
+}
+.approval-dialog footer {
+  margin-top: 20px;
+}
+.plugin-request .approval-choice {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+@media (max-width: 700px) {
+  .approval-trigger {
+    min-height: 32px;
+    font-size: 10px;
+  }
+  .approval-dialog button {
+    min-height: 40px;
+  }
+}

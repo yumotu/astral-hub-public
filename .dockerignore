@@ -1,0 +1,12 @@
+node_modules
+desktop/node_modules
+desktop/web
+dist
+release
+android
+.env
+.git
+data
+*.log
+
+.device-ai.json

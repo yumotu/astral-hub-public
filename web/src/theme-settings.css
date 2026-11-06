@@ -1,0 +1,65 @@
+.theme-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.theme-preset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid;
+  border-radius: 12px;
+  text-align: left;
+}
+.theme-preset[aria-pressed='true'] {
+  outline: 1px solid;
+  outline-color: var(--accent);
+  outline-offset: 1px;
+}
+.theme-preset > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.theme-preset strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.theme-preset small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 3px;
+  opacity: 0.82;
+}
+.theme-preset > svg {
+  flex-shrink: 0;
+}
+.theme-preset-swatch {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 40px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  padding: 7px;
+}
+.theme-preset-swatch i {
+  width: 90%;
+  height: 6px;
+  border-radius: 4px;
+}
+.theme-preset-swatch i:last-child {
+  width: 65%;
+  align-self: flex-end;
+}
+@media (max-width: 600px) {
+  .theme-preset-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

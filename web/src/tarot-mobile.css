@@ -1,0 +1,119 @@
+.suggestion-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.suggestion-heading .text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  min-height: 32px;
+}
+.suggestion-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.suggestions button {
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.draw-panel .revealed-cards.single-card .face-wrap {
+  width: min(190px, 70%);
+  max-width: 190px;
+}
+@media (max-width: 700px) {
+  .draw-panel .draw-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .draw-panel .draw-state {
+    margin-left: auto;
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .draw-panel .card-fan {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px 10px;
+    width: 100%;
+    max-width: 400px;
+    height: auto;
+    margin: 22px auto 18px;
+    padding: 4px 0;
+  }
+  .draw-panel .fan-card,
+  .draw-panel .fan-card:hover:not(:disabled),
+  .draw-panel .fan-card.picked {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 2 / 3.15;
+    transform: none;
+    transform-origin: center;
+    min-width: 44px;
+    border-radius: 7px;
+    transition:
+      opacity 0.2s,
+      box-shadow 0.2s;
+  }
+  .draw-panel .fan-card:nth-child(n + 5) {
+    translate: calc(50% + 5px) 0;
+  }
+  .draw-panel .fan-card .card-back-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .draw-panel .fan-card:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .draw-panel .fan-card.picked {
+    opacity: 0.55 !important;
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  .draw-panel .picked-label {
+    background: #13223888;
+    border-radius: 7px;
+    opacity: 1;
+  }
+  .draw-panel .revealed-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+  .draw-panel .revealed-cards.single-card {
+    display: flex;
+  }
+  .draw-panel .revealed-cards .face-wrap {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+  .draw-panel .position-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.6;
+    min-height: 24px;
+  }
+  .draw-panel .reading-question {
+    overflow-wrap: anywhere;
+  }
+  .draw-panel .action-row {
+    flex-wrap: wrap;
+  }
+  .draw-panel .action-row > button {
+    min-height: 40px;
+  }
+}

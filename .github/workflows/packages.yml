@@ -1,0 +1,307 @@
+name: Build applications
+on:
+  workflow_dispatch:
+    inputs:
+      android_only:
+        description: '仅诊断 Android 交互与键盘；不执行桌面／Pi，不发布版本'
+        type: boolean
+        default: false
+      publish_release:
+        description: '全部验收完成后发布安装包并创建版本标签；关闭时仅构建验证'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: applications-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  source-audit:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.intent.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - name: Select exact version tags or an explicit default-branch release
+        id: intent
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          ANDROID_ONLY: ${{ inputs.android_only }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          const e = process.env;
+          const tagged = e.GITHUB_EVENT_NAME === 'push' && e.GITHUB_REF === `refs/tags/v${version}`;
+          const manual = e.GITHUB_EVENT_NAME === 'workflow_dispatch' && e.PUBLISH_RELEASE === 'true' && e.GITHUB_REF === `refs/heads/${e.DEFAULT_BRANCH}`;
+          appendFileSync(e.GITHUB_OUTPUT, `release=${e.ANDROID_ONLY !== 'true' && (tagged || manual)}\n`);
+          NODE
+      - run: node scripts/audit-public-source.mjs
+      - name: Scan committed public history for secrets
+        run: |
+          scan_dir="$RUNNER_TEMP/gitleaks-bin"
+          mkdir -p "$scan_dir"
+          curl --fail --location --retry 3 --output "$scan_dir/tool.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          printf '%s  %s\n' 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb "$scan_dir/tool.tar.gz" | sha256sum -c -
+          tar -xzf "$scan_dir/tool.tar.gz" -C "$scan_dir" gitleaks
+          "$scan_dir/gitleaks" git . --redact=100 --no-banner
+  web-and-tests:
+    needs: source-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0', cache: 'npm' }
+      - run: npm ci
+      - run: node scripts/brand-icons.mjs --check
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/package-source.mjs
+      - run: node scripts/package-server.mjs
+      - run: node scripts/package-agent.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-web-and-source
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/
+            release/*.zip
+            release/*.tar.gz
+  desktop:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with:
+          {
+            node-version: '26.7.0',
+            cache: 'npm',
+            cache-dependency-path: 'desktop/package-lock.json',
+          }
+      - run: npm ci
+      - run: npm ci --prefix desktop --ignore-scripts
+      - run: node desktop/node_modules/electron/install.js
+      - run: npm run build
+      - if: runner.os == 'macOS'
+        run: npm --prefix desktop run package -- --mac --arm64 --x64 --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - if: runner.os == 'Windows'
+        run: npm --prefix desktop run package -- --win --x64 --publish never
+      - if: runner.os == 'macOS'
+        name: Verify both macOS application signatures and architectures
+        run: node scripts/verify-macos-distribution.mjs release/desktop
+        env: { ASTRAL_MACOS_DISTRIBUTION: 'false' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-desktop-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/desktop/*.dmg
+            release/desktop/*.zip
+            release/desktop/*.exe
+            release/desktop/macos-verification.json
+  android:
+    needs: web-and-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0', cache: 'npm' }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '21' }
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+      - name: Prepare an ephemeral emulator-test signing key
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/android-test/debug.keystore"
+          mkdir -p "$(dirname "$key")"
+          keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Ephemeral CI Test' >/dev/null 2>&1
+          printf 'ASTRAL_ANDROID_KEYSTORE=%s\n' "$key" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run android:sync
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon assembleDebug
+        working-directory: android
+      - name: Verify the tested APK signature
+        run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify android/app/build/outputs/apk/debug/app-debug.apk'
+      - name: Reserve runner space for Android system and data images
+        run: bash scripts/android-emulator-space.sh
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify Android 15 system-bar insets
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          emulator-boot-timeout: 300
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: cd android && ./gradlew --no-daemon :app:connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-safe-area-report
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+      - run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release/Astral-Hub-${version}-android-tested.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-android-tested
+          if-no-files-found: error
+          retention-days: 7
+          path: release/*.apk
+  pi-runtime:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: Build the disposable Pi runtime image
+        run: docker build -t astral-pi-qa -f deploy/pi/Dockerfile deploy/pi
+      - name: Allow user namespaces only for the disposable QA container
+        run: sudo apparmor_parser -r deploy/pi/qa-apparmor.profile
+      - name: Verify real Linux isolation, network grants and Pi activation
+        run: >-
+          docker run --rm --init --memory=768m --cpus=1.5 --pids-limit=512
+          --cap-drop=ALL --security-opt=no-new-privileges --security-opt=seccomp=unconfined --security-opt=apparmor=astral-pi-qa
+          -e ASTRAL_RUNTIME_QA=1 --entrypoint=node astral-pi-qa /bridge/verify-runtime.mjs
+      - name: Collect namespace diagnostics on failure
+        if: failure()
+        run: |
+          uname -r
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          sudo journalctl -k --since '-10 minutes' --no-pager | grep -E 'apparmor|DENIED|bwrap|userns' | tail -60 || true
+      - name: Remove the disposable QA AppArmor profile
+        if: always()
+        run: sudo apparmor_parser -R deploy/pi/qa-apparmor.profile
+  computer-runtime:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with:
+          { node-version: '26.7.0', cache: 'npm', cache-dependency-path: 'agent/package-lock.json' }
+      - run: npm ci
+      - run: npm ci --prefix agent --ignore-scripts
+      - run: npm --prefix agent run terminal:setup
+      - run: node scripts/package-agent.mjs
+      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs
+  android-sign:
+    if: ${{ needs.source-audit.outputs.release == 'true' }}
+    needs: [source-audit, web-and-tests, desktop, android, pi-runtime, computer-runtime]
+    runs-on: ubuntu-latest
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '21' }
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+      - uses: actions/download-artifact@v4
+        with: { name: astral-android-tested, path: signing-input }
+      - name: Sign the tested APK with the protected existing application key
+        run: node scripts/sign-android-release.mjs signing-input
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-android-debug
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/*android-debug.apk
+            release/android-verification.json
+  release-check:
+    if: ${{ needs.source-audit.outputs.release == 'true' }}
+    needs: [source-audit, web-and-tests, desktop, android, android-sign, pi-runtime, computer-runtime]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - run: npm ci --omit=dev --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - run: node scripts/prepare-release.mjs
+  release:
+    if: ${{ needs.source-audit.outputs.release == 'true' }}
+    needs: [source-audit, web-and-tests, desktop, android, android-sign, pi-runtime, computer-runtime, release-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - run: npm ci --omit=dev --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - run: node scripts/prepare-release.mjs
+      - name: Verify or create the verified source tag
+        run: |
+          release_tag="v$(node -p "require('./package.json').version")"
+          printf 'RELEASE_TAG=%s\n' "$release_tag" >> "$GITHUB_ENV"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" --silent; then
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$release_tag" --jq .sha)
+            test "$tag_sha" = "$GITHUB_SHA"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST -f "ref=refs/tags/$release_tag" -f "sha=$GITHUB_SHA" --silent
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: gh release create "$RELEASE_TAG" release/publish/* --verify-tag --title "星屿 $RELEASE_TAG" --notes-file release/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

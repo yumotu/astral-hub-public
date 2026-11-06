@@ -1,0 +1,9 @@
+node_modules
+dist
+release
+android
+desktop/web
+package-lock.json
+desktop/package-lock.json
+.env
+data

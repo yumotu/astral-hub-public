@@ -1,0 +1,55 @@
+name: astral-hub
+services:
+  app:
+    image: astral-hub:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: ../.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATA_DIR: /app/data
+      FILES_DIR: /app/files
+      PI_UPLOADS_ROOT: /uploads
+      PI_BRIDGE_URL: http://pi:8790
+      PI_MAX_CONCURRENT: ${PI_MAX_CONCURRENT:-0}
+    ports: ['127.0.0.1:8787:8787']
+    volumes:
+      - astral_data:/app/data
+      - chat_files:/app/files
+    depends_on:
+      pi: { condition: service_healthy }
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+  pi:
+    image: astral-pi:local
+    build: ./pi
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      PI_BRIDGE_TOKEN: ${PI_BRIDGE_TOKEN:?Generate a private token with npm run init}
+      PI_MAX_CONCURRENT: ${PI_MAX_CONCURRENT:-0}
+    volumes:
+      - pi_home:/home/node/.pi
+      - pi_workspace:/workspace
+      - chat_files:/uploads:ro
+      - project_workspace:/projects/workspace
+    tmpfs: ['/tmp:size=128m,mode=1777']
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true, seccomp:unconfined, apparmor:unconfined]
+    mem_limit: 1g
+    pids_limit: 512
+    restart: unless-stopped
+volumes:
+  astral_data:
+  chat_files:
+  pi_home:
+  pi_workspace:
+  project_workspace:

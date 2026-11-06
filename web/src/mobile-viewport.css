@@ -1,0 +1,106 @@
+html[data-mobile-viewport] .workspace.assistant-workspace {
+  height: var(--app-viewport-height, 100dvh);
+}
+@media (max-height: 320px) {
+  /* Connection errors and recovery controls must share the short viewport
+     with the editor, including after the landscape keyboard closes. */
+  .assistant-workspace > .assistant-main > .error {
+    max-height: 28px;
+    padding: 3px 8px;
+    margin: 4px 12px;
+    font-size: 12px;
+    overflow: auto;
+  }
+  html[data-mobile-viewport] .workspace.assistant-workspace .assistant-workspace-heading {
+    height: calc(44px + env(safe-area-inset-top));
+  }
+  .assistant-workspace .assistant-statusbar { display: none; }
+  .assistant-workspace .background-task-bar {
+    padding-block: 2px;
+    font-size: 11px;
+  }
+  .assistant-workspace .background-task-bar small { display: none; }
+  .assistant-workspace .assistant-layout .assistant-toolbar {
+    min-height: 28px;
+    padding-block: 2px;
+  }
+  .assistant-workspace .assistant-toolbar button { padding-block: 2px; }
+  .assistant-workspace .assistant-composer textarea { max-height: 56px !important; }
+  html[data-keyboard='open'] .assistant-workspace .assistant-toolbar,
+  html[data-keyboard='open'] .assistant-workspace .assistant-statusbar { display: none; }
+  html[data-keyboard='open'] .assistant-workspace .assistant-workspace-heading {
+    height: calc(44px + env(safe-area-inset-top));
+  }
+}
+@media (max-width: 700px) {
+  html[data-mobile-viewport] .workspace.assistant-workspace {
+    position: fixed;
+    top: var(--app-viewport-top, 0px);
+    left: 0;
+    right: 0;
+    margin-left: 0;
+  }
+  html[data-mobile-viewport] .file-workbench {
+    top: var(--app-viewport-top, 0px);
+    bottom: auto;
+    height: var(--app-viewport-height, 100dvh);
+  }
+  html[data-mobile-viewport] .assistant-workspace .assistant-composer textarea {
+    font-size: 16px;
+    resize: none;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-statusbar {
+    padding-bottom: 4px;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-toolbar {
+    min-height: 28px;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-composer {
+    margin-bottom: 4px !important;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-composer > .chat-files {
+    max-height: 64px;
+  }
+}
+
+/* A landscape IME can leave only 82px. Keep the focused field and actions on
+   one row; normal navigation and history return when the IME closes. */
+@media (max-height: 220px) and (max-width: 1000px) {
+  html[data-keyboard='open'] .assistant-workspace:has(.assistant-composer:focus-within)
+    > .assistant-main > .error { display: none; }
+  html[data-keyboard='open'] .assistant-workspace:has(.assistant-composer:focus-within)
+    :is(.assistant-workspace-heading, .assistant-toolbar, .assistant-statusbar,
+        .pi-message-area, .background-task-bar, .pi-archived-banner) {
+    display: none;
+  }
+  html[data-keyboard='open'] .assistant-workspace:has(.assistant-composer:focus-within)
+    .chat-panel {
+    justify-content: flex-end;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-layout
+    .assistant-composer:focus-within {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px !important;
+    margin-bottom: 4px !important;
+  }
+  html[data-keyboard='open'] .assistant-composer:focus-within
+    > :not(textarea):not(.composer-bottom):not(input) {
+    display: none;
+  }
+  html[data-keyboard='open'] .assistant-workspace .assistant-composer:focus-within
+    .composer-bottom {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+  }
+  html[data-keyboard='open'] .assistant-composer:focus-within .thinking-options {
+    flex: none;
+  }
+  html[data-keyboard='open'] .assistant-composer:focus-within
+    .thinking-options > :not([aria-label='上传文件']) {
+    display: none;
+  }
+}

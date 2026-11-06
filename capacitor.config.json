@@ -1,0 +1,14 @@
+{
+  "appId": "app.astral.hub",
+  "appName": "星屿",
+  "webDir": "dist",
+  "backgroundColor": "#111316",
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_astral", "iconColor": "#5263e7" }
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false,
+    "adjustMarginsForEdgeToEdge": "auto"
+  }
+}

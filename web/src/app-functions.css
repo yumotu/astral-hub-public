@@ -1,0 +1,59 @@
+.app-function-requests {
+  min-width: 0;
+  margin: 12px 0;
+}
+.app-function-request {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.app-function-request h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+.app-function-request p {
+  margin: 8px 0;
+}
+.app-function-request small {
+  display: block;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.app-function-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 38dvh;
+  overflow-y: auto;
+  font: inherit;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 10px;
+}
+.app-function-request details {
+  max-height: 30dvh;
+  overflow: auto;
+}
+.app-function-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.app-function-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+}
+@media (max-width: 400px) {
+  .app-function-request {
+    padding: 12px;
+  }
+}

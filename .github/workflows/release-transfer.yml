@@ -1,0 +1,85 @@
+name: Transfer verified release installers
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: 'Successful complete Build applications run ID'
+        type: string
+        required: true
+  push:
+    tags: ['transfer-*']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-transfer-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - name: Select source run without executing artifact code
+        env:
+          DISPATCH_RUN: ${{ inputs.source_run }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            source_run="$DISPATCH_RUN"
+          else
+            source_run="${GITHUB_REF_NAME#transfer-}"
+          fi
+          [[ "$source_run" =~ ^[1-9][0-9]{0,19}$ ]]
+          printf 'SOURCE_RUN=%s\n' "$source_run" >> "$GITHUB_ENV"
+      - name: Verify complete CI, release provenance and installer hashes
+        run: node scripts/transfer-release.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-mac-arm64-dmg
+          path: transferred-release/*mac-arm64.dmg
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-mac-arm64-zip
+          path: transferred-release/*mac-arm64.zip
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-mac-x64-dmg
+          path: transferred-release/*mac-x64.dmg
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-mac-x64-zip
+          path: transferred-release/*mac-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-win-x64
+          path: transferred-release/*win-x64.exe
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android
+          path: transferred-release/*android-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-metadata
+          path: |
+            transferred-release/build-info.json
+            transferred-release/SHA256SUMS.txt
+            transferred-release/transfer-proof.json
+          if-no-files-found: error
+          retention-days: 7

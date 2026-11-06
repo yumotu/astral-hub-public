@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, cp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
+const {createLocalComputer}=createRequire(import.meta.url)('../desktop/local-computer.cjs');
+test('desktop pairs only a locally chosen grant, hides credentials, isolates owners and stops its own process',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'astral-desktop-computer-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ await mkdir(join(root,'bundle/agent'),{recursive:true});await cp(resolve('agent/config.mjs'),join(root,'bundle/agent/config.mjs'));await mkdir(join(root,'project'));
+ const owner=randomUUID(),device=randomUUID(),context={owner,server:'https://hub.example'}, launches=[];let choose=0,enroll=0,cancel=false;
+ const manager=createLocalComputer({directory:join(root,'private'),bundle:join(root,'bundle'),chooseDirectory:async()=>{choose++;return cancel?null:join(root,'project');},fetch:async(url,options)=>{enroll++;assert.equal(url,'https://hub.example/api/relay/device/enroll');assert.equal(JSON.parse(options.body).allowWrite,false);return Response.json({deviceId:device,token:'private-device-token-'.repeat(3),model:'deepseek-flash'});},launch:(node,args,options)=>{const child=new EventEmitter();child.stderr=new EventEmitter();child.connected=true;child.send=m=>{assert.equal(m.type,'astral-desktop-stop');queueMicrotask(()=>child.emit('exit',0));};child.kill=()=>child.emit('exit',0);launches.push({node,args,options,child});return child;}});
+ assert.equal((await manager.status(context)).configured,false);await manager.restore();assert.equal(launches.length,0);
+ await assert.rejects(manager.pair({...context,server:'http://evil.example',code:'a'.repeat(32),allowWrite:false,allowExecute:false}));assert.equal(choose,0);
+ cancel=true;assert.deepEqual(await manager.pair({...context,code:'a'.repeat(32),allowWrite:false,allowExecute:false}),{cancelled:true});assert.equal(enroll,0);
+ cancel=false;const paired=await manager.pair({...context,code:'a'.repeat(32),allowWrite:false,allowExecute:false});assert.equal(paired.running,true);assert.equal(paired.deviceId,device);assert.equal(paired.projects[0].allowExecute,false);assert.equal('token'in paired,false);
+ assert.ok(!JSON.stringify(paired).includes('private-device-token'));assert.equal((await stat(join(root,'private/device.json'))).mode&0o777,0o600);assert.equal(launches[0].options.windowsHide,true);assert.equal(launches[0].options.env.ELECTRON_RUN_AS_NODE,undefined);assert.ok(launches[0].args.includes('--config'));
+ const foreign={...context,owner:randomUUID()};assert.deepEqual(await manager.status(foreign),{configured:false,running:false,projects:[]});await assert.rejects(manager.start(foreign));await assert.rejects(manager.grant({...foreign,allowWrite:true,allowExecute:true}));
+ const changed=await manager.grant({...context,projectId:paired.projects[0].id,allowWrite:true,allowExecute:true});assert.equal(changed.projects[0].allowExecute,true);assert.equal(changed.projects[0].allowWrite,true);
+ await assert.rejects(manager.pair({...context,code:'b'.repeat(32),allowWrite:true,allowExecute:true}));assert.equal(enroll,1);
+ const stopped=await manager.stop(context);assert.equal(stopped.running,false);assert.equal(JSON.parse(await readFile(join(root,'private/enabled.json'),'utf8')).enabled,false);await manager.restore();assert.equal(launches.length,1);
+ await manager.start(context);assert.equal(launches.length,2);await manager.close();assert.equal((await manager.status(context)).running,false);
+});

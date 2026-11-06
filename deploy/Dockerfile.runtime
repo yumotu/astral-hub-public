@@ -1,0 +1,16 @@
+# 使用 package-server.mjs 生成的运行包构建，无需在服务器编译前端。
+FROM node:24-alpine
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=8787 DATA_DIR=/app/data
+WORKDIR /app
+COPY --chown=node:node package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --chown=node:node server ./server
+COPY --chown=node:node shared ./shared
+COPY --chown=node:node deploy/pi/concurrency.mjs ./deploy/pi/concurrency.mjs
+COPY --chown=node:node deploy/pi/attachment-limits.mjs ./deploy/pi/attachment-limits.mjs
+COPY --chown=node:node dist ./dist
+RUN mkdir data files && chown node:node data files
+USER node
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD node -e "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "server/index.mjs"]

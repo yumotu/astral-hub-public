@@ -1,0 +1,4 @@
+{
+  "name":"astral-terminal-host","version":"0.7.18","private":true,"type":"module",
+  "dependencies":{"node-pty":"1.1.0","zod":"4.6.7"}
+}

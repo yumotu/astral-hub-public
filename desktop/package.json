@@ -1,0 +1,68 @@
+{
+  "name": "astral-hub-desktop",
+  "version": "0.8.9",
+  "private": true,
+  "description": "星屿 · 你的灵感空间",
+  "author": "Astral Hub",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "node prepare.cjs && electron .",
+    "package": "node prepare.cjs && node ../scripts/prepare-desktop-agent.mjs && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "app.astral.hub",
+    "productName": "星屿",
+    "directories": {
+      "output": "../release/desktop"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "updates.cjs",
+      "mail-links.cjs",
+      "web/**/*",
+      "local-computer.cjs"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.lifestyle",
+      "identity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "artifactName": "Astral-Hub-${version}-${os}-${arch}.${ext}",
+    "extraResources": [
+      {
+        "from": "runtime/${arch}",
+        "to": "computer-agent",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  }
+}

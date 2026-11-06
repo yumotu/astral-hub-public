@@ -1,0 +1,176 @@
+.assistant-computer-projects {
+  margin: 12px 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.assistant-computer-projects .project-tree-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+.assistant-device-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+}
+.assistant-device-label > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.assistant-device-label small {
+  flex: none;
+}
+.computer-project-tree summary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.computer-project-tree.is-current > summary {
+  color: var(--accent);
+}
+.computer-project-tree .contact-choice small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.assistant-layout.has-computer > .server-chat-panel,
+.assistant-layout.has-computer > .file-workbench,
+.computer-unified-content > [hidden] {
+  display: none !important;
+}
+.assistant-workspace .assistant-layout.has-computer {
+  grid-template-columns: clamp(210px, 19%, 260px) minmax(0, 1fr);
+}
+.assistant-computer-view .computer-location-label {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.computer-unified-content,
+.computer-unified-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.assistant-computer-view .computer-chat {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 0 0 14px;
+}
+.assistant-computer-view .computer-messages {
+  padding: 20px 0;
+}
+.assistant-computer-view .computer-messages > div {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.assistant-computer-view .computer-user-message {
+  width: fit-content;
+  max-width: 90%;
+  margin-left: auto;
+}
+.assistant-computer-view .computer-turn {
+  border: 0;
+  padding: 15px 0;
+  line-height: 1.7;
+}
+.computer-unified-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.computer-unified-panel > .computer-files,
+.computer-unified-panel > .computer-terminal {
+  padding: 0 20px 16px;
+}
+.computer-unified-panel .workbench-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+}
+.computer-unified-panel .workbench-heading strong {
+  flex: 1;
+}
+.computer-offline-banner {
+  margin: 0;
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+.computer-connections-dialog .computer-page > .page-heading {
+  display: none;
+}
+.project-tree summary .project-row-more {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  opacity: 0;
+  margin-left: auto;
+}
+.project-tree summary:hover .project-row-more,
+.project-tree summary:focus-within .project-row-more {
+  opacity: 1;
+}
+.computer-connections-dialog .computer-page > .surface {
+  padding: 12px;
+}
+.computer-connections-dialog .computer-toolbar > label {
+  min-width: 0;
+}
+@media (max-width: 1000px) {
+  .assistant-workspace .assistant-layout.has-computer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .project-tree summary .project-row-more {
+    display: none;
+  }
+  .assistant-computer-view .computer-location-label {
+    display: none;
+  }
+  .assistant-computer-view .computer-chat {
+    padding: 0 0 8px;
+    height: 100%;
+    min-height: 0;
+  }
+  .computer-unified-panel > .computer-files,
+  .computer-unified-panel > .computer-terminal {
+    padding: 0 12px 12px;
+  }
+  html[data-keyboard='open'] .assistant-computer-view > .assistant-toolbar {
+    display: none;
+  }
+}
+
+.assistant-computer-view .computer-messages {
+  padding: 18px 20px 12px;
+}
+.assistant-computer-view .computer-message-content {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+@media (max-width: 700px) {
+  .assistant-computer-view .computer-messages {
+    padding: 18px 16px 12px;
+  }
+}

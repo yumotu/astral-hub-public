@@ -1,0 +1,636 @@
+/* Native tool state, concise process rows and measured usage. */
+.plugin-request {
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+  margin: 12px auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.plugin-request-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.plugin-request-heading > svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.plugin-request-heading strong {
+  overflow-wrap: anywhere;
+}
+.plugin-request-heading button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.plugin-request > input,
+.plugin-request > select,
+.plugin-request > textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+}
+.plugin-request > textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+.plugin-request > p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.plugin-request-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.plugin-request-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 8px;
+}
+.plugin-request-actions button[type='submit'] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.composer-todos {
+  min-width: 0;
+  width: 100%;
+  margin: -2px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.composer-todos > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 2px;
+  border-radius: 5px;
+  color: var(--muted);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.composer-todos > summary::-webkit-details-marker {
+  display: none;
+}
+.composer-todos > summary:hover {
+  color: var(--text);
+}
+.composer-todos > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.composer-todos > summary > svg {
+  flex-shrink: 0;
+}
+.composer-todos > summary > svg:first-child {
+  color: var(--accent);
+}
+.todo-dropdown-title {
+  color: var(--text);
+  font: 500 12px/1.5 var(--assistant-font);
+}
+.todo-dropdown-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.todo-dropdown-chevron {
+  transition: transform 0.15s;
+}
+.composer-todos[open] .todo-dropdown-chevron {
+  transform: rotate(180deg);
+}
+.todo-dropdown-body {
+  max-height: min(200px, 24dvh);
+  padding: 0 2px 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.todo-progress {
+  height: 3px;
+  margin: 6px 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--border);
+}
+.todo-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.todo-items {
+  display: grid;
+  gap: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 0;
+}
+.todo-item-state {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.todo-item-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.todo-item.is-done .todo-item-state {
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.todo-item.is-done .todo-item-text,
+.todo-item.is-cancelled .todo-item-text {
+  color: var(--muted);
+}
+.todo-item.is-cancelled .todo-item-text {
+  text-decoration: line-through;
+}
+.todo-item.is-running .todo-item-state {
+  color: var(--accent);
+}
+.todo-current {
+  flex-shrink: 0;
+  margin: 3px 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--accent);
+  background: var(--surface-active);
+  font-size: 10px;
+}
+.todo-empty {
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.execution-process {
+  min-width: 0;
+  padding: 1px 0;
+  color: var(--muted);
+}
+.execution-process > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 0;
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.execution-process > summary::-webkit-details-marker,
+.process-step > summary::-webkit-details-marker,
+.session-telemetry > summary::-webkit-details-marker {
+  display: none;
+}
+.execution-process > summary > svg:first-child {
+  flex-shrink: 0;
+}
+.execution-process > summary > small {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.execution-process .process-chevron {
+  transition: transform 0.15s;
+}
+.execution-process[open] .process-chevron {
+  transform: rotate(180deg);
+}
+.execution-process.is-running > summary > svg:first-child {
+  color: var(--accent);
+}
+.execution-process.has-error > summary > svg:first-child,
+.process-step.has-error > summary {
+  color: var(--danger);
+}
+.process-steps {
+  max-height: min(310px, 45dvh);
+  padding: 2px 0 3px 12px;
+  margin: 2px 0 5px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-left: 1px solid var(--border);
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+.process-step {
+  min-width: 0;
+}
+.process-step > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 3px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+.process-step > summary:hover {
+  color: var(--text);
+}
+.process-step > summary > svg {
+  flex-shrink: 0;
+}
+.process-step-label {
+  flex-shrink: 0;
+}
+.process-step-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+a.process-step-target {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+a.process-step-target:hover {
+  color: var(--accent);
+}
+.step-chevron {
+  margin-left: auto;
+  opacity: 0.55;
+}
+.process-step[open] .step-chevron {
+  transform: rotate(180deg);
+}
+.process-step-body {
+  min-width: 0;
+  padding: 7px 10px 12px 21px;
+}
+.process-step-body > small {
+  display: block;
+  margin: 10px 0 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.process-step-body pre,
+.tool-output pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font:
+    11px/1.7 ui-monospace,
+    monospace;
+}
+.process-result-state {
+  color: var(--muted);
+  font-size: 10px;
+}
+.run-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 18px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.run-summary.is-running > svg {
+  color: var(--accent);
+}
+.run-summary.has-error > svg {
+  color: var(--danger);
+}
+.run-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 5px;
+}
+.run-metrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 14px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.run-metrics:empty {
+  display: none;
+}
+.tool-output > summary {
+  padding: 7px 0;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.assistant-workspace .assistant-statusbar {
+  overflow: visible;
+}
+.session-telemetry {
+  position: relative;
+  min-width: 0;
+  margin-left: auto;
+  color: var(--muted);
+}
+.session-telemetry > summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 13px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 3px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.session-telemetry > summary:hover {
+  color: var(--text);
+}
+.session-telemetry > summary > svg {
+  flex-shrink: 0;
+}
+.telemetry-tokens,
+.context-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.context-indicator svg circle {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.7;
+}
+.context-indicator svg .context-ring-value {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+.telemetry-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 35;
+  width: 310px;
+  max-width: calc(100vw - 32px);
+  max-height: min(420px, 65dvh);
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 30px var(--shadow);
+}
+.telemetry-panel h3 {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.telemetry-panel dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px 12px;
+  margin: 0;
+  font-size: 11px;
+}
+.telemetry-panel dt {
+  color: var(--muted);
+}
+.telemetry-panel dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.telemetry-panel p {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.context-settings {
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.context-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.context-settings-heading h3 {
+  margin: 0;
+}
+.context-settings button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.context-settings button:hover,
+.context-settings button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.context-settings button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.context-settings .context-model {
+  margin-top: 8px;
+  color: var(--text);
+}
+.context-follow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0;
+  color: var(--text);
+  font-size: 11px;
+}
+.context-follow input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.context-size-input {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+}
+.context-size-input label {
+  flex-shrink: 0;
+}
+.context-size-input input {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.context-presets {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.context-settings .context-save {
+  width: 100%;
+  margin-top: 12px;
+  color: var(--accent);
+}
+.context-settings .context-error {
+  color: var(--danger, #dc5555);
+}
+@media (max-width: 480px) {
+  .session-telemetry .telemetry-tokens {
+    display: none;
+  }
+}
+@media (max-width: 1200px) {
+  .session-telemetry .telemetry-secondary {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .composer-todos > summary {
+    gap: 6px;
+  }
+  .todo-item-text {
+    font-size: 12px;
+  }
+  .todo-current {
+    display: none;
+  }
+  .session-telemetry > summary {
+    gap: 7px;
+    font-size: 9px;
+  }
+  .session-telemetry .telemetry-counts {
+    display: none;
+  }
+  .process-steps {
+    padding-left: 9px;
+  }
+  .process-step > summary {
+    gap: 5px;
+    font-size: 10px;
+  }
+  .process-step-body {
+    padding-left: 8px;
+  }
+  .run-metrics {
+    gap: 4px 9px;
+    font-size: 9px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .todo-progress > span,
+  .process-chevron {
+    transition: none;
+  }
+}
+.pi-error-details {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+}
+.pi-error-details summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.pi-error-details pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font:
+    11px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.pi-runtime-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}

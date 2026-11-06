@@ -1,0 +1,3 @@
+[
+  { "id": "workspace", "name": "Server projects", "root": "/projects/workspace", "serverPath": "/projects/workspace", "readOnly": false, "description": "Projects stored in the deployment's project volume" }
+]

@@ -1,0 +1,298 @@
+/* Conversation controls share the assistant's global light/dark tokens. */
+.assistant-workspace .pi-conversation-row {
+  position: relative;
+  min-width: 0;
+  margin: 3px 0;
+  border-radius: 8px;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+}
+.assistant-workspace .assistant-layout .pi-conversation-row .contact-choice {
+  width: 100%;
+  max-width: none;
+  padding: 10px 36px 10px 12px;
+  margin: 0;
+  min-width: 0;
+  text-align: left;
+}
+.assistant-workspace .pi-conversation-row b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-workspace .pi-conversation-row b svg {
+  display: inline-block;
+  margin-right: 5px;
+  color: var(--accent);
+  vertical-align: -1px;
+}
+.assistant-workspace .pi-conversation-row .pi-conversation-more {
+  position: absolute;
+  top: 11px;
+  right: 5px;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+.assistant-workspace .pi-conversation-row:hover .pi-conversation-more,
+.assistant-workspace .pi-conversation-row:focus-within .pi-conversation-more,
+.assistant-workspace .pi-conversation-row.is-selected .pi-conversation-more {
+  opacity: 1;
+}
+.assistant-workspace .pi-conversation-row .pi-conversation-more:hover {
+  color: var(--text);
+  background: var(--surface-active);
+}
+.pi-conversation-menu {
+  position: fixed;
+  z-index: 110;
+  width: 224px;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100dvh - 20px);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 32px var(--shadow);
+  color: var(--text);
+}
+.pi-conversation-menu-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 7px 4px;
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.pi-conversation-menu > button {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.pi-conversation-menu > button:hover,
+.pi-conversation-menu > button:focus-visible {
+  outline: none;
+  background: var(--surface-active);
+}
+.pi-conversation-menu > button.danger {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+  color: var(--danger, #d74747);
+}
+.pi-management-backdrop {
+  position: fixed;
+  z-index: 115;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #11182755;
+  backdrop-filter: blur(3px);
+}
+.pi-management-dialog {
+  width: min(450px, 100%);
+  min-width: 0;
+  padding: 24px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  border-radius: 16px;
+  color: var(--text);
+  box-shadow: 0 16px 60px var(--shadow);
+}
+.pi-management-dialog .section-title {
+  margin: 0 0 20px;
+}
+.pi-management-dialog h2 {
+  font-size: 17px;
+  margin: 0;
+}
+.pi-management-dialog p {
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.pi-management-dialog label {
+  display: grid;
+  gap: 9px;
+  font-size: 13px;
+  margin: 15px 0;
+}
+.pi-management-dialog input,
+.pi-management-dialog select {
+  width: 100%;
+  min-width: 0;
+}
+.pi-management-dialog .action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+  gap: 10px;
+}
+.pi-management-dialog .action-row button {
+  font-size: 13px;
+  padding: 9px 15px;
+}
+.pi-management-dialog .pi-delete-confirm {
+  background: var(--danger, #cf4444);
+  color: white;
+}
+.pi-default-path {
+  display: block;
+  padding: 10px 12px;
+  margin: -4px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  background: var(--surface-soft);
+}
+.assistant-workspace .pi-navigation-footer {
+  position: sticky;
+  bottom: -10px;
+  margin: 20px -4px -10px;
+  padding: 10px 4px;
+  background: var(--surface-soft);
+  border-top: 1px solid var(--border);
+}
+.assistant-workspace .pi-sidebar-control {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 9px;
+  padding: 9px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  text-align: left;
+  font-size: 12px;
+}
+.assistant-workspace .pi-sidebar-control:hover,
+.assistant-workspace .pi-sidebar-control.is-active {
+  background: var(--surface-active);
+  color: var(--text);
+}
+.assistant-workspace .pi-sidebar-control > span {
+  flex: 1;
+  min-width: 0;
+}
+.assistant-workspace .pi-default-directory > span {
+  display: grid;
+  gap: 3px;
+}
+.assistant-workspace .pi-default-directory small {
+  font-size: 10px;
+}
+.assistant-workspace .pi-default-directory b {
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-workspace .pi-archive-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 8px;
+}
+.assistant-workspace .pi-archive-heading h2 {
+  margin: 0 !important;
+  flex: 1;
+}
+.assistant-workspace .pi-archive-heading small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.assistant-workspace .pi-archived-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 20px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.assistant-workspace .pi-archived-banner button {
+  padding: 0;
+  font-size: 11px;
+}
+@media (hover: none) {
+  .assistant-workspace .pi-conversation-row .pi-conversation-more {
+    opacity: 1;
+    width: 34px;
+    height: 34px;
+    top: 7px;
+  }
+}
+@media (max-width: 600px) {
+  .pi-conversation-menu {
+    width: 230px;
+  }
+  .pi-conversation-menu > button {
+    min-height: 43px;
+  }
+  .pi-management-dialog {
+    padding: 20px;
+  }
+}
+.project-member-access {
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.project-member-access h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.project-member-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 10px 0;
+}
+.project-member-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.6fr);
+  gap: 12px;
+}
+.project-member-form label {
+  min-width: 0;
+}
+.project-member-form button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+@media (max-width: 420px) {
+  .project-member-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,62 @@
+.pi-message-area {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pi-message-content,
+.assistant-workspace .pi-turn,
+.assistant-workspace .message {
+  min-width: 0;
+  max-width: 100%;
+}
+.pi-message-content {
+  width: 100%;
+}
+.pi-jump-latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 20px;
+  box-shadow: 0 3px 12px #0002;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 3;
+}
+.pi-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pi-markdown .pi-code {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.pi-markdown table {
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.pi-markdown pre code {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.assistant-workspace .message.mine p,
+.assistant-workspace .message.assistant {
+  overflow-wrap: anywhere;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "astral-remote-pi-agent",
+  "version": "0.8.9",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node relay-agent.mjs",
+    "terminal:setup": "npm rebuild node-pty && node prepare-terminal.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "fflate": "0.8.3",
+    "mammoth": "1.13.0",
+    "read-excel-file": "9.3.14",
+    "typebox": "1.3.27",
+    "unpdf": "1.9.1"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.1.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  }
+}
