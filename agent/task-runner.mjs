@@ -6,6 +6,7 @@ import { dirname } from 'node:path';
 import { localEnvironment, terminateTree } from './process-tree.mjs';
 import { checkGrant } from './workspace.mjs';
 import { activityDeadline } from './assets/activity-deadline.mjs';
+import { validQuestionContinuation } from './assets/question-continuation.mjs';
 export async function createComputerTasks({
   config: configuration,
   configPath,
@@ -32,6 +33,25 @@ export async function createComputerTasks({
   }
   async function start(job) {
     if (closed) return;
+    if (job.resumeQuestion) {
+      if (!validQuestionContinuation(job.resumeQuestion) || job.input !== job.resumeQuestion.answer)
+        throw Error('问题续接信息无效。');
+      const previous = active.get(job.resumeQuestion.previousTaskId);
+      if (previous) {
+        if (
+          ['deviceId', 'projectId', 'conversationId', 'access', 'execute'].some(
+            (key) => previous.job[key] !== job[key],
+          )
+        )
+          throw Error('问题续接必须保持原电脑、对话、项目与权限。');
+        stop(previous);
+        await new Promise((resolve) => {
+          previous.child.once('close', resolve);
+          if (previous.closed) resolve();
+        });
+        if (closed) return;
+      }
+    }
     const config = configuration(),
       input = JSON.stringify(job),
       old = db.prepare('SELECT * FROM jobs WHERE id=?').get(job.id);

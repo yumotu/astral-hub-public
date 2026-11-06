@@ -67,6 +67,17 @@ jobs:
       - run: npm run build
       - run: node scripts/package-source.mjs
       - run: node scripts/package-server.mjs
+      - name: Build and boot the actual server runtime image
+        run: |
+          docker build -f deploy/Dockerfile.runtime -t astral-app-qa .
+          docker run --rm --init --read-only --network=none --memory=384m --pids-limit=128 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop=ALL --security-opt=no-new-privileges --entrypoint=node astral-app-qa --input-type=module -e '
+          import assert from "node:assert/strict";
+          import { createApp } from "./server/index.mjs";
+          const app = await createApp({ token: "synthetic-runtime-health-token-123456789", dataDir: "/tmp/qa-data", filesDir: "/tmp/qa-files", piConfig: { url: "", token: "" } });
+          await new Promise(resolve => app.server.listen(0, "127.0.0.1", resolve));
+          try { const response = await fetch("http://127.0.0.1:" + app.server.address().port + "/api/health"); assert.equal(response.status, 200); console.log("SERVER_RUNTIME_HEALTH_OK"); }
+          finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); }
+          '
       - run: node scripts/package-agent.mjs
       - uses: actions/upload-artifact@v4
         with:
@@ -232,7 +243,7 @@ jobs:
       - run: npm ci --prefix agent --ignore-scripts
       - run: npm --prefix agent run terminal:setup
       - run: node scripts/package-agent.mjs
-      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs agent/tests/long-goal-runtime.test.mjs agent/tests/document-ocr.test.mjs
+      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs agent/tests/long-goal-runtime.test.mjs agent/tests/document-ocr.test.mjs agent/tests/question-resume-runtime.test.mjs
   android-sign:
     if: ${{ needs.source-audit.outputs.release == 'true' }}
     needs: [source-audit, web-and-tests, desktop, android, pi-runtime, computer-runtime]

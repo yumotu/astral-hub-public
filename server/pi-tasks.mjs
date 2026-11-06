@@ -3,6 +3,7 @@ import { fail } from './accounts.mjs';
 import { applyPiTimeline, interruptedTools } from '../shared/pi-timeline.mjs';
 import { applyRunMetrics, normalizeTodos } from '../shared/pi-activity.mjs';
 import { concurrencyLimits } from '../deploy/pi/concurrency.mjs';
+import { questionContinuation, continuedQuestions } from './question-continuation.mjs';
 
 const pending = new Set(['queued', 'running', 'delivering', 'accepted', 'applied', 'stopping']);
 const terminal = new Set(['done', 'error', 'cancelled', 'interrupted']);
@@ -19,6 +20,7 @@ export function createPiTasks(
     maxConcurrent,
     maxConcurrentPerUser,
     activeCount,
+    prepareQuestionResume,
   },
 ) {
   db.exec(`CREATE TABLE IF NOT EXISTS pi_tasks(seq INTEGER PRIMARY KEY AUTOINCREMENT,owner TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,UNIQUE(owner,id));
@@ -189,7 +191,10 @@ export function createPiTasks(
     if (
       task.status === 'queued' &&
       all(r.owner).some(
-        (t) => t.conversationId === task.conversationId && t.status === 'interrupted',
+        (t) =>
+          t.conversationId === task.conversationId &&
+          t.status === 'interrupted' &&
+          !t.questionContinuation,
       )
     )
       update(r.owner, task.id, {
@@ -320,7 +325,7 @@ export function createPiTasks(
   }
   const timer = setInterval(() => void pump(), 1000);
   timer.unref();
-  return {
+  const api = {
     get,
     all,
     event,
@@ -359,16 +364,22 @@ export function createPiTasks(
         // A slow or resumed client should see the current partial answer in one
         // response, rather than replay thousands of obsolete character events.
         // Use real per-task event cursors so older clients also understand this.
-        const latest = db.prepare(
-          'SELECT task_id AS taskId,MAX(seq) AS seq FROM pi_task_events WHERE owner=? AND seq>? GROUP BY task_id ORDER BY seq LIMIT 200',
-        ).all(owner, after);
+        const latest = db
+          .prepare(
+            'SELECT task_id AS taskId,MAX(seq) AS seq FROM pi_task_events WHERE owner=? AND seq>? GROUP BY task_id ORDER BY seq LIMIT 200',
+          )
+          .all(owner, after);
         const result = [];
         let bytes = 0;
         for (const r of latest) {
           const task = get(owner, r.taskId);
-          const event = task ? { type: 'task', task } : JSON.parse(
-            db.prepare('SELECT event FROM pi_task_events WHERE seq=? AND owner=?').get(r.seq, owner).event,
-          );
+          const event = task
+            ? { type: 'task', task }
+            : JSON.parse(
+                db
+                  .prepare('SELECT event FROM pi_task_events WHERE seq=? AND owner=?')
+                  .get(r.seq, owner).event,
+              );
           const size = Buffer.byteLength(JSON.stringify(event));
           if (result.length && bytes + size > 1500000) break;
           bytes += size;
@@ -415,6 +426,7 @@ export function createPiTasks(
             'toolAllowlist',
             'skills',
             'schedule',
+            'resumeQuestion',
           ].some((k) => JSON.stringify(old[k] ?? null) !== JSON.stringify(p[k] ?? null))
         )
           throw fail(409, '这条请求已存在不同内容。');
@@ -540,6 +552,69 @@ export function createPiTasks(
         throw e;
       }
     },
+    async resumeQuestion(owner, id, reply) {
+      const original = get(owner, id);
+      let next = questionContinuation(owner, original, reply);
+      if (next.reused) {
+        const resumed = get(owner, next.id);
+        if (!resumed) throw fail(409, '续接结果未确认，请检查记录，不能重复执行。');
+        return resumed;
+      }
+      const check = () => {
+        if (
+          closed ||
+          api.live(owner, original.conversationId).length ||
+          all(owner).some(
+            (t) =>
+              t.conversationId === original.conversationId &&
+              t.id !== id &&
+              t.status === 'interrupted' &&
+              !t.questionContinuation,
+          )
+        )
+          throw fail(409, '此对话还有运行中或结果未知的任务，请先核对。');
+      };
+      check();
+      if (!prepareQuestionResume) throw fail(503, '执行器暂不支持问题续接。');
+      await prepareQuestionResume(owner, original);
+      next = questionContinuation(owner, get(owner, id), reply);
+      if (next.reused) return get(owner, next.id);
+      check();
+      const payload = Object.fromEntries(
+        [
+          'conversationId',
+          'projectId',
+          'access',
+          'thinkingLevel',
+          'attachments',
+          'toolAllowlist',
+          'skills',
+          'schedule',
+        ]
+          .filter((key) => original[key] !== undefined)
+          .map((key) => [key, original[key]]),
+      );
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const resumed = api.add(owner, {
+          ...payload,
+          id: next.id,
+          input: reply.value,
+          mode: 'queue',
+          parentId: null,
+          resumeQuestion: next.resumeQuestion,
+        });
+        update(owner, id, {
+          uiRequests: continuedQuestions(original.uiRequests, reply, next),
+          questionContinuation: next.id,
+        });
+        db.exec('COMMIT');
+        return resumed;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
     async stop(owner, id) {
       const t = get(owner, id);
       if (!t) throw fail(404, '任务不存在。');
@@ -557,4 +632,5 @@ export function createPiTasks(
       for (const name of notifications.eventNames()) notifications.emit(name);
     },
   };
+  return api;
 }

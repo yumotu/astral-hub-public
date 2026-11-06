@@ -36,6 +36,7 @@ import { createAuxiliaryUsage } from './usage-telemetry.mjs';
 import { pluginLoadPlan } from './plugin-load-plan.mjs';
 import { longGoalControl } from './long-goal-command.mjs';
 import { runtimeDiagnostic } from './runtime-diagnostics.mjs';
+import { questionPrompt } from './question-continuation.mjs';
 import { startRpcSession } from './rpc-startup.mjs';
 import { createStreamWriter } from './stream-writer.mjs';
 const lines = strictLines(process.stdin);
@@ -488,7 +489,7 @@ try {
   } else {
     const before = await client.getState();
     await sessionCheckpoint(SessionManager, p.sessionDir, p.requestId, before, 'before');
-    const request = goalRequest(skillRequest(p.input));
+    const request = goalRequest(skillRequest(questionPrompt(p.input, p.resumeQuestion)));
     const message = sessionPrompt(request, p.history, before.messageCount);
     const content = await promptContent(message, p.attachmentIds, p.files);
     promptStarted = accepting = true;

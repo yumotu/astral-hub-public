@@ -15,6 +15,7 @@ COPY --chown=node:node plugin-load-plan.mjs runtime-diagnostics.mjs package-tran
 COPY --chown=node:node rpc-startup.mjs ./
 COPY --chown=node:node stream-writer.mjs ./
 COPY --chown=node:node activity-deadline.mjs ask-user.mjs ./
+COPY --chown=node:node question-continuation.mjs ./
 COPY --chown=node:node long-goal.mjs ./
 COPY --chown=node:node long-goal-command.mjs ./
 COPY --chown=node:node schedule-tools.mjs cron-scope.mjs ./

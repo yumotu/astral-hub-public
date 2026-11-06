@@ -89,6 +89,117 @@ async function fixture(t, options = {}) {
     tick: (ms) => (time += ms),
   };
 }
+test('interrupted computer questions admit one explicit same-target continuation and keep unknown operations blocked', async (t) => {
+  const f = await fixture(t);
+  await f.req(
+    '/relay/device/workspace/announce',
+    { version: 2, projects: f.projects, capabilities: ['question_resume'] },
+    f.device.token,
+  );
+  async function waiting(extra = {}) {
+    const p = f.submit(undefined, 'Original task', { access: 'edit', ...extra });
+    await f.req('/relay/submissions', p, f.owner.token);
+    await f.poll();
+    const q = {
+      id: randomUUID(),
+      source: 'ask_user',
+      questionId: randomUUID(),
+      toolCallId: 'original-question',
+      method: 'input',
+      title: 'Which file?',
+      message: 'Select the scope',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    await f.req(
+      '/relay/device/workspace/jobs/' + p.id + '/progress',
+      { ...f.state, uiRequests: [q] },
+      f.device.token,
+    );
+    f.tick(46000);
+    const status = await f.req('/relay/jobs/' + p.id, null, f.owner.token);
+    assert.equal(status.body.job.status, 'interrupted');
+    return { p, q, path: '/relay/jobs/' + p.id + '/question-resume' };
+  }
+  const a = await waiting(),
+    answer = { id: a.q.id, value: 'Only README.md' };
+  assert.equal((await f.req(a.path, answer, f.other.token)).status, 404);
+  assert.equal((await f.req(a.path, { ...answer, execute: true }, f.owner.token)).status, 400);
+  const next = await f.req(a.path, answer, f.owner.token);
+  assert.equal(next.status, 202, JSON.stringify(next.body));
+  assert.notEqual(next.body.job.id, a.p.id);
+  assert.equal(next.body.job.input, answer.value);
+  for (const key of ['deviceId', 'projectId', 'conversationId', 'access', 'execute'])
+    assert.equal(next.body.job[key], a.p[key]);
+  assert.equal(next.body.job.resumeQuestion.previousTaskId, a.p.id);
+  assert.equal((await f.req(a.path, answer, f.owner.token)).body.job.id, next.body.job.id);
+  assert.equal((await f.req(a.path, { ...answer, value: 'different' }, f.owner.token)).status, 409);
+  const claimed = (await f.poll()).body.job;
+  assert.equal(claimed.id, next.body.job.id);
+  await f.req(
+    '/relay/device/workspace/jobs/' + claimed.id + '/result',
+    { ...f.state, status: 'done' },
+    f.device.token,
+  );
+  assert.equal(
+    f.db.prepare('SELECT status FROM relay_jobs WHERE id=?').get(a.p.id).status,
+    'interrupted',
+  );
+  const revoked = await waiting();
+  await f.req(
+    '/relay/device/workspace/announce',
+    {
+      version: 2,
+      projects: f.projects.map((p) => ({ ...p, allowWrite: false })),
+      capabilities: ['question_resume'],
+    },
+    f.device.token,
+  );
+  assert.equal(
+    (await f.req(revoked.path, { id: revoked.q.id, value: 'continue' }, f.owner.token)).status,
+    403,
+  );
+  await f.req(
+    '/relay/device/workspace/announce',
+    { version: 2, projects: f.projects, capabilities: ['question_resume'] },
+    f.device.token,
+  );
+  const cancelled = await waiting();
+  f.db.prepare("UPDATE relay_jobs SET status='cancelled' WHERE id=?").run(cancelled.p.id);
+  assert.equal(
+    (await f.req(cancelled.path, { id: cancelled.q.id, value: 'continue' }, f.owner.token)).status,
+    409,
+  );
+  const unknown = await waiting();
+  const another = f.submit(unknown.p.conversationId, 'Other unknown operation', {
+    deliveryPreference: 'queue',
+  });
+  // This older row has no tagged question; it must continue to block the lane.
+  f.db
+    .prepare(
+      'INSERT INTO relay_jobs(id,owner,device_id,project_id,conversation_id,input,access,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+    )
+    .run(
+      another.id,
+      f.owner.user.id,
+      f.device.deviceId,
+      another.projectId,
+      another.conversationId,
+      another.input,
+      'read',
+      'interrupted',
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+  assert.equal(
+    (await f.req(unknown.path, { id: unknown.q.id, value: 'continue' }, f.owner.token)).status,
+    409,
+  );
+  assert.equal(
+    f.db.prepare('SELECT count(*) n FROM relay_jobs WHERE resumed IS NOT NULL').get().n,
+    1,
+  );
+});
 test('remote main conversations can invoke current-account app functions without local file-write permission', async (t) => {
   const f = await fixture(t),
     p = f.submit(undefined, 'app functions', { projectId: f.projects[1].id });

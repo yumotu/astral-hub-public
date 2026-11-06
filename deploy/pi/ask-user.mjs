@@ -1,4 +1,6 @@
 import { Type } from 'typebox';
+import { randomUUID } from 'node:crypto';
+import { askUserTitle } from './rpc-prompt.mjs';
 export default function askUser(pi) {
   pi.registerTool({
     name: 'ask_user',
@@ -21,15 +23,30 @@ export default function askUser(pi) {
     ),
     async execute(_id, p, signal, _update, ctx) {
       if (!ctx.hasUI) throw Error('当前运行环境不能等待交互答复，请在结果中说明所缺信息。');
-      const title = p.question + (p.context ? '\n\n' + p.context : '');
+      const questionId = randomUUID();
+      const record = {
+        questionId,
+        toolCallId: _id,
+        question: p.question,
+        context: p.context || '',
+      };
+      const title = askUserTitle(record);
+      pi.appendEntry('astral-question', { ...record, status: 'pending' });
       let answer;
-      if (p.options?.length) {
-        const other = '填写其他答案';
-        answer = await ctx.ui.select(title, [...p.options.filter((x) => x !== other), other], {
-          signal,
+      try {
+        if (p.options?.length) {
+          const other = '填写其他答案';
+          answer = await ctx.ui.select(title, [...p.options.filter((x) => x !== other), other], {
+            signal,
+          });
+          if (answer === other) answer = await ctx.ui.input(title, '请输入你的答案', { signal });
+        } else answer = await ctx.ui.input(title, '请输入你的答案', { signal });
+      } finally {
+        pi.appendEntry('astral-question', {
+          ...record,
+          status: answer === undefined ? 'cancelled' : 'resolved',
         });
-        if (answer === other) answer = await ctx.ui.input(title, '请输入你的答案', { signal });
-      } else answer = await ctx.ui.input(title, '请输入你的答案', { signal });
+      }
       return {
         content: [
           {

@@ -1807,6 +1807,9 @@ function ServerPiPage({
                           phase={taskState?.compacting ? '压缩中…' : taskState?.phase}
                         />
                         <LongGoalCard goal={taskState?.longGoal} status={taskState?.status} />
+                        {taskState?.status === 'interrupted' && (
+                          <PluginRequests task={taskState} settings={settings} />
+                        )}
                         {!t.timeline?.length && showThinking && t.thinking && (
                           <details className="thinking-panel" open={running || undefined}>
                             <summary>

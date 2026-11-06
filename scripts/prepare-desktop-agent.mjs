@@ -135,6 +135,7 @@ for (const arch of arches) {
           'inputs.test.mjs',
           'long-goal-runtime.test.mjs',
           'document-ocr.test.mjs',
+          'question-resume-runtime.test.mjs',
         ].map((n) => join(stage, 'agent/tests', n)),
       ],
       { env },

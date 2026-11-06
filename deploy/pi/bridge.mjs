@@ -25,6 +25,7 @@ import { settleSteeringAck } from './steer-controls.mjs';
 import { activityDeadline } from './activity-deadline.mjs';
 import { packageResources } from './package-resources.mjs';
 import { buildSkillCatalog } from './skill-catalog.mjs';
+import { validQuestionContinuation } from './question-continuation.mjs';
 const token = process.env.PI_BRIDGE_TOKEN || '';
 if (token.length < 32) throw new Error('PI_BRIDGE_TOKEN must contain at least 32 characters');
 const installed = spawnSync('pi', ['--version'], { encoding: 'utf8', timeout: 15000 });
@@ -286,6 +287,7 @@ async function execute(p, event) {
           ASTRAL_PLUGIN_ENDPOINT: 'http://127.0.0.1:8790/native/cron',
           ASTRAL_PLUGIN_TOKEN: p.canManageSkills ? lock.pluginToken : '',
           ASTRAL_REQUEST_ID: p.requestId || '',
+          ASTRAL_RESUME_GOAL_ID: p.resumeQuestion?.goalId || '',
           ASTRAL_HOST_ACCESS_URL: p.canManageSkills ? p.hostAccess?.url || '' : '',
           ASTRAL_HOST_ACCESS_TOKEN: p.canManageSkills ? p.hostAccess?.token || '' : '',
           ASTRAL_SANDBOX_ACCESS_URL: p.sandboxAccess?.url || '',
@@ -529,6 +531,8 @@ function validateRun(p) {
   if (p) resolveThinkingLevel(p.thinkingLevel, p.thinking);
   if (
     !p ||
+    (p.resumeQuestion !== undefined &&
+      (!validQuestionContinuation(p.resumeQuestion) || p.input !== p.resumeQuestion.answer)) ||
     !/^[a-f0-9]{64}$/.test(p.sessionKey || '') ||
     !['run', 'inspect', 'compact'].includes(p.action || 'run') ||
     (p.projectId !== undefined && !/^[a-z0-9-]{1,50}$/.test(p.projectId)) ||
@@ -979,8 +983,24 @@ const server = createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/cancel' && req.method === 'POST') {
-      const p = await readJSON(req, 1000);
-      active.get(p.sessionKey)?.cancel?.();
+      const p = z
+        .object({
+          sessionKey: z.string().regex(/^[a-f0-9]{64}$/),
+          requestId: z.string().uuid().optional(),
+        })
+        .strict()
+        .parse(await readJSON(req, 1000));
+      const current = active.get(p.sessionKey);
+      if (p.requestId && current && current.requestId !== p.requestId)
+        throw Object.assign(new Error('此对话已有其他任务，未停止它。'), { status: 409 });
+      current?.cancel?.();
+      if (p.requestId && current) {
+        const until = Date.now() + 6000;
+        while (active.get(p.sessionKey) === current && Date.now() < until)
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        if (active.get(p.sessionKey) === current)
+          throw Object.assign(new Error('旧任务尚未完全停止，请稍后续接。'), { status: 503 });
+      }
       json(200, { ok: true });
       return;
     }

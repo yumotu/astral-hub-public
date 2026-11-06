@@ -3,6 +3,11 @@ import { fail } from './accounts.mjs';
 import { createRelayArtifacts } from './relay-artifacts.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 import { Readable } from 'node:stream';
+import {
+  questionReplySchema,
+  questionContinuation,
+  continuedQuestions,
+} from './question-continuation.mjs';
 const uuid = z.string().uuid();
 const longGoal = z
   .object({
@@ -31,6 +36,9 @@ const dialog = z
     placeholder: z.string().max(1000).optional(),
     prefill: z.string().max(12000).optional(),
     options: z.array(z.string().max(1000)).max(100).optional(),
+    source: z.literal('ask_user').optional(),
+    questionId: uuid.optional(),
+    toolCallId: z.string().min(1).max(200).optional(),
     createdAt: z.string().datetime(),
     status: z.enum(['pending', 'resolved']),
   })
@@ -83,6 +91,7 @@ export function createRelayComputer(
     ['attachments', "TEXT NOT NULL DEFAULT '[]'"],
     ['thinking_level', "TEXT NOT NULL DEFAULT 'off'"],
     ['scheduled', 'TEXT'],
+    ['resumed', 'TEXT'],
   ])
     if (!columns.has(name)) db.exec(`ALTER TABLE relay_jobs ADD COLUMN ${name} ${type}`);
   db.exec(`CREATE TABLE IF NOT EXISTS relay_conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,manual INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -110,6 +119,7 @@ export function createRelayComputer(
       access: j.access,
       thinkingLevel: j.thinking_level || 'off',
       canSchedule: db.prepare('SELECT role FROM users WHERE id=?').get(j.owner)?.role === 'owner',
+      ...(j.resumed ? { resumeQuestion: JSON.parse(j.resumed) } : {}),
       ...(j.scheduled
         ? {
             schedule: JSON.parse(j.scheduled),
@@ -187,7 +197,7 @@ export function createRelayComputer(
       .all())
       settleChildren(r.id);
     db.prepare(
-      "UPDATE relay_jobs SET status='interrupted',error='此对话前一任务结果未知，未自动继续。' WHERE project_id IS NOT NULL AND parent_id IS NULL AND status='queued' AND conversation_id IN (SELECT conversation_id FROM relay_jobs WHERE parent_id IS NULL AND status='interrupted' AND project_id IS NOT NULL)",
+      "UPDATE relay_jobs SET status='interrupted',error='此对话前一任务结果未知，未自动继续。' WHERE project_id IS NOT NULL AND parent_id IS NULL AND status='queued' AND conversation_id IN (SELECT conversation_id FROM relay_jobs WHERE parent_id IS NULL AND status='interrupted' AND project_id IS NOT NULL AND json_extract(state,'$.questionContinuation') IS NULL)",
     ).run();
   }
   function revoke(device, id) {
@@ -473,6 +483,54 @@ export function createRelayComputer(
     },
     async after(req, url, json, actor, internal = {}) {
       const path = url.pathname;
+      const questionResumeRoute = path.match(/^\/api\/relay\/jobs\/([^/]+)\/question-resume$/);
+      if (questionResumeRoute && req.method === 'POST') {
+        limit('computer-question-resume:' + actor.id, 30);
+        const original = db
+          .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=? AND project_id IS NOT NULL')
+          .get(uuid.parse(questionResumeRoute[1]), actor.id);
+        if (!original) throw fail(404, '原电脑任务不存在。');
+        ownedDevice(original.device_id, actor.id);
+        allowed(original);
+        const reply = questionReplySchema.parse(await body(req));
+        const next = questionContinuation(actor.id, view(original), reply);
+        if (next.reused) {
+          const resumed = db
+            .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=?')
+            .get(next.id, actor.id);
+          if (!resumed) throw fail(409, '续接结果未确认，不能重复执行。');
+          json(200, { job: view(resumed) });
+          return true;
+        }
+        cancel(original.id);
+        const input = {
+          id: next.id,
+          deviceId: original.device_id,
+          projectId: original.project_id,
+          conversationId: original.conversation_id,
+          input: reply.value,
+          access: original.access,
+          execute: !!original.execute,
+          thinkingLevel: original.thinking_level || 'off',
+          attachments: JSON.parse(original.attachments || '[]'),
+          deliveryPreference: 'queue',
+        };
+        const synthetic = Readable.from([Buffer.from(JSON.stringify(input))]);
+        synthetic.method = 'POST';
+        synthetic.headers = {};
+        return this.after(
+          synthetic,
+          new URL('http://internal/api/relay/submissions'),
+          json,
+          actor,
+          {
+            resumeQuestion: next.resumeQuestion,
+            resumeFrom: original.id,
+            reply,
+            schedule: original.scheduled ? JSON.parse(original.scheduled) : undefined,
+          },
+        );
+      }
       const replyRoute = path.match(/^\/api\/relay\/jobs\/([^/]+)\/ui$/);
       if (replyRoute && req.method === 'POST') {
         limit('computer-ui:' + actor.id, 60);
@@ -555,6 +613,11 @@ export function createRelayComputer(
           old = db.prepare('SELECT * FROM relay_jobs WHERE id=?').get(p.id);
         if (old) {
           if (
+            (old.resumed || null) !==
+            (internal.resumeQuestion ? JSON.stringify(internal.resumeQuestion) : null)
+          )
+            throw fail(409, '请求编号已绑定其他续接信息。');
+          if (
             (old.scheduled || null) !==
             (internal.schedule ? JSON.stringify(internal.schedule) : null)
           )
@@ -580,6 +643,8 @@ export function createRelayComputer(
           return true;
         }
         const capabilities = JSON.parse(device.capabilities || '[]');
+        if (internal.resumeQuestion && !capabilities.includes('question_resume'))
+          throw fail(409, '请先更新目标电脑，以安全续接中断的问题。');
         if (internal.schedule && !capabilities.includes('scheduled_tasks'))
           throw fail(409, '请先更新目标电脑，以使用绑定权限的定时任务。');
         if (p.attachments.length && !capabilities.includes('chat_inputs'))
@@ -607,11 +672,20 @@ export function createRelayComputer(
         if (
           db
             .prepare(
-              "SELECT 1 FROM relay_jobs WHERE owner=? AND conversation_id=? AND parent_id IS NULL AND status='interrupted'",
+              "SELECT 1 FROM relay_jobs WHERE owner=? AND conversation_id=? AND parent_id IS NULL AND status='interrupted' AND json_extract(state,'$.questionContinuation') IS NULL AND id<>?",
+            )
+            .get(actor.id, p.conversationId, internal.resumeFrom || '')
+        )
+          throw fail(409, '此对话前一任务结果未知。请检查电脑文件后新建对话，旧任务不会自动重放。');
+        if (
+          internal.resumeQuestion &&
+          db
+            .prepare(
+              "SELECT 1 FROM relay_jobs WHERE owner=? AND conversation_id=? AND parent_id IS NULL AND status IN ('queued','running')",
             )
             .get(actor.id, p.conversationId)
         )
-          throw fail(409, '此对话前一任务结果未知。请检查电脑文件后新建对话，旧任务不会自动重放。');
+          throw fail(409, '当前对话已有待处理任务，请先核对后再续接。');
         const parent =
           (p.deliveryPreference === 'steer' || longGoalControl(p.input)) && !p.attachments.length
             ? db
@@ -630,6 +704,26 @@ export function createRelayComputer(
         const at = new Date(now()).toISOString();
         db.exec('BEGIN IMMEDIATE');
         try {
+          if (internal.resumeFrom) {
+            const original = db
+              .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=?')
+              .get(internal.resumeFrom, actor.id);
+            const next = questionContinuation(actor.id, view(original), internal.reply);
+            if (
+              next.id !== p.id ||
+              JSON.stringify(next.resumeQuestion) !== JSON.stringify(internal.resumeQuestion)
+            )
+              throw fail(409, '问题已变化，请刷新后重新核对。');
+            const state = JSON.parse(original.state || '{}');
+            state.uiRequests = continuedQuestions(state.uiRequests, internal.reply, next);
+            state.questionContinuation = p.id;
+            state.uiRevision = (state.uiRevision || 0) + 1;
+            db.prepare('UPDATE relay_jobs SET state=?,updated_at=? WHERE id=?').run(
+              JSON.stringify(state),
+              at,
+              original.id,
+            );
+          }
           if (!conversation)
             db.prepare(
               'INSERT INTO relay_conversations(id,owner,device_id,project_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
@@ -643,7 +737,7 @@ export function createRelayComputer(
               at,
             );
           db.prepare(
-            'INSERT INTO relay_jobs(id,owner,device_id,project_id,conversation_id,parent_id,execute,input,access,status,submission,created_at,updated_at,attachments,thinking_level,scheduled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO relay_jobs(id,owner,device_id,project_id,conversation_id,parent_id,execute,input,access,status,submission,created_at,updated_at,attachments,thinking_level,scheduled,resumed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
           ).run(
             p.id,
             actor.id,
@@ -661,6 +755,7 @@ export function createRelayComputer(
             JSON.stringify(p.attachments),
             p.thinkingLevel,
             internal.schedule ? JSON.stringify(internal.schedule) : null,
+            internal.resumeQuestion ? JSON.stringify(internal.resumeQuestion) : null,
           );
           db.prepare('UPDATE relay_conversations SET updated_at=? WHERE id=?').run(
             at,

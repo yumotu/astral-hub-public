@@ -8,6 +8,9 @@ COPY --chown=node:node server ./server
 COPY --chown=node:node shared ./shared
 COPY --chown=node:node deploy/pi/concurrency.mjs ./deploy/pi/concurrency.mjs
 COPY --chown=node:node deploy/pi/attachment-limits.mjs ./deploy/pi/attachment-limits.mjs
+COPY --chown=node:node deploy/pi/activity-deadline.mjs ./deploy/pi/activity-deadline.mjs
+COPY --chown=node:node deploy/pi/long-goal-command.mjs ./deploy/pi/long-goal-command.mjs
+COPY --chown=node:node deploy/pi/question-continuation.mjs ./deploy/pi/question-continuation.mjs
 COPY --chown=node:node dist ./dist
 RUN mkdir data files && chown node:node data files
 USER node

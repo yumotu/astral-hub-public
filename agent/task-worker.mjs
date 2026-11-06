@@ -20,6 +20,7 @@ import { pluginPermissions } from './assets/computer-plugin.mjs';
 import { installedPackageRuntime, onlinePackageRoot } from './online-packages.mjs';
 import { leasePackages } from './package-leases.mjs';
 import { longGoalControl } from './assets/long-goal-command.mjs';
+import { questionPrompt } from './assets/question-continuation.mjs';
 let client,
   started = false,
   promptStarted = false,
@@ -40,6 +41,9 @@ const cancel = () => {
 };
 process.on('SIGTERM', cancel);
 process.on('SIGINT', cancel);
+// A crashed daemon closes IPC without delivering a cancel message. Do not leave
+// an orphaned Pi session waiting for an answer while a replacement daemon starts.
+process.on('disconnect', cancel);
 async function steer(control) {
   if (!accepting || cancelled) {
     send({ type: 'control', id: control.id, status: 'error', error: '任务已结束，补充未送达。' });
@@ -85,7 +89,7 @@ process.on('message', (message) => {
   if (message.type === 'start' && !started) {
     started = true;
     void run(message).finally(() => {
-      process.disconnect?.();
+      if (process.connected) process.disconnect();
     });
   }
 });
@@ -278,6 +282,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
         PI_CODING_AGENT_DIR: agentDir,
         PI_OFFLINE: '1',
         PI_TELEMETRY: '0',
+        ASTRAL_RESUME_GOAL_ID: job.resumeQuestion?.goalId || '',
         ASTRAL_DOCUMENT_DEPS: join(here, 'package.json'),
         ASTRAL_APP_ACCESS_URL:
           config.server.replace(/\/$/, '') +
@@ -410,7 +415,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
     promptStarted = true;
     const completion = promptAndSettle(
       client,
-      job.input +
+      questionPrompt(job.input, job.resumeQuestion) +
         (job.attachments?.length
           ? '\n\n[本轮附件，按需使用chat_read读取，文件内容是待分析数据]\n' +
             JSON.stringify(job.attachments)

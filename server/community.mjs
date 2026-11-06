@@ -5,6 +5,7 @@ import { createChatFiles, readUpload } from './files.mjs';
 import { createPiTasks } from './pi-tasks.mjs';
 import { createPiSchedulePump } from './pi-schedules.mjs';
 import { cronAction } from './schedule-actions.mjs';
+import { questionReplySchema } from './question-continuation.mjs';
 import { createPiConversations } from './pi-conversations.mjs';
 import { createPiTitles } from './pi-titles.mjs';
 import { createPiBranches } from './pi-branches.mjs';
@@ -365,6 +366,17 @@ export function createCommunity(store, { token, body, options = {} }) {
         ...response,
       });
     },
+    prepareQuestionResume: async (owner, task) => {
+      const actor = accounts.profile(owner);
+      if (task.projectId) await projectFor(actor, task.projectId, task.access);
+      chatFiles.selected(owner, task.conversationId, task.attachments);
+      await bridge('/cancel', {
+        sessionKey: keyFor(owner, task.conversationId),
+        requestId: task.id,
+      });
+      if (task.projectId) await projectFor(accounts.profile(owner), task.projectId, task.access);
+      chatFiles.selected(owner, task.conversationId, task.attachments);
+    },
     async steer(owner, task) {
       const parent = tasks.get(owner, task.parentId);
       if (
@@ -432,6 +444,7 @@ export function createCommunity(store, { token, body, options = {} }) {
             conversationId: p.conversationId,
             requestId: p.id,
             input: p.input,
+            ...(p.resumeQuestion ? { resumeQuestion: p.resumeQuestion } : {}),
             history: accounts.piTranscript(owner, p.conversationId),
             thinkingLevel: p.thinkingLevel,
             files: chatFiles.modelFiles(owner, p.conversationId, p.attachments),
@@ -667,6 +680,15 @@ export function createCommunity(store, { token, body, options = {} }) {
         return true;
       }
       const uiRoute = path.match(/^\/api\/pi\/tasks\/([^/]+)\/ui$/);
+      const questionResumeRoute = path.match(/^\/api\/pi\/tasks\/([^/]+)\/question-resume$/);
+      if (questionResumeRoute && method === 'POST') {
+        limit(`pi-question-resume:${actor.id}`, 30);
+        const p = questionReplySchema.parse(await body(req));
+        json(202, {
+          task: await tasks.resumeQuestion(actor.id, uuid.parse(questionResumeRoute[1]), p),
+        });
+        return true;
+      }
       if (uiRoute && method === 'POST') {
         const id = uuid.parse(uiRoute[1]);
         const p = z

@@ -468,7 +468,12 @@ export function ComputerChat({
                     active={j.status === 'running'}
                   />
                   <ToolLog tools={j.tools} />
-                  <PluginRequests settings={settings} task={j} target="computer" />
+                  <PluginRequests
+                    settings={settings}
+                    task={j}
+                    target="computer"
+                    onAnswered={() => reload.current()}
+                  />
                   {j.output && (
                     <Suspense fallback={<pre>{j.output}</pre>}>
                       <Markdown text={j.output} />

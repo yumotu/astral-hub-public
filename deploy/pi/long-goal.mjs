@@ -109,4 +109,14 @@ export default async function longGoal(pi) {
     fileURLToPath(new URL('./vendor/pi-goal/index.ts', import.meta.url)),
   );
   await (upstream.default ?? upstream)(adapter);
+  let resumeGoalId = process.env.ASTRAL_RESUME_GOAL_ID;
+  pi.on('before_agent_start', async (_event, ctx) => {
+    const id = resumeGoalId;
+    resumeGoalId = '';
+    const current = latestLongGoal(ctx);
+    if (id && current?.id === id && current.status === 'paused') {
+      await command.handler('resume', { ...quiet(ctx), isIdle: () => false });
+      publish(ctx);
+    }
+  });
 }

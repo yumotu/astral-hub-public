@@ -113,6 +113,7 @@ test('web and release executors share deterministic bytes, the current version a
     'rpc-prompt.mjs',
     'activity-deadline.mjs',
     'ask-user.mjs',
+    'question-continuation.mjs',
     'long-goal.mjs',
     'long-goal-command.mjs',
     'schedule-tools.mjs',

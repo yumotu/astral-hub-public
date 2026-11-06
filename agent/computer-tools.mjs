@@ -13,6 +13,7 @@ import { pluginArguments, pluginPermissions } from './assets/computer-plugin.mjs
 export default async function (pi) {
   const tools = new Map();
   const adapter = {
+    appendEntry: (...args) => pi.appendEntry(...args),
     on: (...args) => pi.on(...args),
     registerTool: (spec) => {
       tools.set(spec.name, spec);

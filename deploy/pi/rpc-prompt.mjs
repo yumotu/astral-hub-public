@@ -170,6 +170,46 @@ export function longGoalEvent(event) {
   }
 }
 
+export function askUserTitle({ questionId, toolCallId, question, context = '' }) {
+  return (
+    '[astral-question:' +
+    Buffer.from(JSON.stringify({ version: 1, questionId, toolCallId, question, context })).toString(
+      'base64url',
+    ) +
+    ']\n' +
+    question
+  );
+}
+function askUserDetails(event) {
+  if (!['input', 'select'].includes(event.method) || typeof event.title !== 'string') return null;
+  const match = event.title.match(/^\[astral-question:([A-Za-z0-9_-]{1,24000})\]\n/);
+  if (!match) return null;
+  try {
+    const p = JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8'));
+    if (
+      p.version !== 1 ||
+      !/^[a-f0-9-]{36}$/.test(p.questionId) ||
+      typeof p.toolCallId !== 'string' ||
+      !p.toolCallId.length ||
+      p.toolCallId.length > 200 ||
+      typeof p.question !== 'string' ||
+      !p.question.length ||
+      p.question.length > 1000 ||
+      typeof p.context !== 'string' ||
+      p.context.length > 3000
+    )
+      return null;
+    return {
+      source: 'ask_user',
+      questionId: p.questionId,
+      toolCallId: p.toolCallId,
+      title: p.question,
+      ...(p.context ? { message: p.context } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
 export function extensionUiRequest(event) {
   if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return null;
   if (!['input', 'select', 'confirm', 'editor'].includes(event.method)) return null;
@@ -192,5 +232,6 @@ export function extensionUiRequest(event) {
         }
       : {}),
     createdAt: new Date().toISOString(),
+    ...askUserDetails(event),
   };
 }
