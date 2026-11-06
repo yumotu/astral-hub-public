@@ -94,7 +94,6 @@ export const projectToolNames = [
 ];
 export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 1024 } = {}) {
   let pending = '',
-    bytes = 0,
     output = '',
     failure = false,
     stopReason,
@@ -106,7 +105,10 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
     if (e.type === 'message_end' && e.message?.role === 'assistant') {
       stopReason = e.message.stopReason;
       failure = ['error', 'aborted', 'length'].includes(stopReason);
-      errorMessage = typeof e.message.errorMessage === 'string' ? redact(e.message.errorMessage).slice(0, 8000) : undefined;
+      errorMessage =
+        typeof e.message.errorMessage === 'string'
+          ? redact(e.message.errorMessage).slice(0, 8000)
+          : undefined;
       const text = (e.message.content || [])
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
@@ -197,13 +199,12 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
   }
   return {
     push(text) {
-      bytes += Buffer.byteLength(text);
-      if (bytes > maxBytes) throw new Error('Pi 输出过多');
       pending += text;
       let end;
       while ((end = pending.indexOf('\n')) !== -1) {
         const line = pending.slice(0, end).replace(/\r$/, '');
         pending = pending.slice(end + 1);
+        if (Buffer.byteLength(line) > maxBytes) throw new Error('Pi 单条输出过多');
         if (line) {
           try {
             event(JSON.parse(line));
@@ -212,6 +213,7 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
           }
         }
       }
+      if (Buffer.byteLength(pending) > maxBytes) throw new Error('Pi 单条输出过多');
     },
     result() {
       if (pending.trim()) {
@@ -222,7 +224,14 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
         }
         pending = '';
       }
-      return { output, tools, exports, failed: failure, ...(stopReason ? { stopReason } : {}), ...(errorMessage ? { errorMessage } : {}) };
+      return {
+        output,
+        tools,
+        exports,
+        failed: failure,
+        ...(stopReason ? { stopReason } : {}),
+        ...(errorMessage ? { errorMessage } : {}),
+      };
     },
   };
 }

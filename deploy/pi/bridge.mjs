@@ -22,6 +22,7 @@ import {
 } from '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
 import { forkNativeSession } from './session-fork.mjs';
 import { settleSteeringAck } from './steer-controls.mjs';
+import { activityDeadline } from './activity-deadline.mjs';
 import { packageResources } from './package-resources.mjs';
 import { buildSkillCatalog } from './skill-catalog.mjs';
 const token = process.env.PI_BRIDGE_TOKEN || '';
@@ -304,6 +305,7 @@ async function execute(p, event) {
         if (!dialog) throw Object.assign(new Error('插件请求已结束或已经处理。'), { status: 409 });
         child.stdin.write(JSON.stringify({ type: 'extension_ui_response', ...response }) + '\n');
         lock.dialogs.delete(response.id);
+        deadline.resume(response.id);
       };
       lock.steer = async (control) => {
         const prior = lock.controls.get(control.id);
@@ -359,21 +361,17 @@ async function execute(p, event) {
       };
       lock.cancel = kill;
       let buffer = '',
-        size = 0,
         result = null,
         failed = false;
       let stderr = '',
         framingError = '',
         expired = false;
       const decoder = new StringDecoder('utf8');
-      const timer = setTimeout(
-        () => {
-          failed = true;
-          expired = true;
-          kill();
-        },
-        p.action === 'run' ? 915000 : 205000,
-      );
+      const deadline = activityDeadline(p.action === 'run' ? 915000 : 205000, () => {
+        failed = true;
+        expired = true;
+        kill();
+      });
       function parse(text) {
         buffer += text;
         let i;
@@ -381,7 +379,11 @@ async function execute(p, event) {
           const line = buffer.slice(0, i);
           buffer = buffer.slice(i + 1);
           if (!line) continue;
+          if (Buffer.byteLength(line) > 4 * 1024 * 1024) throw Error('RPC记录过大。');
           const e = JSON.parse(line);
+          deadline.touch();
+          if (e.type === 'extension_ui_request') deadline.wait(e.id);
+          if (e.type === 'extension_ui_resolved') deadline.resume(e.id);
           if (e.type === 'control_ack') {
             settleSteeringAck(lock.controls, e);
           } else if (e.type === 'done') result = e;
@@ -399,14 +401,9 @@ async function execute(p, event) {
             event?.(e);
           }
         }
+        if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) throw Error('RPC记录过大。');
       }
       child.stdout.on('data', (chunk) => {
-        size += chunk.length;
-        if (size > 4 * 1024 * 1024) {
-          failed = true;
-          kill();
-          return;
-        }
         try {
           parse(decoder.write(chunk));
         } catch (e) {
@@ -420,7 +417,7 @@ async function execute(p, event) {
       });
       child.stdin.on('error', () => {});
       child.once('error', (e) => {
-        clearTimeout(timer);
+        deadline.close();
         const diagnostic = runtimeDiagnostic(e, { stderr, phase: 'startup' });
         reject(Object.assign(new Error(diagnostic.message), { status: 502, diagnostic }));
       });
@@ -428,7 +425,7 @@ async function execute(p, event) {
         clearTimeout(forcedKill);
         for (const item of lock.controls.values())
           item.decline(Object.assign(new Error('任务已经结束，补充结果未确认。'), { status: 409 }));
-        clearTimeout(timer);
+        deadline.close();
         try {
           parse(decoder.end());
         } catch (e) {

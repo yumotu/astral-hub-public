@@ -13,6 +13,7 @@ import { decodeExportFiles } from './file-exports.mjs';
 import { concurrencyLimits } from '../deploy/pi/concurrency.mjs';
 import { clientAddress } from './client-address.mjs';
 import { createProjectLabels, projectLabelSchema } from './project-labels.mjs';
+import { activityDeadline } from '../deploy/pi/activity-deadline.mjs';
 const username = z
   .string()
   .trim()
@@ -189,26 +190,32 @@ export function createCommunity(store, { token, body, options = {} }) {
   }
   async function streamBridge(payload, res, onEvent) {
     let response;
+    const controller = new AbortController();
+    const deadline = activityDeadline(930000, () => controller.abort());
     try {
       response = await (pi.fetch ?? fetch)(`${pi.url}/run/stream`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${pi.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(920000),
+        signal: controller.signal,
         redirect: 'error',
       });
     } catch {
+      deadline.close();
       throw fail(502, 'Pi 连接中断。');
     }
     if (!response.ok) {
+      deadline.close();
       let data = {};
       try {
         data = await response.json();
       } catch {}
       throw fail(response.status === 429 ? 429 : 502, data.error || 'Pi 请求失败。');
     }
-    if (!response.headers.get('content-type')?.includes('application/x-ndjson'))
+    if (!response.headers.get('content-type')?.includes('application/x-ndjson')) {
+      deadline.close();
       throw fail(502, 'Pi 服务需要升级才能流式输出。');
+    }
     res?.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -218,21 +225,22 @@ export function createCommunity(store, { token, body, options = {} }) {
     const reader = response.body.getReader(),
       decoder = new TextDecoder();
     let buffer = '',
-      size = 0,
       result = null;
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        size += value.length;
-        if (size > 4 * 1024 * 1024) throw fail(502, 'Pi 输出过多。');
         buffer += decoder.decode(value, { stream: true });
         let i;
         while ((i = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, i);
           buffer = buffer.slice(i + 1);
           if (!line) continue;
+          if (Buffer.byteLength(line) > 4 * 1024 * 1024) throw fail(502, 'Pi 单条输出过多。');
           const e = JSON.parse(line);
+          if (e.type !== 'ping') deadline.touch();
+          if (e.type === 'extension_ui_request') deadline.wait(e.id);
+          if (e.type === 'extension_ui_resolved') deadline.resume(e.id);
           if (['billing_start', 'billing_usage'].includes(e.type)) {
             options.usage?.pi(payload.ownerId, { id: payload.requestId || payload.sessionKey }, e);
             continue;
@@ -287,8 +295,10 @@ export function createCommunity(store, { token, body, options = {} }) {
             if (res && !res.destroyed) res.write(JSON.stringify(e) + '\n');
           }
         }
+        if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) throw fail(502, 'Pi 单条输出过多。');
       }
     } finally {
+      deadline.close();
       reader.releaseLock();
     }
     if (buffer.trim() || !result) throw fail(502, 'Pi 流式结果不完整，请检查记录。');

@@ -11,6 +11,7 @@ export function pluginLoadPlan(resources = {}, { owner = false, cronRoot, coreOn
     'goal-tools',
     'mail-tools',
     'app-tools',
+    'ask-user',
   ].map((name) => `/bridge/${name}.mjs`);
   const warnings = [],
     adapted = [];

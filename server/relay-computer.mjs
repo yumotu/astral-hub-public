@@ -2,6 +2,24 @@ import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { createRelayArtifacts } from './relay-artifacts.mjs';
 const uuid = z.string().uuid();
+const dialog = z
+  .object({
+    type: z.literal('extension_ui_request').optional(),
+    id: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine((id) => !/^(access:|mail:)/.test(id)),
+    method: z.enum(['input', 'editor', 'select', 'confirm']),
+    title: z.string().max(1000),
+    message: z.string().max(4000).optional(),
+    placeholder: z.string().max(1000).optional(),
+    prefill: z.string().max(12000).optional(),
+    options: z.array(z.string().max(1000)).max(100).optional(),
+    createdAt: z.string().datetime(),
+    status: z.enum(['pending', 'resolved']),
+  })
+  .strict();
 const tool = z
   .object({
     id: z.string().max(200),
@@ -25,6 +43,7 @@ const progress = z
     thinking: z.string().max(48000),
     phase: z.string().max(100),
     tools: z.array(tool).max(100),
+    uiRequests: z.array(dialog).max(100).optional(),
   })
   .strict();
 export function createRelayComputer(
@@ -80,6 +99,7 @@ export function createRelayComputer(
       output: j.output,
       thinking: JSON.parse(j.state || '{}').thinking || '',
       phase: JSON.parse(j.state || '{}').phase || '',
+      uiRequests: JSON.parse(j.state || '{}').uiRequests || [],
       tools: JSON.parse(j.tools),
       artifacts: artifacts.list(j.id),
       error: j.error,
@@ -93,7 +113,7 @@ export function createRelayComputer(
     if (!j) throw fail(404, '电脑任务不存在。');
     return j;
   };
-  const aggregates = `COUNT(*) n,COALESCE(MAX(updated_at),'') at,COALESCE(SUM(COALESCE(json_extract(state,'$.revision'),0)+CASE status WHEN 'queued' THEN 1 WHEN 'running' THEN 2 WHEN 'delivering' THEN 3 WHEN 'accepted' THEN 4 WHEN 'applied' THEN 5 WHEN 'done' THEN 10 WHEN 'error' THEN 11 WHEN 'cancelled' THEN 12 ELSE 13 END),0) revision,SUM(CASE WHEN status IN ('queued','running','delivering','accepted','applied') THEN 1 ELSE 0 END) active,COALESCE(SUM((SELECT COUNT(*) FROM relay_job_files WHERE job_id=relay_jobs.id)),0) files`;
+  const aggregates = `COUNT(*) n,COALESCE(MAX(updated_at),'') at,COALESCE(SUM(COALESCE(json_extract(state,'$.revision'),0)+COALESCE(json_extract(state,'$.uiRevision'),0)+CASE status WHEN 'queued' THEN 1 WHEN 'running' THEN 2 WHEN 'delivering' THEN 3 WHEN 'accepted' THEN 4 WHEN 'applied' THEN 5 WHEN 'done' THEN 10 WHEN 'error' THEN 11 WHEN 'cancelled' THEN 12 ELSE 13 END),0) revision,SUM(CASE WHEN status IN ('queued','running','delivering','accepted','applied') THEN 1 ELSE 0 END) active,COALESCE(SUM((SELECT COUNT(*) FROM relay_job_files WHERE job_id=relay_jobs.id)),0) files`;
   const versionText = (r) => `${r?.n || 0}:${r?.at || ''}:${r?.revision || 0}:${r?.files || 0}`;
   const version = (owner, id) =>
     versionText(
@@ -117,7 +137,16 @@ export function createRelayComputer(
     // Delivery is claimed before responding. Lost acknowledgements never cause an
     // automatic repeat of a steering message with possible side effects.
     for (const r of rows) db.prepare('UPDATE relay_jobs SET delivery_sent=1 WHERE id=?').run(r.id);
-    return rows;
+    // Replies may be delivered again after a lost heartbeat. The worker consumes
+    // each dialog ID once; this cannot repeat a command or steering submission.
+    const state = JSON.parse(j.state || '{}');
+    return [
+      ...rows,
+      ...Object.values(state.uiReplies || {}).map((reply) => ({
+        type: 'extension_ui_response',
+        ...reply,
+      })),
+    ];
   }
   const artifacts = createRelayArtifacts(db, { chatFiles, job, allowed, ownedDevice, now, limit });
   function settleChildren(id) {
@@ -291,7 +320,24 @@ export function createRelayComputer(
             ).run(
               p.output,
               JSON.stringify(p.tools),
-              JSON.stringify({ revision: p.revision, thinking: p.thinking, phase: p.phase }),
+              JSON.stringify({
+                ...old,
+                revision: p.revision,
+                thinking: p.thinking,
+                phase: p.phase,
+                uiRequests: (p.uiRequests || old.uiRequests || []).map((r) => ({
+                  ...r,
+                  status:
+                    r.status === 'resolved'
+                      ? 'resolved'
+                      : old.uiRequests?.find((x) => x.id === r.id)?.status || r.status,
+                })),
+                uiReplies: Object.fromEntries(
+                  Object.entries(old.uiReplies || {}).filter(
+                    ([id]) => !p.uiRequests?.some((r) => r.id === id && r.status === 'resolved'),
+                  ),
+                ),
+              }),
               new Date(now()).toISOString(),
               j.id,
             );
@@ -332,6 +378,57 @@ export function createRelayComputer(
     },
     async after(req, url, json, actor) {
       const path = url.pathname;
+      const replyRoute = path.match(/^\/api\/relay\/jobs\/([^/]+)\/ui$/);
+      if (replyRoute && req.method === 'POST') {
+        limit('computer-ui:' + actor.id, 60);
+        const j = db
+          .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=? AND project_id IS NOT NULL')
+          .get(uuid.parse(replyRoute[1]), actor.id);
+        if (!j) throw fail(404, '电脑任务不存在。');
+        ownedDevice(j.device_id, actor.id);
+        allowed(j);
+        const reply = z
+          .object({
+            id: z.string().min(1).max(200),
+            value: z.string().max(12000).optional(),
+            confirmed: z.boolean().optional(),
+            cancelled: z.boolean().optional(),
+          })
+          .strict()
+          .parse(await body(req));
+        const state = JSON.parse(j.state || '{}'),
+          request = state.uiRequests?.find((r) => r.id === reply.id);
+        if (j.status !== 'running' || j.lease_until <= now() || request?.status !== 'pending')
+          throw fail(409, '问题已结束或已由其他设备回答。');
+        if (
+          reply.cancelled !== true &&
+          (request.method === 'confirm'
+            ? typeof reply.confirmed !== 'boolean'
+            : typeof reply.value !== 'string' ||
+              (request.method === 'select' && !request.options?.includes(reply.value)))
+        )
+          throw fail(400, '回答与问题类型不匹配。');
+        const value = {
+          id: request.id,
+          ...(reply.cancelled
+            ? { cancelled: true }
+            : request.method === 'confirm'
+              ? { confirmed: reply.confirmed }
+              : { value: reply.value }),
+        };
+        state.uiRequests = state.uiRequests.map((r) =>
+          r.id === request.id ? { ...r, status: 'responding' } : r,
+        );
+        state.uiReplies = { ...state.uiReplies, [request.id]: value };
+        state.uiRevision = (state.uiRevision || 0) + 1;
+        db.prepare('UPDATE relay_jobs SET state=?,updated_at=? WHERE id=?').run(
+          JSON.stringify(state),
+          new Date(now()).toISOString(),
+          j.id,
+        );
+        json(200, { job: view(job(j.device_id, j.id)) });
+        return true;
+      }
       if (path === '/api/relay/submissions' && req.method === 'POST') {
         limit('computer-submit:' + actor.id, 60);
         const p = z

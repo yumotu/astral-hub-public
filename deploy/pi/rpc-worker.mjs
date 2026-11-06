@@ -124,6 +124,7 @@ args.push(
           'goal_manage',
           'mail_manage',
           'app_functions',
+          'ask_user',
           ...(p.canManageSkills ? ['skill_create', 'skill_manage'] : []),
           ...(p.canManageSkills && p.projectId ? ['skill_install'] : []),
           ...(p.projectId && p.access === 'edit' && p.allowWrite
@@ -325,7 +326,7 @@ const handleEvent = (e) => {
     (e.type === 'message_end' && e.message?.role === 'assistant') ||
     ['tool_execution_start', 'tool_execution_end'].includes(e.type);
   const line = record ? JSON.stringify(e) + '\n' : '';
-  outputBytes += Buffer.byteLength(line);
+  outputBytes = Buffer.byteLength(line);
   if (outputBytes > 4 * 1024 * 1024) {
     void client.abort();
     return;

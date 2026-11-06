@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { LoaderCircle, MessageSquare, ShieldCheck, X } from 'lucide-react';
 import { api } from './data';
 import type { Settings } from './types';
-import type { PiTask } from './pi-tasks';
+type DialogTask = { id: string; status: string; uiRequests?: PluginRequest[] };
 export type PluginRequest = {
   id: string;
   method: 'input' | 'editor' | 'select' | 'confirm';
@@ -17,23 +17,31 @@ function Request({
   task,
   request,
   settings,
+  target,
 }: {
-  task: PiTask;
+  task: DialogTask;
   request: PluginRequest;
   settings: Settings;
+  target: 'server' | 'computer';
 }) {
   const [approval, setApproval] = useState('once');
   const [value, setValue] = useState(request.prefill || request.options?.[0] || '');
   const [busy, setBusy] = useState(false),
+    [answered, setAnswered] = useState(false),
     [error, setError] = useState('');
-  const waiting = busy || request.status === 'responding';
+  const waiting = busy || answered || request.status === 'responding';
   const hostApproval = request.id.startsWith('access:');
   const mailApproval = request.id.startsWith('mail:');
   async function answer(response: object) {
     setBusy(true);
     setError('');
     try {
-      await api(settings, `/pi/tasks/${task.id}/ui`, { id: request.id, ...response });
+      await api(
+        settings,
+        target === 'computer' ? `/relay/jobs/${task.id}/ui` : `/pi/tasks/${task.id}/ui`,
+        { id: request.id, ...response },
+      );
+      setAnswered(true);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -148,7 +156,15 @@ function Request({
     </form>
   );
 }
-export function PluginRequests({ task, settings }: { task?: PiTask; settings: Settings }) {
+export function PluginRequests({
+  task,
+  settings,
+  target = 'server',
+}: {
+  task?: DialogTask;
+  settings: Settings;
+  target?: 'server' | 'computer';
+}) {
   if (!task || task.status !== 'running') return null;
   return (
     <>
@@ -160,6 +176,7 @@ export function PluginRequests({ task, settings }: { task?: PiTask; settings: Se
             task={task}
             request={request}
             settings={settings}
+            target={target}
           />
         ))}
     </>

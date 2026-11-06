@@ -39,9 +39,15 @@ test(
       const pluginCall = input.includes('PLUGIN_FILE');
       const nativeCall = input.includes('ONLINE_PACKAGE_CALL');
       const appCall = input.includes('APP_FUNCTIONS');
+      const ask = input.includes('ASK_USER_NATIVE');
       const tool =
         last.role !== 'tool' &&
-        (input.includes('READ_FILE') || exportFile || pluginCall || nativeCall || appCall);
+        (input.includes('READ_FILE') || exportFile || pluginCall || nativeCall || appCall || ask);
+      if (ask && last.role === 'tool')
+        assert.ok(
+          text(last).includes('用户选择乙'),
+          'the actual user answer did not reach the original Pi tool result',
+        );
       if (appCall)
         assert.ok(
           p.tools.some((t) => t.function.name === 'app_functions'),
@@ -71,15 +77,21 @@ test(
                   index: 0,
                   id: 'qa_' + randomUUID(),
                   type: 'function',
-                  function: appCall
-                    ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
-                    : nativeCall
-                      ? { name: 'native_online_fixture', arguments: '{}' }
-                      : pluginCall
-                        ? { name: 'custom_inspect_readme', arguments: '{"input":"README.txt"}' }
-                        : exportFile
-                          ? { name: 'chat_export', arguments: '{"path":"existing-image.png"}' }
-                          : { name: 'project_read', arguments: '{"path":"README.txt"}' },
+                  function: ask
+                    ? {
+                        name: 'ask_user',
+                        arguments:
+                          '{"question":"请选要继续的方案","options":["用户选择甲","用户选择乙"]}',
+                      }
+                    : appCall
+                      ? { name: 'app_functions', arguments: '{"action":"catalog"}' }
+                      : nativeCall
+                        ? { name: 'native_online_fixture', arguments: '{}' }
+                        : pluginCall
+                          ? { name: 'custom_inspect_readme', arguments: '{"input":"README.txt"}' }
+                          : exportFile
+                            ? { name: 'chat_export', arguments: '{"path":"existing-image.png"}' }
+                            : { name: 'project_read', arguments: '{"path":"README.txt"}' },
                 },
               ],
             },
@@ -310,6 +322,47 @@ test(
       ),
       JSON.stringify(appResult),
     );
+    const questionJob = submit(randomUUID(), 'ASK_USER_NATIVE_' + randomUUID());
+    await request('/relay/submissions', questionJob, owner.token);
+    const [questionState] = await pollUntil([questionJob], (rows) =>
+      rows[0].uiRequests?.some((q) => q.status === 'pending'),
+    );
+    assert.equal(questionState.phase, '等待你的回复');
+    const question = questionState.uiRequests.find((q) => q.status === 'pending');
+    const pendingQuestions = await request(
+      '/relay/device/workspace/jobs/' + questionJob.id + '/app-functions',
+      {
+        action: 'invoke',
+        name: 'assistant.questions',
+        input: {},
+        callId: 'inspect-current-question',
+      },
+      device.token,
+    );
+    assert.equal(pendingQuestions.result.questions[0].id, question.id);
+    const beforeAnswer = calls.length;
+    await pause(650);
+    assert.equal(calls.length, beforeAnswer, 'Pi continued without a user answer');
+    const redisplayed = (
+      await request('/relay/conversations/' + questionJob.conversationId, undefined, owner.token)
+    ).jobs;
+    assert.equal(
+      redisplayed[0].uiRequests[0].id,
+      question.id,
+      'a remounted chat lost its pending question',
+    );
+    await request(
+      '/relay/jobs/' + questionJob.id + '/ui',
+      { id: question.id, value: '用户选择乙' },
+      owner.token,
+    );
+    const [answered] = await pollUntil(
+      [questionJob],
+      (rows) => rows[0].status === 'done' || rows[0].status === 'error',
+    );
+    assert.equal(answered.status, 'done', JSON.stringify(answered));
+    assert.equal(answered.uiRequests[0].status, 'resolved');
+    assert.equal(answered.tools.filter((t) => t.name === 'ask_user').length, 1);
     const delivery = submit(randomUUID(), 'EXPORT_FILE_' + randomUUID());
     await request('/relay/submissions', delivery, owner.token);
     const [delivered] = await pollUntil(

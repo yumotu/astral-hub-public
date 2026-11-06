@@ -5,6 +5,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { localEnvironment, terminateTree } from './process-tree.mjs';
 import { checkGrant } from './workspace.mjs';
+import { activityDeadline } from './assets/activity-deadline.mjs';
 export async function createComputerTasks({
   config: configuration,
   configPath,
@@ -117,9 +118,18 @@ export async function createComputerTasks({
       }
     }
     const heartbeat = setInterval(() => void beat(), 2000);
-    const timeout = setTimeout(() => stop(record), 920000);
+    const timeout = activityDeadline(920000, () => stop(record));
+    const waiting = new Set();
     child.on('message', (message) => {
       if (message.type === 'progress') {
+        timeout.touch();
+        const next = new Set(
+          (message.state.uiRequests || []).filter((r) => r.status !== 'resolved').map((r) => r.id),
+        );
+        for (const id of next) timeout.wait(id);
+        for (const id of waiting) if (!next.has(id)) timeout.resume(id);
+        waiting.clear();
+        for (const id of next) waiting.add(id);
         record.latest = message.state;
         record.dirty = true;
         if (message.state.revision === 1) report();
@@ -143,7 +153,7 @@ export async function createComputerTasks({
     child.once('exit', () => {
       clearInterval(progressTimer);
       clearInterval(heartbeat);
-      clearTimeout(timeout);
+      timeout.close();
       clearTimeout(record.killTimer);
       if (!record.result) {
         const result = {

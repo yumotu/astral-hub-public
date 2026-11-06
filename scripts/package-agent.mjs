@@ -16,6 +16,8 @@ export function buildAgent(root = process.cwd(), { web = false } = {}) {
     'protocol.mjs',
     'file-diff.mjs',
     'rpc-prompt.mjs',
+    'activity-deadline.mjs',
+    'ask-user.mjs',
     'stream-writer.mjs',
     'package-transaction.mjs',
     'document-text.mjs',

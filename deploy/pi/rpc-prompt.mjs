@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { activityDeadline } from './activity-deadline.mjs';
+const written = new WeakMap();
 
 export function strictLines(input, maxBytes = 4 * 1024 * 1024) {
   const iterator = (async function* () {
@@ -30,6 +32,7 @@ export function writeRpcRecord(client, record) {
   const stdin = client.process?.stdin;
   if (!stdin || stdin.destroyed || !stdin.writable) throw new Error('Pi RPC 已关闭。');
   stdin.write(JSON.stringify(record) + '\n');
+  for (const listener of written.get(client) || []) listener(record);
 }
 
 export function sessionPrompt(request, history, messageCount) {
@@ -49,7 +52,17 @@ export async function promptAndSettle(client, message, images, timeout = 900000)
     resolve = a;
     reject = b;
   });
+  const deadline = activityDeadline(timeout, () =>
+    reject(new Error('Pi 长时间没有活动，执行超时。')),
+  );
+  const replies = (record) => {
+    if (record.type === 'extension_ui_response') deadline.resume(record.id);
+  };
+  if (!written.has(client)) written.set(client, new Set());
+  written.get(client).add(replies);
   const unsubscribe = client.onEvent((event) => {
+    deadline.touch();
+    if (extensionUiRequest(event)) deadline.wait(event.id);
     if (event.type === 'response' && event.id === id) {
       if (!event.success) reject(new Error(event.error || 'Pi 拒绝了请求。'));
       else {
@@ -62,7 +75,6 @@ export async function promptAndSettle(client, message, images, timeout = 900000)
       if (disposition) resolve(disposition);
     }
   });
-  const timer = setTimeout(() => reject(new Error('Pi 执行超时。')), timeout);
   const child = client.process;
   const exited = () => reject(new Error('Pi 进程已退出。'));
   child?.once('exit', exited);
@@ -70,7 +82,8 @@ export async function promptAndSettle(client, message, images, timeout = 900000)
     writeRpcRecord(client, { id, type: 'prompt', message, ...(images ? { images } : {}) });
     return await done;
   } finally {
-    clearTimeout(timer);
+    deadline.close();
+    written.get(client)?.delete(replies);
     unsubscribe();
     child?.off('exit', exited);
   }

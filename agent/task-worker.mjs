@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { RpcClient } from '@earendil-works/pi-coding-agent';
 import { createCollector, toolPath, toolOutput } from './assets/protocol.mjs';
-import { promptAndSettle } from './assets/rpc-prompt.mjs';
+import {
+  promptAndSettle,
+  extensionUiRequest,
+  writeRpcRecord,
+  customMessageText,
+} from './assets/rpc-prompt.mjs';
 import { createStreamWriter } from './assets/stream-writer.mjs';
 import { redact } from './assets/project-files.mjs';
 import { checkGrant } from './workspace.mjs';
@@ -22,6 +27,8 @@ let client,
   steerTail = Promise.resolve();
 const pending = [];
 const controls = new Set();
+const dialogs = new Map();
+let answerDialog;
 const send = (value) => {
   if (process.connected) process.send(value);
 };
@@ -54,6 +61,10 @@ process.on('message', (message) => {
     cancel();
     return;
   }
+  if (message.type === 'extension_ui_response') {
+    answerDialog?.(message);
+    return;
+  }
   if (message.type === 'steer') {
     if (!promptStarted && !finished) {
       pending.push(message);
@@ -74,9 +85,38 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
     here = dirname(fileURLToPath(import.meta.url)),
     collector = createCollector({ projectMode: true });
   let releasePackages;
-  let state = { output: '', thinking: '', phase: '正在连接本机Pi', tools: [] },
+  let state = { output: '', thinking: '', phase: '正在连接本机Pi', tools: [], uiRequests: [] },
     revision = 0;
   const publish = () => send({ type: 'progress', state: { ...state, revision: ++revision } });
+  answerDialog = (response) => {
+    const request = dialogs.get(response.id);
+    if (!request || cancelled || !accepting) return;
+    const { id, value, confirmed, cancelled: dismissed } = response;
+    if (
+      dismissed !== true &&
+      (request.method === 'confirm'
+        ? typeof confirmed !== 'boolean'
+        : typeof value !== 'string' ||
+          value.length > 12000 ||
+          (request.method === 'select' && !request.options.includes(value)))
+    )
+      return;
+    writeRpcRecord(client, {
+      type: 'extension_ui_response',
+      id,
+      ...(dismissed
+        ? { cancelled: true }
+        : request.method === 'confirm'
+          ? { confirmed }
+          : { value }),
+    });
+    dialogs.delete(id);
+    state.uiRequests = state.uiRequests.map((r) =>
+      r.id === id ? { ...r, status: 'resolved' } : r,
+    );
+    state.phase = dialogs.size ? '等待你的回复' : '正在继续任务';
+    publish();
+  };
   const writer = createStreamWriter((e) => {
     if (e.type === 'text_delta') {
       state.output = (state.output + e.delta).slice(-48000);
@@ -166,6 +206,7 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       'chat_files',
       'chat_read',
       'app_functions',
+      'ask_user',
       ...extraToolNames,
       ...(job.access === 'edit' ? ['project_write', 'project_edit'] : []),
       ...(job.access === 'edit' ? extraWriteToolNames : []),
@@ -246,6 +287,16 @@ async function run({ job, config, configPath, backupDir, piEntry }) {
       },
     });
     client.onEvent((e) => {
+      const dialog = extensionUiRequest(e);
+      if (dialog && !/^(access:|mail:)/.test(dialog.id) && !dialogs.has(dialog.id)) {
+        writer.flush();
+        dialogs.set(dialog.id, dialog);
+        state.uiRequests = [...state.uiRequests, { ...dialog, status: 'pending' }].slice(-100);
+        state.phase = '等待你的回复';
+        publish();
+      }
+      const custom = customMessageText(e);
+      if (custom) writer.write({ type: 'text_delta', delta: redact(custom) });
       if (
         e.type === 'message_end' ||
         e.type === 'tool_execution_start' ||

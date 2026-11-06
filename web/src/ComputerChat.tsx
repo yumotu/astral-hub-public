@@ -16,6 +16,7 @@ import { ToolLog, type ToolRun } from './ToolLog';
 import { useMessageOutbox } from './message-outbox';
 import { MessageOutbox } from './MessageOutbox';
 import { AppFunctionRequests } from './AppFunctionRequests';
+import { PluginRequests, type PluginRequest } from './PluginRequests';
 import { RunSummary } from './ExecutionInfo';
 import { useAssistantPreferences } from './assistant-preferences';
 import { computerChatStorageKey } from '../../shared/assistant-target.mjs';
@@ -40,6 +41,7 @@ type Job = {
   thinking: string;
   status: string;
   phase: string;
+  uiRequests?: PluginRequest[];
   tools: ToolRun[];
   artifacts?: ChatFile[];
   error?: string;
@@ -463,6 +465,7 @@ export function ComputerChat({
                     active={j.status === 'running'}
                   />
                   <ToolLog tools={j.tools} />
+                  <PluginRequests settings={settings} task={j} target="computer" />
                   {j.output && (
                     <Suspense fallback={<pre>{j.output}</pre>}>
                       <Markdown text={j.output} />

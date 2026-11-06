@@ -14,6 +14,7 @@ COPY --chown=node:node terminal-runtime.mjs host-tools.mjs ./
 COPY --chown=node:node plugin-load-plan.mjs runtime-diagnostics.mjs package-transaction.mjs package-preflight.mjs ./
 COPY --chown=node:node rpc-startup.mjs ./
 COPY --chown=node:node stream-writer.mjs ./
+COPY --chown=node:node activity-deadline.mjs ask-user.mjs ./
 COPY --chown=node:node office-content.mjs document-text.mjs ./
 COPY --chown=node:node attachment-limits.mjs ./
 COPY --chown=node:node usage-telemetry.mjs ./

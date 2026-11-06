@@ -107,3 +107,67 @@ test('RPC framing preserves Unicode separators and split UTF-8 while rejecting i
     }
   }, /不完整/);
 });
+
+test('active long work refreshes silence deadlines; unanswered questions suspend them until a real answer', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let emit,
+    prompt,
+    replied = 0,
+    completed = false;
+  const client = fixture((p, fire) => {
+    emit = fire;
+    if (p.type === 'prompt') {
+      prompt = p;
+      fire({ type: 'response', id: p.id, success: true, data: { disposition: 'started' } });
+    } else if (p.type === 'extension_ui_response') replied++;
+  });
+  const work = promptAndSettle(client, 'long work', undefined, 100).then(() => {
+    completed = true;
+  });
+  for (let n = 0; n < 20; n++) {
+    t.mock.timers.tick(90);
+    emit({ type: 'message_update' });
+  }
+  emit({ type: 'extension_ui_request', id: 'question', method: 'input', title: 'Which result?' });
+  t.mock.timers.tick(100000);
+  await Promise.resolve();
+  assert.equal(completed, false);
+  assert.equal(replied, 0, 'no automatic answer is permitted');
+  const { writeRpcRecord } = await import('../deploy/pi/rpc-prompt.mjs');
+  writeRpcRecord(client, { type: 'extension_ui_response', id: 'question', value: 'the second' });
+  assert.equal(replied, 1);
+  t.mock.timers.tick(99);
+  emit({ type: 'agent_settled' });
+  await work;
+  assert.equal(completed, true);
+  assert.equal(client.listeners.size, 0);
+});
+
+test('cancelling a process still ends a human-waiting prompt', async () => {
+  const client = fixture((p, emit) => {
+    emit({ type: 'response', id: p.id, success: true, data: { disposition: 'started' } });
+    emit({ type: 'extension_ui_request', id: 'question', method: 'input' });
+  });
+  const work = promptAndSettle(client, 'wait', undefined, 100);
+  client.process.emit('exit', 143);
+  await assert.rejects(work, /进程已退出/);
+  assert.equal(client.listeners.size, 0);
+});
+
+test('many bounded RPC result frames do not exhaust a lifetime byte counter', async () => {
+  const { createCollector } = await import('../deploy/pi/protocol.mjs');
+  const collector = createCollector({ maxBytes: 1000 });
+  for (let n = 0; n < 50; n++)
+    collector.push(
+      JSON.stringify({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'turn ' + n }],
+          stopReason: 'stop',
+        },
+      }) + '\n',
+    );
+  assert.equal(collector.result().output, 'turn 49');
+  assert.throws(() => collector.push('x'.repeat(1001)), /单条输出过多/);
+});

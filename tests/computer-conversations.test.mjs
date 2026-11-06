@@ -720,3 +720,55 @@ test('computer app functions reuse scoped menus, freeze delete previews and exec
   assert.equal(usage.result.mode, 'estimate');
   assert.equal(usage.result.total.requests, 0);
 });
+
+test('computer questions persist and bind replies to one owner/job, reject stale choices, and preserve acknowledgement across progress', async (t) => {
+  const f = await fixture(t),
+    p = f.submit(undefined, 'ASK_USER');
+  await f.req('/relay/submissions', p, f.owner.token);
+  await f.poll();
+  const ui = {
+    id: randomUUID(),
+    method: 'select',
+    title: '选哪一项？',
+    options: ['甲', '乙'],
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  const progress = '/relay/device/workspace/jobs/' + p.id + '/progress';
+  const reply = '/relay/jobs/' + p.id + '/ui';
+  const snapshot = () =>
+    f.req('/relay/conversations/' + p.conversationId, undefined, f.owner.token);
+  await f.req(progress, { ...f.state, uiRequests: [ui] }, f.device.token);
+  const version = (await snapshot()).body.conversation.version;
+  assert.equal((await f.req(reply, { id: ui.id, value: '甲' }, f.other.token)).status, 404);
+  assert.equal((await f.req(reply, { id: ui.id, value: '丙' }, f.owner.token)).status, 400);
+  assert.equal((await f.req(reply, { id: ui.id, value: '乙' }, f.owner.token)).status, 200);
+  assert.notEqual((await snapshot()).body.conversation.version, version);
+  assert.equal((await f.req(reply, { id: ui.id, value: '甲' }, f.owner.token)).status, 409);
+  // Device progress sent before it received the answer must not reopen a question.
+  await f.req(progress, { ...f.state, revision: 2, uiRequests: [ui] }, f.device.token);
+  assert.equal((await snapshot()).body.jobs[0].uiRequests[0].status, 'responding');
+  const beat = () => f.req('/relay/device/heartbeat', { jobId: p.id }, f.device.token);
+  for (let i = 0; i < 2; i++)
+    assert.deepEqual((await beat()).body.controls, [
+      { type: 'extension_ui_response', id: ui.id, value: '乙' },
+    ]);
+  await f.req(
+    progress,
+    { ...f.state, revision: 3, uiRequests: [{ ...ui, status: 'resolved' }] },
+    f.device.token,
+  );
+  assert.deepEqual((await beat()).body.controls, []);
+  assert.equal((await snapshot()).body.jobs[0].uiRequests[0].status, 'resolved');
+  // A late packet must not return a resolved question to pending.
+  await f.req(progress, { ...f.state, revision: 4, uiRequests: [ui] }, f.device.token);
+  assert.equal((await snapshot()).body.jobs[0].uiRequests[0].status, 'resolved');
+  const forged = { ...ui, id: 'access:fake' };
+  assert.equal(
+    (await f.req(progress, { ...f.state, revision: 5, uiRequests: [forged] }, f.device.token))
+      .status,
+    400,
+  );
+  await f.req('/relay/jobs/' + p.id + '/cancel', {}, f.owner.token);
+  assert.equal((await f.req(reply, { id: ui.id, value: '甲' }, f.owner.token)).status, 409);
+});

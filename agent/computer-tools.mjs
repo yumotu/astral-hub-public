@@ -7,6 +7,7 @@ import executeTools from './execute-tools.mjs';
 import packageRead from './package-read.mjs';
 import appTools from './assets/app-tools.mjs';
 import inputTools from './input-tools.mjs';
+import askUser from './assets/ask-user.mjs';
 import { createComputerPluginStore } from './plugin-store.mjs';
 import { pluginArguments, pluginPermissions } from './assets/computer-plugin.mjs';
 export default async function (pi) {
@@ -25,6 +26,7 @@ export default async function (pi) {
   packageRead(adapter);
   appTools(adapter);
   inputTools(adapter);
+  askUser(adapter);
   const grant = await currentGrant(),
     store = createComputerPluginStore(process.env.ASTRAL_DEVICE_CONFIG);
   for (const item of await store.list(grant.id)) {

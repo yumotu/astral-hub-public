@@ -280,6 +280,19 @@ export function registerAppFeatures(engine, { community, mail, learning, body, r
   const computer = (ctx, path, input, method) =>
     request((req, url, json, c) => relay.after(req, url, json, c.actor), ctx, path, input, method);
   engine.register({
+    name: 'assistant.questions',
+    description:
+      '查看当前任务已提出的问题及待答复状态，限当前账号和执行位置。需要缺失信息时使用原生ask_user工具等待真实用户答复；此查询不能代替用户回答，也不能批准命令或邮件。',
+    schema: empty,
+    execute: async (ctx) => {
+      const task =
+        ctx.origin === 'computer'
+          ? (await computer(ctx, '/api/relay/jobs/' + ctx.task)).job
+          : (await social(ctx, '/api/pi/tasks')).tasks.find((t) => t.id === ctx.task);
+      return { questions: task?.uiRequests || [] };
+    },
+  });
+  engine.register({
     name: 'usage.summary',
     description:
       '查询当前账号Token用量和按DeepSeek官网价核算的人民币费用，from/to为北京时间日期。管理员可指定账号或查看全部；仅查询，不扣余额，不把缺失统计当作零。',
