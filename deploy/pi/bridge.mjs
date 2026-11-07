@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFile, writeFile, rm, mkdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { timingSafeEqual, randomBytes, createHash } from 'node:crypto';
 import { z } from '/extensions/node_modules/zod/index.js';
 import { StringDecoder } from 'node:string_decoder';
 import { createProjects } from './projects.mjs';
@@ -278,6 +278,9 @@ async function execute(p, event) {
           ASTRAL_PROJECT_ACCESS: p.access || 'read',
           ASTRAL_PROJECTS_FILE: join(dir, 'projects.json'),
           ASTRAL_PROJECT_BACKUPS: backupDir,
+          ASTRAL_BASH_CACHE: selected
+            ? join(sessionRoot, 'bash-cache', createHash('sha256').update(selected.root).digest('hex'))
+            : '',
           ASTRAL_SKILLS_ROOT: skillsRoot,
           ASTRAL_PACKAGES_ROOT: packagesRoot,
           ASTRAL_SKILLS_WRITE: p.canManageSkills === true ? '1' : '0',

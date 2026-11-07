@@ -65,6 +65,19 @@ try {
   proof.memberIsolation = true;
   proof.credentialsNotInherited = true;
 
+  const cacheDir = join(base, 'private-cache');
+  await writeFile(join(base, 'session-secret.txt'), 'synthetic-session-secret');
+  await mkdir(join(cwd, 'data'));
+  await writeFile(join(cwd, 'data', 'private.txt'), 'must-stay-hidden');
+  const cached = createSandboxOperations(projects, cwd, { cacheDir });
+  await command(cached, 'mkdir -p "$XDG_CACHE_HOME/tectonic/bundles/data"; printf cached > "$XDG_CACHE_HOME/tectonic/bundles/data/probe"; printf temporary > /tmp/previous-command');
+  await command(cached, node(`const fs=require('node:fs');const cache=process.env.XDG_CACHE_HOME;if(fs.readFileSync(cache+'/tectonic/bundles/data/probe','utf8')!=='cached')throw Error('cache lost');fs.mkdirSync(cache+'/tectonic/bundles/data/next');fs.writeFileSync(cache+'/tectonic/bundles/data/next/file','written');if(fs.existsSync('/tmp/previous-command'))throw Error('tmp persisted');if(fs.existsSync(${JSON.stringify(join(base, 'session-secret.txt'))}))throw Error('cache parent exposed');if(fs.existsSync('data/private.txt'))throw Error('project data unmasked');console.log('CACHE_PERSISTS_WITH_ISOLATION')`));
+  await command(cached, 'test "$(cat "$XDG_CACHE_HOME/tectonic/bundles/data/next/file")" = written');
+  const otherCache = createSandboxOperations(projects, cwd, { cacheDir: join(base, 'other-conversation-cache') });
+  await command(otherCache, 'test ! -e "$XDG_CACHE_HOME/tectonic/bundles/data/probe"');
+  proof.persistentCacheWithPrivateMasks = true;
+  proof.cacheParentAndOtherConversationNotVisible = true;
+
   server = createServer((_req, res) => res.end('OWNED_QA_LOOPBACK'));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const local = `http://127.0.0.1:${server.address().port}`;

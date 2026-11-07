@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { lstat, readdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath } from 'node:fs/promises';
 import { join, resolve, isAbsolute } from 'node:path';
 const privateName =
   /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|id_rsa.*|id_ed25519.*|auth\.json|credentials(?:\..*)?)$|\.(?:pem|key|p12|pfx|keystore|jks|sqlite|sqlite3|db|log)$/i;
@@ -25,7 +25,13 @@ export function validCommand(command, timeout = 120) {
     throw new Error('Bash 超时必须大于 0 且不超过 300 秒。');
   return timeout;
 }
-export async function sandboxArgs(projects, cwd, command, skills = [], { network = false } = {}) {
+export async function sandboxArgs(
+  projects,
+  cwd,
+  command,
+  skills = [],
+  { network = false, cacheDir } = {},
+) {
   const selected = projects.find((p) => cwd === p.root);
   if (!selected || selected.readOnly) throw new Error('请在可写项目中选择智能体模式后运行 Bash。');
   const args = [
@@ -127,6 +133,34 @@ export async function sandboxArgs(projects, cwd, command, skills = [], { network
     await walk(p.root);
   }
   for (const mask of masks) args.push(...mask);
+  if (cacheDir) {
+    // The bridge supplies a private, conversation/project-scoped directory. Only
+    // this cache is exposed, never the surrounding native session or credentials.
+    // Keep all project masks intact: tools such as Tectonic use cache/data, which
+    // must not be mistaken for an application's protected project data directory.
+    const overlaps = (root) =>
+      cacheDir === root || cacheDir.startsWith(root + '/') || root.startsWith(cacheDir + '/');
+    if (
+      !isAbsolute(cacheDir) ||
+      resolve(cacheDir) !== cacheDir ||
+      cacheDir === '/' ||
+      projects.some((p) => overlaps(p.root)) ||
+      skills.some((s) => overlaps(s.path))
+    )
+      throw new Error('命令缓存路径不正确。');
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    const info = await lstat(cacheDir);
+    if (!info.isDirectory() || info.isSymbolicLink() || (await realpath(cacheDir)) !== cacheDir)
+      throw new Error('命令缓存不能使用链接或变化的路径。');
+    args.push(
+      '--bind',
+      cacheDir,
+      '/home/agent/.cache',
+      '--setenv',
+      'XDG_CACHE_HOME',
+      '/home/agent/.cache',
+    );
+  }
   for (const skill of skills) {
     if (
       !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name) ||
@@ -165,6 +199,7 @@ export function createSandboxOperations(
     getNetworkPolicy = async () => ({ enabled: false, version: 0, expiresAt: null }),
     spawnProcess = spawn,
     networkPollMs = 2000,
+    cacheDir,
   } = {},
 ) {
   return {
@@ -173,7 +208,10 @@ export function createSandboxOperations(
       if (signal?.aborted) throw new Error('aborted');
       const policy = await getNetworkPolicy();
       const network = policy.enabled === true && policy.expiresAt > Date.now();
-      const args = await sandboxArgs(projects, cwd, command, await getSkillMounts(), { network });
+      const args = await sandboxArgs(projects, cwd, command, await getSkillMounts(), {
+        network,
+        cacheDir,
+      });
       if (network) {
         const current = await getNetworkPolicy();
         if (

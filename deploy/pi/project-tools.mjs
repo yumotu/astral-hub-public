@@ -34,10 +34,6 @@ export default async function (pi) {
     description: '先读取文件获得 sha256；新文件使用 new',
     maxLength: 64,
   });
-  let calls = 0;
-  pi.on('agent_start', () => {
-    calls = 0;
-  });
   function register(name, label, description, parameters, run) {
     pi.registerTool({
       name,
@@ -46,7 +42,6 @@ export default async function (pi) {
       parameters,
       async execute(_toolCallId, params, signal) {
         if (signal?.aborted) throw new Error('操作已取消');
-        if (++calls > 60) throw new Error('本轮最多执行 60 次文件工具，请总结后等待下一条消息');
         try {
           const target = params.projectId || id;
           files.project(target);
