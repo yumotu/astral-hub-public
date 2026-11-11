@@ -8,7 +8,11 @@ export type ChatFile = {
   bytes: number;
   sha256?: string;
   createdAt?: string;
+  source?: 'dsh';
 };
+function fileBase(conversation: string, source?: 'dsh') {
+  return source === 'dsh' ? `/api/agent/remote/conversations/${conversation}/files` : `/api/pi/conversations/${conversation}/files`;
+}
 function headers(settings: Settings) {
   return { Authorization: 'Bearer ' + (settings.sessionToken || settings.token) };
 }
@@ -20,7 +24,7 @@ export async function fetchChatFile(
 ) {
   validateSettings(settings);
   const response = await fetch(
-    `${settings.url.replace(/\/$/, '')}/api/pi/conversations/${conversation}/files/${file.id}`,
+    `${settings.url.replace(/\/$/, '')}${fileBase(conversation, file.source)}/${file.id}`,
     {
       headers: headers(settings),
       redirect: 'error',
@@ -38,13 +42,18 @@ export async function fetchChatFile(
   const blob = await response.blob();
   if (blob.size > attachmentMaxBytes) throw new Error(attachmentSizeMessage);
   if (blob.size !== file.bytes) throw new Error('附件下载不完整，请重新打开。');
+  if (file.sha256) {
+    const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    const actual = [...new Uint8Array(digest)].map(v => v.toString(16).padStart(2, '0')).join('');
+    if (actual !== file.sha256) throw new Error('附件摘要校验失败，请重新打开。');
+  }
   return blob;
 }
 export async function uploadChatFile(
   settings: Settings,
   conversation: string,
   file: File,
-  options: { signal?: AbortSignal; timeout?: number } = {},
+  options: { signal?: AbortSignal; timeout?: number; source?: 'dsh' } = {},
 ): Promise<ChatFile> {
   validateSettings(settings);
   if (file.size > attachmentMaxBytes) throw new Error(attachmentSizeMessage);
@@ -57,7 +66,7 @@ export async function uploadChatFile(
   let response: Response;
   try {
     response = await fetch(
-      `${settings.url.replace(/\/$/, '')}/api/pi/conversations/${conversation}/files?name=${encodeURIComponent(file.name)}`,
+      `${settings.url.replace(/\/$/, '')}${fileBase(conversation, options.source)}?name=${encodeURIComponent(file.name)}`,
       {
         method: 'POST',
         headers: { ...headers(settings), 'Content-Type': 'application/octet-stream' },

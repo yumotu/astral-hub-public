@@ -424,6 +424,10 @@ async function workspaceLoop() {
             await readFile(new URL('./package.json', import.meta.url), 'utf8'),
           ).version,
           capabilities: [
+            'streaming',
+            'steering',
+            'cancellation',
+            'terminals',
             'chat_export',
             'chat_inputs',
             'thinking_levels',

@@ -1,4 +1,4 @@
-import { mkdirSync, createReadStream } from 'node:fs';
+import { mkdirSync, createReadStream, constants } from 'node:fs';
 import { open, rm, lstat, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -45,6 +45,8 @@ export function createChatFiles(db, { root, piRoot = root }) {
   };
   let uploading = new Set();
   const delivered = (owner, conversation, id) =>
+    (!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_task_files'").get() &&
+      !!db.prepare('SELECT 1 FROM dsh_task_files d JOIN pi_files f ON f.id=d.file_id AND f.owner=d.owner WHERE d.owner=? AND f.conversation_id=?' + (id ? ' AND f.id=?' : '')).get(...(id ? [owner, conversation, id] : [owner, conversation]))) ||
     (!!db
       .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_job_files'")
       .get() &&
@@ -157,6 +159,26 @@ export function createChatFiles(db, { root, piRoot = root }) {
     selected(owner, conversation, ids) {
       return ids.map((id) => publicFile(get(owner, conversation, id)));
     },
+    async readBytes(owner, conversation, id, maxBytes = maxFileBytes) {
+      const row = get(owner, conversation, id),
+        path = join(root, prefix(owner, conversation), id);
+      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const st = await handle.stat();
+        if (!st.isFile() || st.nlink > 1 || st.size !== row.bytes || st.size > maxBytes)
+          throw fail(413, '附件类型、大小或内容已变化。');
+        const bytes = Buffer.alloc(st.size);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const chunk = await handle.read(bytes, offset, bytes.length - offset, offset);
+          if (!chunk.bytesRead) throw fail(409, '附件读取不完整。');
+          offset += chunk.bytesRead;
+        }
+        if (createHash('sha256').update(bytes).digest('hex') !== row.sha256)
+          throw fail(409, '附件摘要校验失败。');
+        return bytes;
+      } finally { await handle.close(); }
+    },
     async download(owner, conversation, id, res) {
       const row = get(owner, conversation, id),
         path = join(root, prefix(owner, conversation), id);
@@ -204,9 +226,19 @@ export function createChatFiles(db, { root, piRoot = root }) {
   };
 }
 let activeUploads = 0;
+let activeDocumentReads = 0;
+// The App has a 512 MiB budget. OCR and two 50 MiB upload buffers must not
+// overlap; this bounds resources without changing any conversation tool count.
+export function reserveDocumentRead() {
+  if (activeUploads || activeDocumentReads) throw fail(429, '附件正在上传或解析，请稍后重试。');
+  activeDocumentReads++;
+  let released = false;
+  return () => { if (!released) { released = true; activeDocumentReads--; } };
+}
 export async function readUpload(req, maxBytes = maxFileBytes) {
   const sizeMessage = `单个文件最多${maxBytes / 1024 / 1024} MiB。`;
   if (Number(req.headers['content-length']) > maxBytes) throw fail(413, sizeMessage);
+  if (activeDocumentReads) throw fail(429, '附件正在解析，请等待本批解析完成后上传。');
   // Each request temporarily holds both chunks and the concatenated buffer.
   // Bound memory before reading bodies, including chunked/slow requests.
   if (activeUploads >= 2) throw fail(429, '当前附件上传繁忙，请稍后再试。');

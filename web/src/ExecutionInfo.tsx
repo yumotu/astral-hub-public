@@ -31,12 +31,20 @@ export function RunSummary({
   execution,
   status = 'done',
   phase,
+  uiRequests,
+  stopPending = false,
+  backend = 'pi',
+  connection = 'connected',
 }: {
   execution?: Pick<PiExecution, 'startedAt' | 'finishedAt'> | null;
   status?: string;
   phase?: string;
+  uiRequests?: { status: string }[];
+  stopPending?: boolean;
+  backend?: 'pi' | 'dsh';
+  connection?: 'connecting' | 'connected' | 'reconnecting';
 }) {
-  const state = runState(status, phase);
+  const state = runState(status, phase, { uiRequests, stopPending, connection });
   const running = status === 'running' || status === 'stopping';
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -63,7 +71,9 @@ export function RunSummary({
       ) : (
         <CircleAlert size={13} />
       )}
-      <span>Pi · {state.label}</span>
+      <span>
+        {backend === 'dsh' ? 'DSH' : 'Pi'} · {state.label}
+      </span>
       {elapsed !== null && (
         <span className="run-elapsed">
           <Clock3 size={11} />

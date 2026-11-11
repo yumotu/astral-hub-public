@@ -39,6 +39,7 @@ import {
   WandSparkles,
   Pencil,
   CheckCircle2,
+  PawPrint,
 } from 'lucide-react';
 import {
   deck,
@@ -73,6 +74,7 @@ import { SocialPage } from './SocialPage';
 import { PiPage } from './PiPage';
 import { MailPage } from './MailPage';
 import { LearningPage } from './LearningPage';
+import { PetPage } from './PetPage';
 import { interpretReading, runAIPlugin, tarotQuestions } from './ai';
 import { SettingsPage } from './SettingsPage';
 import { Gallery } from './Gallery';
@@ -95,6 +97,7 @@ import './tarot-mobile.css';
 import './chat-layout.css';
 import './mail-workspace.css';
 import './social-mobile.css';
+import './pet.css';
 
 function CardBack({ small = false }: { small?: boolean }) {
   return (
@@ -396,12 +399,15 @@ function Workspace({
             pi: '智能助手',
             mail: '邮件',
             learning: '学习',
+            pet: '智能桌宠',
             social: '联系人',
             plugins: '插件管理',
             account: '我的账号',
             settings: '连接与设置',
           } as Record<string, string>
         )[page];
+  const aiConfigured =
+    settings.aiMode === 'local' ? !!settings.apiKey.trim() : !!status?.aiConfigured;
   const nav = [
     { id: 'pi' as Page, label: '智能助手', icon: Bot },
     { id: 'social' as Page, label: '联系人', icon: Users },
@@ -510,6 +516,14 @@ function Workspace({
               <BookOpen size={19} />
               学习
             </button>
+            <button
+              className={page === 'pet' ? 'active' : ''}
+              aria-current={page === 'pet' ? 'page' : undefined}
+              onClick={() => navigate('pet')}
+            >
+              <PawPrint size={19} />
+              桌宠
+            </button>
             {plugins.map((p) => (
               <button
                 key={p.id}
@@ -569,7 +583,7 @@ function Workspace({
           onClick={() => setMobileNav(false)}
         />
         <div
-          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'plugins' || page === 'mail' ? 'plugin-workspace' : ''}`}
+          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
         >
           {page !== 'pi' && (
             <header className="topbar">
@@ -651,6 +665,7 @@ function Workspace({
                 openPlugin={openPlugin}
                 openTarot={() => navigate('tarot')}
                 openLearning={() => navigate('learning')}
+                openPet={() => navigate('pet')}
                 plugins={plugins}
                 updatePlugins={setPlugins}
                 settings={settings}
@@ -698,6 +713,14 @@ function Workspace({
                 settings={settings}
                 session={session}
                 login={() => navigate('account')}
+              />
+            ) : page === 'pet' ? (
+              <PetPage
+                key={`${scope}:pet`}
+                settings={settings}
+                aiConfigured={aiConfigured}
+                scope={scope}
+                openSettings={() => navigate('settings')}
               />
             ) : (
               <SettingsPage
@@ -1349,6 +1372,7 @@ function Plugins({
   openPlugin,
   openTarot,
   openLearning,
+  openPet,
   plugins,
   updatePlugins,
   settings,
@@ -1361,6 +1385,7 @@ function Plugins({
   openPlugin: (id: string) => void;
   openTarot: () => void;
   openLearning: () => void;
+  openPet: () => void;
   plugins: Plugin[];
   updatePlugins: (plugins: Plugin[]) => void;
   settings: Settings;
@@ -1491,7 +1516,7 @@ function Plugins({
       </div>
       {!selectedId && (
         <div className="toolbar">
-          <span className="muted">{plugins.length + 1} 个插件 · 同一个 DeepSeek 连接</span>
+          <span className="muted">{plugins.length + 3} 个插件 · 同一个 DeepSeek 连接</span>
           <div className="action-row">
             <button className="secondary" onClick={() => openWish()}>
               <WandSparkles size={16} />
@@ -1537,6 +1562,19 @@ function Plugins({
             <div className="plugin-meta">讲解 · 练习 · 错题本</div>
             <button className="text-link" onClick={openLearning}>
               打开学习
+              <ArrowUpRight size={15} />
+            </button>
+          </article>
+          <article className="plugin-item builtin">
+            <div className="plugin-icon">
+              <PawPrint size={24} />
+            </div>
+            <span className="tag">内置 · 已启用</span>
+            <h2>智能桌宠</h2>
+            <p>一只会记得你心情的小屿，摸摸、喂食、聊天，陪你把今天过完。</p>
+            <div className="plugin-meta">陪伴 · 心情 · AI 对话</div>
+            <button className="text-link" onClick={openPet}>
+              打开桌宠
               <ArrowUpRight size={15} />
             </button>
           </article>

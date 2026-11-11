@@ -1,0 +1,404 @@
+{
+  "repository": "https://github.com/liguobao/ds-harness-remote",
+  "commit": "14037e78f45e14f7a5ad56c2266944548def7e3d",
+  "license": "MIT",
+  "build": "esbuild@0.28.2; node24 ESM; minify; external zod",
+  "patches": [
+    "AdaptiveTransport uses an injected per-connection WebSocket constructor when supplied; all three dial sites."
+  ],
+  "bundleSha256": "79dcadaf2275fff2f69feb064475419d15bc35ac09934317b60a37dcc795ed81",
+  "inputs": [
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/cipherState.js",
+      "sha256": "baa1e792c7bfcce6517402e15a7e1afa9ba826765cb8f0f62da2c1254d11fbb4"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/constants.js",
+      "sha256": "76b69e5c00ed2dafe66fb90afb79f3ebd8f5dd4626a162f9281b7d2c63d5037d"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/crypto/cipher.js",
+      "sha256": "341cb07d5b81de09b8f08df4df52f12b781142e9eb6f2797976fd8a2af66ed4f"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/crypto/hash.js",
+      "sha256": "87e6c8f7e0d1353619904e38c5ac348d982597d23c56a259b9b8ac3a62fe47f3"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/dhX25519.js",
+      "sha256": "3fb011e8cc48b57b9d8cdb67ca22fd4e8ca6ba3bf9150513cfc4b35b412cda38"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/dualLayer.js",
+      "sha256": "c06611ea9474707e9b9ca79f859852ae46e71f965b3da54eada8e378ead87318"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/errors.js",
+      "sha256": "7df611cd8036749661d8209f300680b301c74120ae07f1c1be1542ff62a6ce20"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/handshakePattern.js",
+      "sha256": "570f7458fbdae1b085021f0c2d8ba66d4d8af31bcf9127a085a28c68e7fadbb0"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/handshakeStatus.js",
+      "sha256": "219e0e811ac92391beab60ee1e6b271765c082915e75b8d7ebe1bd21e7c5e8cb"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/hybridHandshake.js",
+      "sha256": "b7f7327a4490e68e6838450956d0fda22c06518325120003c8e7882e0e8b0f13"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/hybridPatterns.js",
+      "sha256": "0882ae97e62745a6bcaa848920583978df11b39980a11180ab9bffbc419dd5a5"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/index.js",
+      "sha256": "4128ff6c697971a456a5dadbf2eceab046b1014d61fd315abe18b5ad6ced8652"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/kem.js",
+      "sha256": "e0cf44a4935c26a7ec83e33dbbd45553cca54358e4c0906b9ca9debf673d5e10"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/noiseHybrid.js",
+      "sha256": "8923862b5fe36049761c48216937202e8dd6412f92be0bba42bafc0050bb511a"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/noiseNq.js",
+      "sha256": "e52fe1231f868502d8ecf038504464c6f4cf554f2cc669913ddfa1db8b837974"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/nqHandshake.js",
+      "sha256": "4686653070ef7f1e56d1ccf4cc07f9b24df66d4c6ed43d779c30b72a4f0d37e9"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/nqPatterns.js",
+      "sha256": "5a97786239c8ce96418fcb555b4586042e07838aa45b2af776ec498e8ef46c04"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/pqHandshake.js",
+      "sha256": "eb2e18246b4939dfbe0b753e6e1851ee7bd4cf862b38072a2e4212838aa35fb1"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/pqPatterns.js",
+      "sha256": "287cba43f4f5fd1ac5b6b05459217a1bd39c48120ef1fd652914d5c1b8d3b0aa"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/protocolNames.js",
+      "sha256": "70d16214d713ba85953298ccc95727fb507678aeb99bf7c582894b5c316830ff"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/symmetricState.js",
+      "sha256": "aaac697bf7849d7b760dff4d4c429900931d496153a530ad0614e184c01fbfe6"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/dist/transportState.js",
+      "sha256": "571f908f3c3e224b8da1f876eb5563a057a0b3358dfea5dc1f6a99c5e1297bbc"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/_arx.js",
+      "sha256": "bcd2c8e9d3a9252022c74185340d69d724d2c2eed191f5599a2cec5005507d93"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/_poly1305.js",
+      "sha256": "5d2afd73b40dbafb7b6740c6e6388e7123c79a4e57306861b28c5734925fa84d"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/_polyval.js",
+      "sha256": "735b078133e0c5a97dd984a21389f152dc7958b283f52504f6f0906ded243fa5"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/aes.js",
+      "sha256": "ccfcf8665725871526d8e05e58071959c66f14788dacd2d96e944a2d50e6e98f"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/chacha.js",
+      "sha256": "5f1c00575e227b75163f4bac50b79442dec50ee3047c46c18887808ba8af0a69"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/ciphers/utils.js",
+      "sha256": "08bce2a6b116205e0d114ed3da22490384d933c6549f0b1a43e2817349465147"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/curve.js",
+      "sha256": "dbaeee3b41ff47efb76b78e14170fe4dda7c7ecdc387c402f16c5118e0bac356"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/edwards.js",
+      "sha256": "c97067225e3626227cdd944b1efd6375cdd6e847812beb7fcdef7e23488edb00"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/fft.js",
+      "sha256": "a4b2ff7ca33f4acc85d61f0e83ec3303c3f6b38ecc19b20d0f6462d820e518cf"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/frost.js",
+      "sha256": "3afe15cce607c8af0eed9401e8d05885c66c106b1592bcc0a84d8f134a161f83"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/hash-to-curve.js",
+      "sha256": "e3c97e7d0827b728b14e3311ed11d8e386d8a70d8fc77e0b9fd2a3090f19d955"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/modular.js",
+      "sha256": "9ced3aa10598277a735e54f7b61d88e929d565da884ba5385f9006ebb3b6aab2"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/montgomery.js",
+      "sha256": "cdafa8816dad5a24475ec51952c5f71fdd5d1b46880ab982694c4f8ff605fc46"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/abstract/oprf.js",
+      "sha256": "2df89407a69c10e0809b378ff7a0bc5530963994fe8fd65ec5342e0d2f88c75b"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/ed25519.js",
+      "sha256": "e13f6c50c36feb0d18bf7986d5f881bcefb5f1f5b16de3cc5ee7693254c7a0b5"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/curves/utils.js",
+      "sha256": "be9ff86aef76419376e4d66cf01a134f3117f1f8dd62d81f1b79100145503367"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/_blake.js",
+      "sha256": "cabbff61d1f373bac45594ad758df7c42e176464ddbb94b44f5533fa977a4f56"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/_md.js",
+      "sha256": "60cf3010fda89e3e4d3f0e7ff1ce249e9c467f34b4fd41b6fd6101d9f69be763"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/_u64.js",
+      "sha256": "b09da8c07fe8187c07649494cdb7cd0bcf13df90b506a9473d19e4d5f8c2e102"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/blake2.js",
+      "sha256": "03f00237bcc0b4d822a80f7c0ac22e42632c48e246c3b6da584e6452186e32f0"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/hmac.js",
+      "sha256": "fec9f8f3aeda785ea2de91cc4c059d54ef98196261c026c43f48341007ae52c9"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/sha2.js",
+      "sha256": "471746bba6ec4c6238ca41358d1d3b40b6ff31cf3363f0b4d550c649c1a8e83b"
+    },
+    {
+      "file": "dependencies/@lukeburns/clatterjs/node_modules/@noble/hashes/utils.js",
+      "sha256": "6b4397dd40cef490bb70bf59784d2b053dc331755700ae30ff28d30ec5fccb6b"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/_arx.js",
+      "sha256": "d4c0112267f8b6f7d4de238edf87b19e60e373aa438c5400ebf189ed1e42f95c"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/_poly1305.js",
+      "sha256": "9c7e5aaa972f03d8ca7fe3aa41340b6d4d1ee1228d414634e25e1beb539ac69f"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/chacha.js",
+      "sha256": "ad0a9595ab6c083500fbb81c5ea14af4b79f57aa9b1a56b2d3ad738918865a9e"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/cryptoNode.js",
+      "sha256": "26f80c6a85b6ef7bfd83b99d95b2b5ba8764397b9465feff32e81ba4e6416619"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/utils.js",
+      "sha256": "306e36d8c59519a289756f5775e2fc2faed9b02b6b60029a7c8e3e943522e441"
+    },
+    {
+      "file": "dependencies/@noble/ciphers/esm/webcrypto.js",
+      "sha256": "3dff998ed80d8d7166658b6d5e25a56ebb1ea6d82029731a710057faaf6b5922"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/abstract/curve.js",
+      "sha256": "3aa6e31b64ee99cfeaa4e64764e0d262d8736128ebd001a9e680bc9dcf66f01d"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/abstract/edwards.js",
+      "sha256": "94004e8dc1a805c1d27f0d14af4c9655cdfd43cb9732b6404ba0211fa731c046"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/abstract/hash-to-curve.js",
+      "sha256": "52d3315f4e9bf3ad9c901deaeb2fe861c6ea2f92ff8c9f792653b7751117413f"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/abstract/modular.js",
+      "sha256": "5b42d5ff746ac099400e96c036572548d71822bc0826de506922d66202e7ce4c"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/abstract/montgomery.js",
+      "sha256": "5ed0fbfba5a66691a187be5da5cd86177ec87352860cc28530742794a94d8bbf"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/ed25519.js",
+      "sha256": "9d1ec0fa0ad8e6e8d097e4231dcd4e874975edf4410cfe6b4340dde371852b84"
+    },
+    {
+      "file": "dependencies/@noble/curves/esm/utils.js",
+      "sha256": "f293043fc8020d5a928b4fd0c2b29b0d4aa23eca7b17f6b449484ba5e74ccdf3"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/_md.js",
+      "sha256": "cefb1557e7715cb2117c83f82ef3e3175c7e0391c80bd5795b2d4effc45fc582"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/_u64.js",
+      "sha256": "e48c0cfc10810439a4807b46db136ce603a3fa09b62584f513ef2f3ca496af54"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/cryptoNode.js",
+      "sha256": "26f80c6a85b6ef7bfd83b99d95b2b5ba8764397b9465feff32e81ba4e6416619"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/hkdf.js",
+      "sha256": "4bdbfb687cfb409aaffb80a6223fc718bbab79ef083fd6191a6e063d68ddd16a"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/hmac.js",
+      "sha256": "a330af1af3fb00ebdbba2f023dd5e023aa367669081cd51c7d172eb499533d0b"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/sha2.js",
+      "sha256": "e729088b82e5450bff54c3a0013582aa42e1fe8f58dd31f5967f6ebe34c52299"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/sha256.js",
+      "sha256": "895f164acd980084bd5026c4363d7523ea4564f634dd0cc183111d42dbbc4ead"
+    },
+    {
+      "file": "dependencies/@noble/hashes/esm/utils.js",
+      "sha256": "4cf4c1e05affedcb4fd584a43d76ae1a3711e34a36e2251b90c27e33ecc74fad"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/_crystals.js",
+      "sha256": "7ff49f3f09213990027d5f307df5c84b36c9a47313a7d1069acd581b3e30eada"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/ml-kem.js",
+      "sha256": "c008845afa0118b39f2e37c5a4dc83cecac5bb7fef261d68fb4ca9561c58a326"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/curves/abstract/fft.js",
+      "sha256": "a4b2ff7ca33f4acc85d61f0e83ec3303c3f6b38ecc19b20d0f6462d820e518cf"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/curves/abstract/modular.js",
+      "sha256": "9ced3aa10598277a735e54f7b61d88e929d565da884ba5385f9006ebb3b6aab2"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/curves/utils.js",
+      "sha256": "be9ff86aef76419376e4d66cf01a134f3117f1f8dd62d81f1b79100145503367"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/hashes/_u64.js",
+      "sha256": "b09da8c07fe8187c07649494cdb7cd0bcf13df90b506a9473d19e4d5f8c2e102"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/hashes/sha3.js",
+      "sha256": "9a81e1edb24eae27b335533220167609cfb58008c5690e140ce478acdc669f32"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/node_modules/@noble/hashes/utils.js",
+      "sha256": "6b4397dd40cef490bb70bf59784d2b053dc331755700ae30ff28d30ec5fccb6b"
+    },
+    {
+      "file": "dependencies/@noble/post-quantum/utils.js",
+      "sha256": "b3d97248f0a16ea60119de0585def637a8aa3f27c4124d8825e1709588de53f8"
+    },
+    {
+      "file": "upstream/packages/client-core/src/acp-client.ts",
+      "sha256": "a1a8c53a6f5d0a82c32377d273740e1b5edb7743112c6ecd2891174f91fd241d"
+    },
+    {
+      "file": "upstream/packages/client-core/src/codex-client.ts",
+      "sha256": "edf1e18d213e7a76d5b8cda4108181affed570ba4450d2c11cafdf61693feefa"
+    },
+    {
+      "file": "upstream/packages/client-core/src/harness-alpha-client.ts",
+      "sha256": "7c908ac0124510846f880d8d9a5484c7255dbfbbd76b7c2680eb077ae04de0bd"
+    },
+    {
+      "file": "upstream/packages/client-core/src/harness-questions.ts",
+      "sha256": "3e601cd13dfb817ae6959527cf5c93fb6acddb6c9673cb3ec157ec9838ae9612"
+    },
+    {
+      "file": "upstream/packages/client-core/src/index.ts",
+      "sha256": "8c84b9b6322bfdcee3e1c9706539b875e3bf88b78d2ac2083f7f6b4899230763"
+    },
+    {
+      "file": "upstream/packages/client-core/src/remote-gateway.ts",
+      "sha256": "9e1e8faabf997b460cac467c1e53e38dc09a1630d79b784a4b5c875e77063f04"
+    },
+    {
+      "file": "upstream/packages/crypto/src/index.ts",
+      "sha256": "b995849e46beefd224d98076656ac8c2444188c150df0990365b873ade76fcf2"
+    },
+    {
+      "file": "upstream/packages/crypto/src/noise.ts",
+      "sha256": "bf0849323e6aae8bbbdc59e212e19ec1a9ffdfec2b987d78d0064b48a253a795"
+    },
+    {
+      "file": "upstream/packages/plugin/src/client-secure-transport.ts",
+      "sha256": "6e3c9d4aaf83e849867bc3f5bb14b2654e6c285b610776f5ff91b793d6dbe64d"
+    },
+    {
+      "file": "upstream/packages/protocol/src/close-semantics.ts",
+      "sha256": "e9733d7cedd3369b88942bbd50c4b6bed3e220615637ae18c5bcab065cd8c19a"
+    },
+    {
+      "file": "upstream/packages/protocol/src/index.ts",
+      "sha256": "3e42cc741990a0fc55b873ee74d86315ef77e056dfdbd0b4cc6d8dd355f13d84"
+    },
+    {
+      "file": "upstream/packages/protocol/src/loopback.ts",
+      "sha256": "4a600abb00f2815a962186f9ffa6b678d2f5be79a2f817aac630062e0a3c0c8f"
+    },
+    {
+      "file": "upstream/packages/protocol/src/wire-json.ts",
+      "sha256": "f41255f95c2046579a66d3cb5bb991fcc751d9724f37f2edc61d988fe523f591"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/adaptive-transport.ts",
+      "sha256": "bb93b9c6d0c1b2d7f3109e5c260b6688315a194cfd1f494a10d2a9b09ca69205"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/control-lease.ts",
+      "sha256": "edf102a2ec2f33a5946f0c1fc2b01509acc1b11c9e5a3eb4098757539d943795"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/index.ts",
+      "sha256": "ebf5b503f7a6fa09ce99552594f46f3faf3e8cbe857f1d1422b4b16f457c5eec"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/rtc-adapter.ts",
+      "sha256": "e99e3f99f82ba04a1f5c28d3c28054e8f078c220a528ae3ea1fc08b632a64aeb"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/rtc-chunking.ts",
+      "sha256": "8766f275d1d47a9d97d856b092758bdae8c72de60a37fe5ffc6c97d7e1753870"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/rtc-data-channel.ts",
+      "sha256": "970088786181d7f7954548099fa1e28784043a709dd5c4754717b8ac2091df3f"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/serial-send.ts",
+      "sha256": "941ee832a8d18b62df0f030d9ee295ff19fc23b45e193383e4bad7430924a5bb"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/transport.ts",
+      "sha256": "6c747e95addf478d8c5048fa4d8b696af45194896402577e05b7a4678806503b"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/util.ts",
+      "sha256": "f5d7833d727827f2bf11480597bad9ed068cdbec4569ab9f4cda025b45ace6e4"
+    },
+    {
+      "file": "upstream/packages/webrtc/src/websocket-backpressure.ts",
+      "sha256": "ff7ee84eb388891788584b2faa2fda4c4dcc695f6f9ea03b848f475382df238e"
+    }
+  ]
+}

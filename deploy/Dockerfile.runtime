@@ -12,6 +12,7 @@ COPY --chown=node:node deploy/pi/activity-deadline.mjs ./deploy/pi/activity-dead
 COPY --chown=node:node deploy/pi/long-goal-command.mjs ./deploy/pi/long-goal-command.mjs
 COPY --chown=node:node deploy/pi/goal-plan.mjs ./deploy/pi/goal-plan.mjs
 COPY --chown=node:node deploy/pi/question-continuation.mjs ./deploy/pi/question-continuation.mjs
+COPY --chown=node:node deploy/pi/chat-content.mjs deploy/pi/document-text.mjs deploy/pi/office-content.mjs deploy/pi/pdf-document.mjs deploy/pi/pdf-content.mjs deploy/pi/attachments.mjs ./deploy/pi/
 COPY --chown=node:node dist ./dist
 RUN mkdir data files && chown node:node data files
 USER node

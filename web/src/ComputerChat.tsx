@@ -11,6 +11,11 @@ import { JumpToLatest } from './JumpToLatest';
 import { api } from './data';
 import { peekAPI, invalidateAPI } from './resource-cache';
 import { serverIdentity } from './session';
+import {
+  operationPreferenceKey,
+  readOperationPreferences,
+  saveOperationPreferences,
+} from '../../shared/operation-preferences.mjs';
 import { CopyButton } from './CopyButton';
 import { ChatFiles, uploadChatFile, type ChatFile } from './ChatFiles';
 import { ToolLog, type ToolRun } from './ToolLog';
@@ -111,6 +116,18 @@ export function ComputerChat({
       '&archived=include',
     key = computerChatStorageKey(serverIdentity(settings), owner, deviceId, project.id);
   const id = conversationId;
+  const preferenceKey = operationPreferenceKey(serverIdentity(settings), owner, 'computer', [
+    deviceId,
+    project.id,
+    id,
+  ]);
+  const preferences = () => readOperationPreferences(localStorage, preferenceKey);
+  const thinkingPreferenceKey = operationPreferenceKey(
+    serverIdentity(settings),
+    owner,
+    'assistant',
+    'thinking',
+  );
   const [staged, setStaged] = useState<ChatFile[]>(() => {
     try {
       return JSON.parse(sessionStorage.getItem(key + ':attachments:' + id) || '[]');
@@ -128,8 +145,12 @@ export function ComputerChat({
   const [input, setInput] = useState(() => sessionStorage.getItem(key + ':draft:' + id) || ''),
     [jobs, setJobs] = useState<Job[]>([]),
     [older, setOlder] = useState<string | null>(null),
-    [access, setAccess] = useState<'read' | 'edit'>('read'),
-    [execute, setExecute] = useState(false),
+    [access, setAccess] = useState<'read' | 'edit'>(() =>
+      !project.readOnly && preferences().access === 'edit' ? 'edit' : 'read',
+    ),
+    [execute, setExecute] = useState(
+      () => !!project.allowExecute && preferences().execute === true,
+    ),
     [error, setError] = useState(''),
     [showLatest, setShowLatest] = useState(false);
   const current = useRef(id);
@@ -138,7 +159,7 @@ export function ComputerChat({
   const { messageMode: mode } = useAssistantPreferences();
   const [thinkingLevel, setThinkingLevel] = useState<'off' | 'low' | 'high' | 'max'>(() => {
     try {
-      const value = localStorage.getItem('astral.pi.thinkingLevel');
+      const value = readOperationPreferences(localStorage, thinkingPreferenceKey).thinkingLevel;
       return ['off', 'low', 'high', 'max'].includes(value || '')
         ? (value as 'off' | 'low' | 'high' | 'max')
         : 'off';
@@ -454,7 +475,11 @@ export function ComputerChat({
                     conversation={id}
                   />
                   <div className="message assistant">
-                    <RunSummary status={j.stopPending ? 'stopping' : j.status} phase={phase(j)} />
+                    <RunSummary
+                      status={j.stopPending ? 'stopping' : j.status}
+                      phase={phase(j)}
+                      uiRequests={j.uiRequests}
+                    />
                     <LongGoalCard
                       goal={j.longGoal}
                       status={j.status}
@@ -647,7 +672,7 @@ export function ComputerChat({
           thinkingLevel={capabilities.includes('thinking_levels') ? thinkingLevel : 'off'}
           changeThinking={(level) => {
             setThinkingLevel(level);
-            localStorage.setItem('astral.pi.thinkingLevel', level);
+            saveOperationPreferences(localStorage, thinkingPreferenceKey, { thinkingLevel: level });
           }}
           thinkingDisabled={!!unavailable.thinking}
           thinkingDisabledReason={unavailable.thinking}
@@ -713,14 +738,22 @@ export function ComputerChat({
               projectName={project.name}
               readOnly={project.readOnly}
               locked={working ? '当前任务和队列结束后可切换模式' : undefined}
-              onChange={setAccess}
+              onChange={(access) => {
+                saveOperationPreferences(localStorage, preferenceKey, { access });
+                setAccess(access);
+              }}
             />
             <label>
               <input
                 type="checkbox"
                 checked={execute}
                 disabled={working || !project.allowExecute}
-                onChange={(e) => setExecute(e.target.checked)}
+                onChange={(e) => {
+                  saveOperationPreferences(localStorage, preferenceKey, {
+                    execute: e.target.checked,
+                  });
+                  setExecute(e.target.checked);
+                }}
               />
               允许终端与Agent执行命令
             </label>

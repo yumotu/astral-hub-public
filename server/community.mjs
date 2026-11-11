@@ -17,6 +17,8 @@ import { clientAddress } from './client-address.mjs';
 import { createProjectLabels, projectLabelSchema } from './project-labels.mjs';
 import { activityDeadline } from '../deploy/pi/activity-deadline.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
+import { createAgentBindings, serverPiRuntime } from './agent-bindings.mjs';
+import { agentCapabilities } from '../shared/agent-runtime.mjs';
 const username = z
   .string()
   .trim()
@@ -52,6 +54,7 @@ export function createCommunity(store, { token, body, options = {} }) {
     'CREATE TABLE IF NOT EXISTS pi_submission_receipts(owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,id TEXT NOT NULL,input TEXT NOT NULL,PRIMARY KEY(owner,id))',
   );
   const conversationMetadata = createPiConversations(store.db, { now: options.now });
+  const runtimeBindings = createAgentBindings(store.db);
   const titles = createPiTitles(conversationMetadata, options.generateTitle);
   const sessionContext = createPiSessionContext(store.db, { now: options.now });
   const chatFiles = createChatFiles(store.db, {
@@ -325,6 +328,21 @@ export function createCommunity(store, { token, body, options = {} }) {
     metadata: conversationMetadata,
     chatFiles,
     forkNative: async ({ owner, source, target, ...p }) => {
+      const sourceRuntime = runtimeBindings.get(owner, 'server', source);
+      if (sourceRuntime) {
+        runtimeBindings.assert(
+          owner,
+          'server',
+          source,
+          serverPiRuntime(owner, source, sourceRuntime.projectId),
+        );
+        runtimeBindings.assert(
+          owner,
+          'server',
+          target,
+          serverPiRuntime(owner, target, sourceRuntime.projectId),
+        );
+      }
       const health = await bridge('/health');
       if (!health.nativeSessions) return { native: false };
       return bridge(
@@ -1230,7 +1248,15 @@ export function createCommunity(store, { token, body, options = {} }) {
       }
       if (path === '/api/pi/status' && method === 'GET') {
         if (!piReady) {
-          json(200, { available: false });
+          json(200, {
+            available: false,
+            agent: {
+              backend: 'pi',
+              transport: 'server',
+              capabilities: agentCapabilities({}, '服务器 Pi 尚未配置。'),
+            },
+            dsh: { enabled: false, available: false, reason: 'DSH 接入尚未启用。' },
+          });
           return true;
         }
         try {
@@ -1251,6 +1277,23 @@ export function createCommunity(store, { token, body, options = {} }) {
             vision: !!p.vision,
             webSearch: !!p.webSearch,
             attachments: !!p.attachments,
+            agent: {
+              backend: 'pi',
+              transport: 'server',
+              capabilities: agentCapabilities(
+                {
+                  streaming: p.streaming === true,
+                  attachments: p.attachments === true,
+                  ...Object.fromEntries(
+                    Object.entries(p.agentCapabilities || {}).filter(
+                      ([name]) => !['terminal', '__proto__', 'constructor'].includes(name),
+                    ),
+                  ),
+                },
+                p.ready ? '' : '服务器 Pi 尚未就绪。',
+              ),
+            },
+            dsh: { enabled: false, available: false, reason: 'DSH 接入尚未启用。' },
             concurrency: {
               maxConcurrent: Math.min(concurrency, Number(p.maxConcurrent) || concurrency),
               maxConcurrentPerUser: Math.min(
@@ -1274,7 +1317,15 @@ export function createCommunity(store, { token, body, options = {} }) {
               : {}),
           });
         } catch {
-          json(200, { available: false });
+          json(200, {
+            available: false,
+            agent: {
+              backend: 'pi',
+              transport: 'server',
+              capabilities: agentCapabilities({}, '服务器 Pi 连接中断。'),
+            },
+            dsh: { enabled: false, available: false, reason: 'DSH 接入尚未启用。' },
+          });
         }
         return true;
       }
@@ -1314,7 +1365,11 @@ export function createCommunity(store, { token, body, options = {} }) {
           history: accounts.piConversations(actor.id),
           tasks: tasks.all(actor.id),
           metadata: conversationMetadata.list(actor.id),
-        }).map((c) => ({ ...c, branch: branches.info(actor.id, c.id) }));
+        }).map((c) => ({
+          ...c,
+          runtime: serverPiRuntime(actor.id, c.id, c.projectId),
+          branch: branches.info(actor.id, c.id),
+        }));
       const forkRoute = path.match(/^\/api\/pi\/conversations\/([^/]+)\/fork$/);
       if (forkRoute && method === 'POST') {
         const source = uuid.parse(forkRoute[1]);
@@ -1527,6 +1582,12 @@ export function createCommunity(store, { token, body, options = {} }) {
           })
           .strict()
           .parse(await body(req));
+        const runtime = runtimeBindings.assert(
+          actor.id,
+          'server',
+          p.conversationId,
+          serverPiRuntime(actor.id, p.conversationId, p.projectId),
+        );
         if (tasks.get(actor.id, p.id)) throw fail(409, '此请求已交给后台任务，请查看任务状态。');
         if (p.projectId) await projectFor(actor, p.projectId, p.access);
         if (!p.projectId && p.access === 'edit') throw fail(400, '请先选择项目。');
@@ -1579,6 +1640,7 @@ export function createCommunity(store, { token, body, options = {} }) {
           activeFor(actor.id) >= limits.maxConcurrentPerUser
         )
           throw fail(429, '此对话正在执行或并发名额已满，请使用任务队列。');
+        runtimeBindings.bind(actor.id, 'server', p.conversationId, runtime);
         activePi.add(`${actor.id}:${p.conversationId}`);
         if (p.projectId) accounts.reservePiJob(actor.id, p);
         try {

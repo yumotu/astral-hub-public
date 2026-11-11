@@ -59,6 +59,47 @@ test('conversation metadata and default directory are account scoped and survive
   db.close();
 });
 
+test('runtime migration preserves old Pi history and sidebar metadata without changing native routing or replaying tasks', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    const accounts = createAccounts(db);
+    db.prepare(
+      'INSERT INTO users(id,username,display_name,password,role,space,created_at) VALUES(?,?,?,?,?,?,?)',
+    ).run('alice', 'alice', 'Alice', 'synthetic', 'owner', 'alice', new Date().toISOString());
+    accounts.savePiTurn(
+      'alice',
+      {
+        id: 'old-turn',
+        conversationId: 'old-chat',
+        projectId: 'workspace',
+        access: 'read',
+        input: 'synthetic old input',
+      },
+      'stored reply',
+      [],
+    );
+    const before = db.prepare('SELECT * FROM pi_turns').all();
+    const store = createPiConversations(db);
+    const row = db
+      .prepare(
+        "SELECT runtime FROM agent_conversation_bindings WHERE owner='alice' AND origin='server' AND conversation_id='old-chat'",
+      )
+      .get();
+    assert.equal(JSON.parse(row.runtime).backend, 'pi');
+    assert.equal(JSON.parse(row.runtime).projectId, 'workspace');
+    assert.deepEqual(db.prepare('SELECT * FROM pi_turns').all(), before);
+    assert.equal(store.get('alice', 'old-chat'), null, 'migration does not invent sidebar titles');
+    assert.throws(() => store.create('alice', 'old-chat', { projectId: 'other' }), {
+      status: 409,
+    });
+    const reopened = createPiConversations(db);
+    assert.equal(reopened.get('alice', 'old-chat'), null);
+    assert.deepEqual(db.prepare('SELECT * FROM pi_turns').all(), before);
+  } finally {
+    db.close();
+  }
+});
+
 test('history and task refreshes preserve rename, pin and archive, including task-only conversations', () => {
   const stamp = (n) => new Date(n * 1000).toISOString();
   const tasks = [

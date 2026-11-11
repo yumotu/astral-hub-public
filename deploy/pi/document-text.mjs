@@ -2,11 +2,11 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { createRequire } from 'node:module';
 import { officeContent } from './office-content.mjs';
 
-export function readOfficeAttachment(bytes, name) {
+export function readOfficeAttachment(bytes, name, { depsFile } = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), {
       workerData: { bytes, name },
-      env: { ASTRAL_DOCUMENT_DEPS: process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json' },
+      env: { ASTRAL_DOCUMENT_DEPS: depsFile || process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json' },
       execArgv: [],
       resourceLimits: { maxOldGenerationSizeMb: 128 },
     });

@@ -8,7 +8,8 @@ export type Page =
   | 'social'
   | 'pi'
   | 'mail'
-  | 'learning';
+  | 'learning'
+  | 'pet';
 export type Spread = 'single' | 'three';
 export type Card = { id: string; reversed: boolean; position: string };
 export type Analysis = {

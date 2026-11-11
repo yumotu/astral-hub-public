@@ -1,6 +1,6 @@
-# Astral Hub 0.8.11 candidate
+# Astral Hub 0.8.12
 
-Fixes remote-computer model relay rejection of long native conversations. [Release notes](docs/release-0.8.11.md). Full CI, signing and release checks are pending. Existing Pi conversations and device pairing are preserved. Experimental DSH changes are not included.
+Adds the deployed DSH dsh2 chat, scoped software tools and attachment bridge to all native clients. Pi remains the default. [Release notes](docs/release-0.8.12.md); publication status is determined by the matching Release and successful signing workflow.
 
 # 星屿 Astral Hub
 
@@ -9,6 +9,7 @@ Fixes remote-computer model relay rejection of long native conversations. [Relea
 ## 功能
 
 - 智能助手：流式回复、连续补充、历史分支、项目与文件、独立终端、语音草稿、附件预览。
+- 可选DSH：固定Harness/Remote的原生聊天、软件工具与附件/文件交付；与Pi共用聊天界面，按任务授权。DSH终端、目标/定时及统一费用仍待接入，见[DSH说明](docs/dsh-runtime.md)。
 - 电脑连接：桌面内置执行器、主动 HTTPS 连接、按项目授权读取/修改/执行，支持文件回传和插件许愿安装。
 - 邮件与学习：邮件阅读/摘要/分类、草稿与发送预览；知识讲解、练习、智能判题、错题本。
 - 账号记忆：有来源的画像、偏好与跨对话记忆，可纠正、删除和关闭；[使用说明](docs/account-memory.md)。
@@ -38,7 +39,7 @@ npm run dev
 
 公开 Actions 使用标准 Ubuntu/macOS/Windows 托管 runner 构建本仓库源码。完整原生检查通过后才发布 Release；Android 签名材料由受限发行步骤读取 Secrets，不进入源码、普通构建或公共缓存。GitHub 的大规格 runner、存储及其他服务按各自规则处理。
 
-当前源码版本为 0.8.10；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
+当前源码版本为 0.8.12；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
 
 ## 权限与数据
 

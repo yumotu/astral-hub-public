@@ -4,6 +4,7 @@ import { fail } from './accounts.mjs';
 import { createRelayComputer } from './relay-computer.mjs';
 import { createRelayTerminals } from './relay-terminals.mjs';
 import { parseComputerPlugin, pluginPermissions } from '../shared/computer-plugin.mjs';
+import { agentCapabilities } from '../shared/agent-runtime.mjs';
 const pluginManifest = z.unknown().transform((v, ctx) => {
   try {
     return parseComputerPlugin(v);
@@ -337,7 +338,9 @@ export function createRelayWorkspace(
       }
       if (route === '/api/relay/projects' && req.method === 'GET') {
         const id = uuid.parse(url.searchParams.get('deviceId'));
-        ownedDevice(id, actor.id);
+        const device = ownedDevice(id, actor.id);
+        const capabilities = JSON.parse(device.capabilities || '[]');
+        const supported = (name) => capabilities.includes(name);
         json(200, {
           projects: labels.decorate(
             actor.id,
@@ -345,7 +348,29 @@ export function createRelayWorkspace(
             db
               .prepare('SELECT * FROM relay_projects WHERE device_id=? AND revoked=0')
               .all(id)
-              .map(projectView),
+              .map((p) => ({
+                ...projectView(p),
+                agent: {
+                  backend: 'pi',
+                  transport: 'astral-relay',
+                  capabilities: agentCapabilities(
+                    {
+                      thinking: supported('thinking_levels'),
+                      attachments: supported('chat_inputs'),
+                      questions: supported('interactive_questions'),
+                      appFunctions: supported('app_functions'),
+                      goal: supported('long_goals'),
+                      // New executors report control capabilities explicitly.
+                      streaming: supported('streaming'),
+                      stop: supported('cancellation'),
+                      steer: supported('steering'),
+                      terminal: supported('terminals') && !!p.allow_execute,
+                      compact: supported('compact'),
+                    },
+                    now() - device.last_seen < 45000 ? '' : '目标电脑离线。',
+                  ),
+                },
+              })),
           ),
         });
         return true;

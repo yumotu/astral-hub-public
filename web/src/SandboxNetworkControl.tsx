@@ -5,6 +5,10 @@ import { Globe, X, LoaderCircle } from 'lucide-react';
 import { api } from './data';
 import type { Settings } from './types';
 import './sandbox-network.css';
+import {
+  readOperationPreferences,
+  saveOperationPreferences,
+} from '../../shared/operation-preferences.mjs';
 type Policy = {
   enabled: boolean;
   version: number;
@@ -22,14 +26,18 @@ export function SandboxNetworkControl({
   settings,
   conversation,
   admin,
+  preferenceKey,
 }: {
   settings: Settings;
   conversation: string;
   admin: boolean;
+  preferenceKey: string;
 }) {
   const [policy, setPolicy] = useState<Policy | null>(null),
     [open, setOpen] = useState(false),
-    [minutes, setMinutes] = useState('15'),
+    [minutes, setMinutes] = useState(
+      () => readOperationPreferences(localStorage, preferenceKey).networkMinutes || '15',
+    ),
     [ack, setAck] = useState(false),
     [requests, setRequests] = useState<Request[]>([]),
     [busy, setBusy] = useState(false),
@@ -117,6 +125,7 @@ export function SandboxNetworkControl({
       );
       if (alive.current) {
         setPolicy(value);
+        saveOperationPreferences(localStorage, preferenceKey, { networkMinutes: minutes });
         setAck(false);
       }
     } catch (e) {

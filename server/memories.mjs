@@ -99,7 +99,7 @@ export function createMemories(db, { now = Date.now } = {}) {
       )
       .get(owner, scope, p.key, id);
     if (conflict) throw fail(409, '同范围已有这个记忆键，请修正已有记忆：' + conflict.id);
-    if (!source || !['manual', 'pi', 'computer'].includes(source.origin))
+    if (!source || !['manual', 'pi', 'computer', 'dsh'].includes(source.origin))
       throw fail(400, '缺少记忆来源。');
     const at = now();
     if (old)
@@ -199,6 +199,18 @@ export function createMemories(db, { now = Date.now } = {}) {
         )
         .all(ctx.owner, ctx.conversation, ctx.task)
         .map((r) => r.input);
+    } else if (ctx.origin === 'dsh') {
+      if (
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_app_tasks'").get()
+      ) {
+        row = db
+          .prepare(
+            'SELECT t.input,c.connection_id,c.workspace_id FROM dsh_app_tasks t JOIN dsh_conversations c ON c.owner=t.owner AND c.id=t.conversation_id AND c.connection_id=t.connection_id AND c.session_id=t.session_id WHERE t.owner=? AND t.id=? AND t.conversation_id=?',
+          )
+          .get(ctx.owner, ctx.task, ctx.conversation);
+        input = row?.input;
+        scope = row ? 'dsh:' + row.connection_id + ':' + row.workspace_id : null;
+      }
     }
     if (!row) throw fail(404, '当前任务的记忆范围不存在。');
     if (quote && ![input, ...supplements].some((v) => typeof v === 'string' && v.includes(quote)))

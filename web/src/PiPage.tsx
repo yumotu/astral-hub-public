@@ -38,6 +38,11 @@ import { peekAPI } from './resource-cache';
 import type { Settings, AuthSession, PiTurn, PiContext, PiSessionContext, TodoItem } from './types';
 import { FileWorkbenchProvider, FileWorkbenchPanel } from './FileWorkbench';
 import { ApprovalControl } from './ApprovalControl';
+import {
+  operationPreferenceKey,
+  readOperationPreferences,
+  saveOperationPreferences,
+} from '../../shared/operation-preferences.mjs';
 import { SandboxNetworkControl } from './SandboxNetworkControl';
 import type { ServerProject } from './ProjectBrowser';
 import { ProjectSummary } from './ProjectSummary';
@@ -95,6 +100,7 @@ import { ProjectConversationList } from './ProjectConversationList';
 import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
 import { insertPastedText } from './composer-paste';
 import { useBackLayer } from './back-navigation';
+import { DshRemoteWorkspace, RemoteConnectionManager } from './DshRemote';
 const MarkdownView = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
 function PiMarkdown({ text }: { text: string }) {
   return (
@@ -129,7 +135,38 @@ export function PiPage(props: {
   openNavigation: () => void;
 }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  const [driver] = useState<'pi' | 'dsh'>('pi');
+  const driverKey = `astral.agent.last:${props.settings.url}:${props.session?.user.id || 'guest'}`;
+  const [driver, setDriver] = useState<'pi' | 'dsh'>(() => {
+    try {
+      return sessionStorage.getItem(driverKey) === 'dsh' ? 'dsh' : 'pi';
+    } catch {
+      return 'pi';
+    }
+  });
+  useEffect(() => {
+    sessionStorage.setItem(driverKey, driver);
+  }, [driverKey, driver]);
+  const [dshAvailable, setDshAvailable] = useState(false);
+  const { setConversationsAvailable } = useMobilePanels();
+  useEffect(() => {
+    setConversationsAvailable(!!props.session);
+    return () => setConversationsAvailable(false);
+  }, [!!props.session, setConversationsAvailable]);
+  async function refreshRemoteStatus() {
+    if (!props.session) {
+      setDshAvailable(false);
+      return;
+    }
+    try {
+      const result = await api<{ chatAvailable: boolean }>(props.settings, '/agent/remote/status');
+      setDshAvailable(result.chatAvailable);
+    } catch {
+      setDshAvailable(false);
+    }
+  }
+  useEffect(() => {
+    void refreshRemoteStatus();
+  }, [props.settings, props.session]);
   const [mailAssistantOpen, setMailAssistantOpen] = useState(false);
   const options = useRef<HTMLDetailsElement>(null);
   useBackLayer(connectionsOpen, () => setConnectionsOpen(false), 90);
@@ -155,18 +192,35 @@ export function PiPage(props: {
       >
         <summary aria-label="助手选项" title="助手选项">
           <Bot size={16} />
-          <span>Pi</span>
+          <span>{driver === 'dsh' ? 'DSH' : 'Pi'}</span>
           <ChevronDown size={12} />
         </summary>
         <div className="assistant-options-menu">
           <span className="assistant-options-label">执行引擎</span>
-          <span className="assistant-engine-current">
+          <button
+            className="assistant-engine-current"
+            onClick={() => {
+              setDriver('pi');
+              if (options.current) options.current.open = false;
+            }}
+          >
             <Bot size={15} />
-            Pi<span>正在使用</span>
-          </span>
-          <span className="assistant-engine-pending">
-            DeepSeek 原生后端<span>接入中</span>
-          </span>
+            Pi<span>{driver === 'pi' ? '正在使用' : '已有对话保留'}</span>
+          </button>
+          {dshAvailable ? (
+            <button
+              onClick={() => {
+                setDriver('dsh');
+                if (options.current) options.current.open = false;
+              }}
+            >
+              DeepSeek Harness<span>{driver === 'dsh' ? '正在使用' : 'DSH Remote'}</span>
+            </button>
+          ) : (
+            <span className="assistant-engine-pending">
+              DeepSeek 原生后端<span>接入中</span>
+            </span>
+          )}
           {props.session && (
             <button
               onClick={() => {
@@ -210,14 +264,26 @@ export function PiPage(props: {
         </header>
       )}
       <>
-        <ServerPiPage
-          key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
-          driver={driver}
-          workspaceActions={workspaceActions}
-          openComputerConnections={() => setConnectionsOpen(true)}
-          connectionsOpen={connectionsOpen}
-          {...props}
-        />
+        {driver === 'dsh' && props.session ? (
+          <DshRemoteWorkspace
+            key={`dsh:${props.settings.url}:${props.session.user.id}`}
+            settings={props.settings}
+            owner={props.session.user.id}
+            actions={workspaceActions}
+            openNavigation={props.openNavigation}
+            manage={() => setConnectionsOpen(true)}
+          />
+        ) : null}
+        <div style={{ display: driver === 'pi' ? 'contents' : 'none' }}>
+          <ServerPiPage
+            key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
+            driver={driver}
+            workspaceActions={driver === 'pi' ? workspaceActions : null}
+            openComputerConnections={() => setConnectionsOpen(true)}
+            connectionsOpen={connectionsOpen}
+            {...props}
+          />
+        </div>
       </>
       {connectionsOpen && props.session && (
         <div
@@ -244,6 +310,10 @@ export function PiPage(props: {
               </button>
             </header>
             <RemoteAgentsPage settings={props.settings} owner={props.session.user.id} />
+            <RemoteConnectionManager
+              settings={props.settings}
+              changed={() => void refreshRemoteStatus()}
+            />
           </section>
         </div>
       )}
@@ -277,6 +347,15 @@ function ServerPiPage({
   driver: 'pi' | 'dsh';
 }) {
   const viewKey = `astral.pi.last:${settings.url}:${session?.user.id || 'guest'}`;
+  const operationKey = (id: string) =>
+    operationPreferenceKey(serverIdentity(settings), session?.user.id || 'guest', 'server', id);
+  const savedOperation = (id: string) => readOperationPreferences(localStorage, operationKey(id));
+  const thinkingPreferenceKey = operationPreferenceKey(
+    serverIdentity(settings),
+    session?.user.id || 'guest',
+    'assistant',
+    'thinking',
+  );
   const computerKey = assistantTargetStorageKey(
     serverIdentity(settings),
     session?.user.id || 'guest',
@@ -370,14 +449,16 @@ function ServerPiPage({
         return '';
       }
     }),
-    [access, setAccess] = useState<'read' | 'edit'>('read'),
+    [access, setAccess] = useState<'read' | 'edit'>(
+      () => savedOperation(conversation).access || 'read',
+    ),
     [browse, setBrowse] = useState(false),
     [failedTools, setFailedTools] = useState<ToolRun[]>([]);
   const [visible, setVisible] = useState(12),
     [more, setMore] = useState(true),
     [thinkingLevel, setThinkingLevel] = useState<'off' | 'low' | 'high' | 'max'>(() => {
       try {
-        const value = localStorage.getItem('astral.pi.thinkingLevel');
+        const value = readOperationPreferences(localStorage, thinkingPreferenceKey).thinkingLevel;
         return ['off', 'low', 'high', 'max'].includes(value || '')
           ? (value as 'off' | 'low' | 'high' | 'max')
           : 'off';
@@ -388,17 +469,9 @@ function ServerPiPage({
     [sessionContext, setSessionContext] = useState<PiSessionContext | null>(null);
   const [manualCompacting, setCompacting] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const {
-    displayPanel: mobilePanel,
-    setPanel: setMobilePanel,
-    setConversationsAvailable,
-  } = useMobilePanels();
+  const { displayPanel: mobilePanel, setPanel: setMobilePanel } = useMobilePanels();
   const navigationOpen = mobilePanel === 'conversations';
   const setNavigationOpen = (open: boolean) => setMobilePanel(open ? 'conversations' : null);
-  useEffect(() => {
-    setConversationsAvailable(!!session);
-    return () => setConversationsAvailable(false);
-  }, [!!session, setConversationsAvailable]);
   const [conversationMenu, setConversationMenu] = useState<MenuAnchor | null>(null);
   const [conversationEditor, setConversationEditor] = useState<{
     conversation: Conversation;
@@ -466,7 +539,9 @@ function ServerPiPage({
       setAccess(
         taskPending(latestTask)
           ? latestTask.access
-          : drafts.current.get(conversation)?.access || latestTask.access,
+          : drafts.current.get(conversation)?.access ||
+              savedOperation(conversation).access ||
+              latestTask.access,
       );
   }, [conversation, latestTask?.id, latestTask?.status]);
   const activeTask = currentTasks.find(
@@ -530,7 +605,7 @@ function ServerPiPage({
   const { appearance } = useTheme();
   useEffect(() => {
     try {
-      localStorage.setItem('astral.pi.thinkingLevel', thinkingLevel);
+      saveOperationPreferences(localStorage, thinkingPreferenceKey, { thinkingLevel });
     } catch {}
   }, [thinkingLevel]);
   const [commands, setCommands] = useState<PiCommand[]>([]);
@@ -679,6 +754,9 @@ function ServerPiPage({
     pending.current = null;
   }, [sendMode]);
   const project = projects.find((p) => p.id === projectId);
+  useEffect(() => {
+    if (project?.readOnly) setAccess('read');
+  }, [project?.readOnly]);
   const currentMetadata = allConversations.find((c) => c.id === conversation);
   const conversationTitle = currentMetadata?.title || '新对话';
   useEffect(() => {
@@ -826,7 +904,8 @@ function ServerPiPage({
               r.conversation!,
             ]);
             setProjectId(r.conversation.projectId || '');
-            if (!r.turns.length) setAccess(r.conversation.access || 'read');
+            if (!r.turns.length)
+              setAccess(savedOperation(conversation).access || r.conversation.access || 'read');
           }
           setEmptyConversation(
             !r.turns.length &&
@@ -842,6 +921,7 @@ function ServerPiPage({
             setAccess(
               running?.access ||
                 drafts.current.get(conversation)?.access ||
+                savedOperation(conversation).access ||
                 r.turns.at(-1)?.access ||
                 'read',
             );
@@ -967,7 +1047,7 @@ function ServerPiPage({
     setUploadError('');
     pending.current = saved?.pending || null;
     setProjectId(nextProject);
-    setAccess(saved?.access || nextAccess);
+    setAccess(saved?.access || savedOperation(id).access || nextAccess);
     if (id !== conversation) {
       followBottom.current = true;
       prependPosition.current = null;
@@ -1249,7 +1329,7 @@ function ServerPiPage({
       conversation={conversation}
       projects={projects}
       projectId={projectId}
-      suspended={!!computerTarget}
+      suspended={!!computerTarget || driver !== 'pi'}
     >
       {error && (
         <div className="error" role="alert">
@@ -1668,6 +1748,9 @@ function ServerPiPage({
                 }
                 onChange={(value) => {
                   pending.current = null;
+                  saveOperationPreferences(localStorage, operationKey(conversation), {
+                    access: value,
+                  });
                   setAccess(value);
                 }}
               />
@@ -1676,12 +1759,14 @@ function ServerPiPage({
                   key={`approval:${conversation}`}
                   settings={settings}
                   conversation={conversation}
+                  preferenceKey={operationKey(conversation)}
                 />
               )}
               <SandboxNetworkControl
                 key={conversation}
                 settings={settings}
                 conversation={conversation}
+                preferenceKey={operationKey(conversation)}
                 admin={session.user.role === 'owner'}
               />
             </AssistantSettings>
@@ -1772,6 +1857,8 @@ function ServerPiPage({
                           execution={t.execution}
                           status={taskState?.status || 'done'}
                           phase={taskState?.compacting ? '压缩中…' : taskState?.phase}
+                          uiRequests={taskState?.uiRequests}
+                          connection={connection}
                         />
                         <LongGoalCard
                           goal={taskState?.longGoal}
@@ -1956,7 +2043,7 @@ function ServerPiPage({
           <AssistantComposer
             area={composer}
             history={scroll}
-            active={!computerTarget}
+            active={!computerTarget && driver === 'pi'}
             value={input}
             send={send}
             upload={uploadFiles}
@@ -2210,7 +2297,7 @@ function ServerPiPage({
         <FileWorkbenchPanel
           browserProject={browse ? project || null : null}
           onCloseBrowser={() => setBrowse(false)}
-          suspended={!!computerTarget}
+          suspended={!!computerTarget || driver !== 'pi'}
         />
       </div>
     </FileWorkbenchProvider>

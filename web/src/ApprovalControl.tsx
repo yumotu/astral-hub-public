@@ -4,6 +4,10 @@ import { ShieldCheck, X, LoaderCircle, ChevronDown } from 'lucide-react';
 import { api } from './data';
 import type { Settings } from './types';
 import './approval-control.css';
+import {
+  readOperationPreferences,
+  saveOperationPreferences,
+} from '../../shared/operation-preferences.mjs';
 type Mode = 'manual' | 'rules' | 'assist' | 'full';
 type Policy = {
   mode: Mode;
@@ -16,19 +20,24 @@ const labels = { manual: '逐次审核', rules: '按规则授权', assist: '协�
 export function ApprovalControl({
   settings,
   conversation,
+  preferenceKey,
 }: {
   settings: Settings;
   conversation: string;
+  preferenceKey: string;
 }) {
   const [policy, setPolicy] = useState<Policy | null>(null),
     [open, setOpen] = useState(false),
     [mode, setMode] = useState<Mode>('manual'),
     [targets, setTargets] = useState<('pi' | 'server')[]>(['pi']),
-    [minutes, setMinutes] = useState('15'),
+    [minutes, setMinutes] = useState(
+      () => readOperationPreferences(localStorage, preferenceKey).approvalMinutes || '15',
+    ),
     [ack, setAck] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  const trigger = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null),
+    edited = useRef(false);
   useBackLayer(
     open,
     () => {
@@ -45,8 +54,16 @@ export function ApprovalControl({
       .then((p) => {
         if (alive) {
           setPolicy(p);
-          setMode(p.mode);
-          setTargets(p.targets);
+          if (!edited.current) {
+            setMode(p.mode);
+            setTargets(p.targets);
+            if (
+              !readOperationPreferences(localStorage, preferenceKey).approvalMinutes &&
+              p.mode !== 'manual' &&
+              p.expiresAt === null
+            )
+              setMinutes('always');
+          }
         }
       })
       .catch((e) => {
@@ -86,6 +103,11 @@ export function ApprovalControl({
       );
       setPolicy(p);
       setMode(p.mode);
+      saveOperationPreferences(localStorage, preferenceKey, {
+        approvalMode: p.mode,
+        approvalTargets: p.targets,
+        approvalMinutes: revoke ? 'always' : minutes,
+      });
       setOpen(false);
       setAck(false);
       trigger.current?.focus();
@@ -103,6 +125,7 @@ export function ApprovalControl({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => {
+          edited.current = false;
           setAck(false);
           setOpen(!open);
         }}
@@ -135,6 +158,7 @@ export function ApprovalControl({
               <select
                 value={mode}
                 onChange={(e) => {
+                  edited.current = true;
                   setMode(e.target.value as Mode);
                   setAck(false);
                 }}
@@ -162,11 +186,12 @@ export function ApprovalControl({
                   <input
                     type="checkbox"
                     checked={targets.includes(t)}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      edited.current = true;
                       setTargets(
                         e.target.checked ? [...targets, t] : targets.filter((x) => x !== t),
-                      )
-                    }
+                      );
+                    }}
                   />
                   {t === 'pi' ? 'Pi 宿主' : '服务器主机'}
                 </label>
@@ -174,7 +199,13 @@ export function ApprovalControl({
             </fieldset>
             <label>
               有效期
-              <select value={minutes} onChange={(e) => setMinutes(e.target.value)}>
+              <select
+                value={minutes}
+                onChange={(e) => {
+                  edited.current = true;
+                  setMinutes(e.target.value);
+                }}
+              >
                 <option value="15">15 分钟</option>
                 <option value="60">1 小时</option>
                 <option value="120">2 小时</option>

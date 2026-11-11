@@ -13,7 +13,7 @@ assert (root / 'dist/index.html').is_file(), '请先运行 npm run build'
 assert len(list((root / 'dist/cards/classic').glob('*.jpg'))) == 78
 version = json.loads((root / 'package.json').read_text())['version']
 target = root / 'release' / f'Astral-Hub-{version}-server.tar.gz'
-included = ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'package.json', 'package-lock.json', '.env.example', 'README.md', 'dist', 'server', 'shared', 'scripts/init.mjs', 'scripts/publish-updates.mjs', 'docs', 'deploy']
+included = ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'package.json', 'package-lock.json', '.env.example', 'README.md', 'dist', 'server', 'shared', 'integrations', 'scripts/init.mjs', 'scripts/publish-updates.mjs', 'docs', 'deploy']
 def allowed(entry):
     parts = Path(entry.name).parts
     if 'node_modules' in parts or any(part in {'data','private','.git'} for part in parts): return None

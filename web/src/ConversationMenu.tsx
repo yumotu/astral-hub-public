@@ -134,10 +134,12 @@ export function ConversationMenu({
   anchor,
   close,
   action,
+  allowed,
 }: {
   anchor: MenuAnchor;
   close: () => void;
   action: (action: ConversationAction, conversation: Conversation) => void;
+  allowed?: ConversationAction[];
 }) {
   const menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: anchor.x, top: anchor.y });
@@ -210,20 +212,22 @@ export function ConversationMenu({
       }}
     >
       <p className="pi-conversation-menu-title">{c.title}</p>
-      {actions.map((item) => (
-        <button
-          key={item.key}
-          role="menuitem"
-          className={item.key === 'delete' ? 'danger' : ''}
-          onClick={() => {
-            close();
-            action(item.key, c);
-          }}
-        >
-          {item.icon}
-          <span>{item.label}</span>
-        </button>
-      ))}
+      {actions
+        .filter((item) => !allowed || allowed.includes(item.key))
+        .map((item) => (
+          <button
+            key={item.key}
+            role="menuitem"
+            className={item.key === 'delete' ? 'danger' : ''}
+            onClick={() => {
+              close();
+              action(item.key, c);
+            }}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
     </div>,
     document.body,
   );

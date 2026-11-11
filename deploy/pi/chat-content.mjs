@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 // Process-local to the authorized native task/session. Callers validate the live
 // attachment scope and hash before using it, and remote callers recheck the lease.
 const documents = new Map();
-async function documentPages(bytes, options, signal) {
+async function documentPages(bytes, options, signal, depsFile) {
   const key =
     createHash('sha256').update(bytes).digest('hex') +
     ':' +
@@ -24,7 +24,7 @@ async function documentPages(bytes, options, signal) {
     documents.set(key, old);
     return old.value;
   }
-  const value = await readDocumentPages(bytes, options, { signal });
+  const value = await readDocumentPages(bytes, options, { signal, depsFile });
   const size = value.pages.reduce((sum, p) => sum + p.text.length, 0);
   documents.set(key, { value, size, at: Date.now() });
   let total = [...documents.values()].reduce((sum, p) => sum + p.size, 0);
@@ -36,11 +36,11 @@ async function documentPages(bytes, options, signal) {
   return value;
 }
 
-export async function chatContent(bytes, file, p = {}, { signal } = {}) {
+export async function chatContent(bytes, file, p = {}, { signal, depsFile } = {}) {
   let text, document;
   const image = imageMime(bytes);
   if (bytes.subarray(0, 5).toString() === '%PDF-' || image) {
-    document = await documentPages(bytes, { ...p, ...(image ? { format: 'image' } : {}) }, signal);
+    document = await documentPages(bytes, { ...p, ...(image ? { format: 'image' } : {}) }, signal, depsFile);
     text = document.pages
       .map(
         (page) =>
@@ -48,7 +48,7 @@ export async function chatContent(bytes, file, p = {}, { signal } = {}) {
       )
       .join('\n\n');
   } else if (/\.(docx|xlsx)$/i.test(file.name)) {
-    const result = await readOfficeAttachment(bytes, file.name);
+    const result = await readOfficeAttachment(bytes, file.name, { depsFile });
     text =
       result.kind === 'document'
         ? result.text

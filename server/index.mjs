@@ -24,6 +24,8 @@ import { createNotifications } from './notifications.mjs';
 import { createTerminals } from './terminals.mjs';
 import { createGoals } from './goals.mjs';
 import { createSandboxNetwork } from './sandbox-network.mjs';
+import { createDshRemote } from './dsh-remote.mjs';
+import { loadManagedDsh } from './dsh-managed.mjs';
 import { createAppUpdates } from './app-updates.mjs';
 import { parseComputerPlugin, computerPluginTools } from '../shared/computer-plugin.mjs';
 import { createComputerPackageCatalog } from './computer-package-catalog.mjs';
@@ -69,6 +71,32 @@ export async function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? resolve(root, 'data'));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const store = createStore(options.dbPath ?? resolve(dataDir, 'astral.sqlite'));
+  let mailAgent, appFunctions, relay, community;
+  const dshRemote = createDshRemote(store.db, {
+    token,
+    body,
+    enabled: options.dshRemote?.enabled ?? process.env.DSH_REMOTE_ENABLED === '1',
+    chatEnabled: options.dshRemote?.chatEnabled ?? process.env.DSH_REMOTE_CHAT_ENABLED === '1',
+    managed: options.dshRemote?.managed ?? (await loadManagedDsh(process.env.DSH_MANAGED_CONFIG)),
+    allowedOrigins:
+      options.dshRemote?.allowedOrigins ??
+      (process.env.DSH_REMOTE_ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean),
+    fetch: options.dshRemote?.fetch,
+    connect: options.dshRemote?.connect,
+    now: options.now,
+    files: () => community?.chatFiles,
+    appTools: {
+      endpoint: options.dshRemote?.appToolsUrl || process.env.DSH_APP_TOOLS_URL || '',
+      engine: () => appFunctions,
+      sessionActive: (owner, hash) =>
+        !!store.db
+          .prepare('SELECT 1 FROM sessions WHERE user_id=? AND hash=? AND expires>?')
+          .get(owner, hash, (options.now || Date.now)()),
+    },
+  });
   const usage = createUsage(store.db, { now: options.now });
   const memories = createMemories(store.db, { now: options.now });
   const updates = createAppUpdates({
@@ -120,8 +148,7 @@ export async function createApp(options = {}) {
     location: 'server',
     usageMeter: usage,
   };
-  let mailAgent, appFunctions, relay;
-  const community = createCommunity(store, {
+  community = createCommunity(store, {
     token,
     body,
     options: {
@@ -380,6 +407,7 @@ export async function createApp(options = {}) {
       space: store.db.prepare('SELECT space FROM users WHERE id=?').get(id)?.space,
     }),
     isActive: (ctx) => {
+      if (ctx.origin === 'dsh') return dshRemote.appActive(ctx);
       if (ctx.origin === 'pi') {
         const row = store.db
           .prepare('SELECT state FROM pi_tasks WHERE owner=? AND id=?')
@@ -405,7 +433,16 @@ export async function createApp(options = {}) {
       return false;
     },
   });
-  registerAppFeatures(appFunctions, { usage, community, mail, learning, memories, body, relay });
+  registerAppFeatures(appFunctions, {
+    usage,
+    community,
+    mail,
+    learning,
+    memories,
+    body,
+    relay,
+    dshRemote,
+  });
   const origins = new Set(
     (
       options.origins ??
@@ -462,6 +499,7 @@ export async function createApp(options = {}) {
           if (await goals.before(req, url, json, body)) return;
           if (await mailAgent.before(req, url, json)) return;
           if (await appFunctions.before(req, url, json)) return;
+          if (await dshRemote.before(req, url, json, res)) return;
           if (await sandboxNetwork.before(req, url, json)) return;
           if (await terminals.before(req, url, json)) return;
           if (await relay.before(req, url, res, json)) return;
@@ -472,10 +510,13 @@ export async function createApp(options = {}) {
           const actor = legacy ? null : community.accounts.authenticate(supplied.toString());
           if (!legacy && !actor) throw fail(401, '登录已过期或访问令牌无效，请重新登录。');
           const owner = actor?.space ?? 'legacy';
+          if (url.pathname === '/api/auth/logout' && req.method === 'POST' && actor)
+            dshRemote.revokeAccount(actor.id);
           usage.scopes.enterWith({
             owner: actor?.id || owner,
             source: url.pathname.replace(/^\/api\//, ''),
           });
+          if (await dshRemote.handle(req, url, json, actor, res)) return;
           if (await usage.handle(req, url, json, actor)) return;
           if (await updates.handle(req, url, res, json, actor, body)) return;
           if (await goals.handle(req, url, json, actor, body)) return;
@@ -666,6 +707,7 @@ export async function createApp(options = {}) {
     }),
   );
   server.on('close', () => {
+    void dshRemote.close();
     learning.close();
     mailAgent.close();
     appFunctions.close();

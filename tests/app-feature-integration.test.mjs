@@ -185,6 +185,19 @@ test('memory APIs and both chat-tool scopes share corrected data without leaking
 });
 test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate accounts, and reject cancelled capabilities', async (t) => {
   const f = await fixture(t);
+  const runtime = await f.invoke('assistant.runtime');
+  assert.equal(runtime.result.runtime.backend, 'pi');
+  assert.equal(runtime.result.runtime.transport, 'server');
+  assert.equal(runtime.result.runState.state, 'executing');
+  const remote = await f.invoke('assistant.remote_connections');
+  assert.equal(remote.result.enabled, false);
+  assert.deepEqual(remote.result.connections, []);
+  assert.deepEqual((await f.invoke('assistant.remote_conversations')).result.conversations, []);
+  assert.equal(
+    (await f.invoke('assistant.remote_conversations', { id: randomUUID() })).status,
+    404,
+  );
+  assert.equal((await f.invoke('assistant.runtime', { backend: 'dsh' })).status, 400);
   assert.equal((await f.req('/app-functions/requests?taskId=' + f.task)).status, 401);
   assert.equal((await f.tool({ action: 'catalog' }, 'not-a-capability')).status, 403);
   assert.ok(

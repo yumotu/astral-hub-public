@@ -1,0 +1,15 @@
+{
+  "name": "astral-dsh-server-runtime",
+  "version": "0.8.12",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@noble/curves": "2.0.1",
+    "@xterm/headless": "6.0.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "ws": "8.22.2",
+    "zod": "4.6.7"
+  }
+}

@@ -251,6 +251,17 @@ test('remote main conversations can invoke current-account app functions without
   );
   assert.equal(inputs.status, 200);
   assert.deepEqual(inputs.body.result.files, []);
+  const runtime = await f.req(
+    path,
+    { action: 'invoke', name: 'assistant.runtime', input: {}, callId: 'runtime' },
+    f.device.token,
+  );
+  assert.equal(runtime.status, 200);
+  assert.equal(runtime.body.result.runtime.backend, 'pi');
+  assert.equal(runtime.body.result.runtime.transport, 'astral-relay');
+  assert.equal(runtime.body.result.runtime.deviceId, f.device.deviceId);
+  assert.equal(runtime.body.result.runtime.projectId, p.projectId);
+  assert.equal(runtime.body.result.runState.state, 'executing');
   const learning = await f.req(
     path,
     { action: 'invoke', name: 'learning.list', input: {}, callId: 'list' },
@@ -317,6 +328,58 @@ test('remote main conversations can invoke current-account app functions without
     409,
   );
   assert.equal(f.db.prepare('SELECT count(*) n FROM direct_messages').get().n, 1);
+});
+
+test('computer runtime identity and optional capabilities stay bound across offline status, cancellation and reopening', async (t) => {
+  const f = await fixture(t),
+    p = f.submit();
+  await f.req(
+    '/relay/device/workspace/announce',
+    {
+      version: 2,
+      projects: f.projects,
+      capabilities: ['thinking_levels', 'chat_inputs', 'interactive_questions', 'streaming'],
+    },
+    f.device.token,
+  );
+  const created = await f.req('/relay/submissions', p, f.owner.token);
+  assert.equal(created.status, 202);
+  const runtime = created.body.job.runtime;
+  assert.equal(runtime.sessionKey, p.conversationId);
+  assert.equal(runtime.transport, 'astral-relay');
+  assert.equal(runtime.location, 'computer');
+  assert.equal(created.body.job.runState.state, 'queued');
+  assert.equal((await f.poll()).body.job.runState.state, 'executing');
+  const snapshot = await f.req('/relay/conversations/' + p.conversationId, null, f.owner.token);
+  assert.deepEqual(snapshot.body.conversation.runtime, runtime);
+  assert.equal(
+    (await f.req('/relay/conversations/' + p.conversationId, null, f.other.token)).status,
+    404,
+  );
+  const listPath = '/relay/projects?deviceId=' + f.device.deviceId;
+  let agent = (await f.req(listPath, null, f.owner.token)).body.projects[0].agent;
+  assert.equal(agent.capabilities.thinking.supported, true);
+  assert.equal(agent.capabilities.questions.supported, true);
+  assert.equal(agent.capabilities.stop.supported, false);
+  await f.req('/relay/jobs/' + p.id + '/cancel', {}, f.owner.token);
+  assert.equal(
+    (await f.req('/relay/jobs/' + p.id, null, f.owner.token)).body.job.runState.state,
+    'stopping',
+  );
+  f.tick(46000);
+  agent = (await f.req(listPath, null, f.owner.token)).body.projects[0].agent;
+  assert.equal(agent.capabilities.attachments.supported, false);
+  assert.match(agent.capabilities.attachments.reason, /离线/);
+  assert.deepEqual(
+    JSON.parse(
+      f.db
+        .prepare(
+          "SELECT runtime FROM agent_conversation_bindings WHERE owner=? AND origin='computer' AND conversation_id=?",
+        )
+        .get(f.owner.user.id, p.conversationId).runtime,
+    ),
+    runtime,
+  );
 });
 
 test('natural-language scheduling captures the live computer scope and durable occurrences remain on that target through offline and revocation', async (t) => {

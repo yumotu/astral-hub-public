@@ -1,0 +1,78 @@
+.dsh-connection-settings {
+  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 14px;
+  min-width: 0;
+}
+.dsh-saved-connection,
+.dsh-trust-host {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  margin: 10px 0;
+  min-width: 0;
+}
+.dsh-saved-connection small,
+.dsh-fingerprint {
+  overflow-wrap: anywhere;
+}
+.dsh-add-connection {
+  display: grid;
+  gap: 12px;
+}
+.dsh-workspace fieldset {
+  border: 0;
+  margin: 10px 0;
+  padding: 0;
+  min-width: 0;
+}
+.dsh-workspace .question-options button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.dsh-workspace .question-options small {
+  display: block;
+  color: var(--muted);
+}
+.dsh-workspace .chat-panel > .error,
+.dsh-workspace .chat-panel > .field-help,
+.dsh-pending-messages {
+  margin: 4px 14px;
+  font-size: 12px;
+}
+.dsh-workspace .pi-message-content > .message {
+  margin-bottom: 22px;
+}
+.dsh-workspace .question-options {
+  min-width: 0;
+}
+.dsh-workspace legend,
+.dsh-workspace .plugin-request p {
+  overflow-wrap: anywhere;
+}
+.dsh-chat-settings {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.dsh-chat-settings summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.dsh-chat-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.dsh-chat-settings input {
+  width: auto;
+}
+.dsh-chat-settings p {
+  overflow-wrap: anywhere;
+  margin-bottom: 0;
+}

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { documentContent, documentReadOptions } from './pdf-content.mjs';
 import { attachmentMaxBytes } from './attachment-limits.mjs';
 
-export async function readDocumentPages(bytes, options = {}, { signal, onProgress } = {}) {
+export async function readDocumentPages(bytes, options = {}, { signal, onProgress, depsFile } = {}) {
   documentReadOptions(options);
   if (bytes.length > attachmentMaxBytes) return Promise.reject(Error('附件超过50 MiB。'));
   if (signal?.aborted) return Promise.reject(Error('附件读取已取消。'));
@@ -16,7 +16,7 @@ export async function readDocumentPages(bytes, options = {}, { signal, onProgres
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bytes, options: { ...options, ocrDirectory: directory } },
         env: {
-          ASTRAL_DOCUMENT_DEPS: process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json',
+          ASTRAL_DOCUMENT_DEPS: depsFile || process.env.ASTRAL_DOCUMENT_DEPS || '/extensions/package.json',
           DISABLE_SYSTEM_FONTS_LOAD: '1',
         },
         execArgv: [],

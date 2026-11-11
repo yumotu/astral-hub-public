@@ -4,6 +4,9 @@ import { applyPiTimeline, interruptedTools } from '../shared/pi-timeline.mjs';
 import { applyRunMetrics, normalizeTodos } from '../shared/pi-activity.mjs';
 import { concurrencyLimits } from '../deploy/pi/concurrency.mjs';
 import { questionContinuation, continuedQuestions } from './question-continuation.mjs';
+import { agentRunState } from '../shared/agent-runtime.mjs';
+import { createAgentBindings, serverPiRuntime } from './agent-bindings.mjs';
+import { createAgentDrivers } from './agent-drivers.mjs';
 
 const pending = new Set(['queued', 'running', 'delivering', 'accepted', 'applied', 'stopping']);
 const terminal = new Set(['done', 'error', 'cancelled', 'interrupted']);
@@ -33,6 +36,22 @@ export function createPiTasks(
   db.exec(
     "CREATE INDEX IF NOT EXISTS pi_tasks_status ON pi_tasks(json_extract(state,'$.status'),seq)",
   );
+  const bindings = createAgentBindings(db);
+  const drivers = createAgentDrivers({
+    bindings,
+    adapters: [
+      {
+        backend: 'pi',
+        transport: 'server',
+        available,
+        run,
+        steer,
+        cancel,
+        respond,
+        prepareQuestionResume,
+      },
+    ],
+  });
   const notifications = new EventEmitter();
   notifications.setMaxListeners(200);
   const deliveries = new Map();
@@ -48,7 +67,21 @@ export function createPiTasks(
   const lane = (owner, task) => `${owner}:${task.conversationId}`;
   let closed = false,
     lastOwner = null;
-  const decode = (row) => row && { ...JSON.parse(row.payload), ...JSON.parse(row.state) };
+  const decode = (row) => {
+    if (!row) return null;
+    const task = { ...JSON.parse(row.payload), ...JSON.parse(row.state) };
+    const expectedRuntime = serverPiRuntime(row.owner, task.conversationId, task.projectId);
+    task.runtime = bindings.assert(
+      row.owner,
+      'server',
+      task.conversationId,
+      task.runtime || expectedRuntime,
+    );
+    if (Object.keys(expectedRuntime).some((key) => task.runtime[key] !== expectedRuntime[key]))
+      throw fail(409, '任务不能更换 Agent 或执行位置。');
+    task.runState = agentRunState(task);
+    return task;
+  };
   const row = (owner, id) =>
     db.prepare('SELECT * FROM pi_tasks WHERE owner=? AND id=?').get(owner, id);
   const get = (owner, id) => decode(row(owner, id));
@@ -66,14 +99,14 @@ export function createPiTasks(
       owner,
       id,
     );
-    const data = event || { type: 'task', task: { ...JSON.parse(current.payload), ...state } };
+    const task = get(owner, id);
+    const data = event || { type: 'task', task };
     db.prepare('INSERT INTO pi_task_events(owner,task_id,event) VALUES(?,?,?)').run(
       owner,
       id,
       JSON.stringify(data),
     );
     notifications.emit(owner);
-    const task = get(owner, id);
     try {
       onEvent?.(owner, task, data);
     } catch {
@@ -177,6 +210,13 @@ export function createPiTasks(
   // A restart never silently repeats an operation whose side effects are unknown.
   for (const r of db.prepare('SELECT * FROM pi_tasks ORDER BY seq').all()) {
     const task = decode(r);
+    // Read legacy payloads without rewriting their task IDs, history or queues.
+    bindings.bind(
+      r.owner,
+      'server',
+      task.conversationId,
+      serverPiRuntime(r.owner, task.conversationId, task.projectId),
+    );
     if (pending.has(task.status) && task.status !== 'queued') {
       const done = completed(r.owner, task.id);
       update(r.owner, task.id, {
@@ -217,7 +257,9 @@ export function createPiTasks(
       }
       const choices = [...first.values()].filter(
         ({ owner, task, key }) =>
-          !running.has(key) && Date.now() >= (retryAt.get(key) || 0) && available(owner, task),
+          !running.has(key) &&
+          Date.now() >= (retryAt.get(key) || 0) &&
+          drivers.available(owner, task),
       );
       if (!choices.length) break;
       // Prefer the least occupied user, then rotate ties. FIFO is retained inside each lane.
@@ -245,7 +287,7 @@ export function createPiTasks(
             ? '等待执行器就绪'
             : running.size >= capacity
               ? '等待空闲执行名额'
-              : !available(r.owner, task)
+              : !drivers.available(r.owner, task)
                 ? '等待执行器就绪'
                 : '等待公平调度';
       seen.add(key);
@@ -268,7 +310,7 @@ export function createPiTasks(
       startedAt: new Date().toISOString(),
     });
     try {
-      const result = await run(owner, task, (e) => event(owner, task.id, e));
+      const result = await drivers.invoke('run', owner, task, (e) => event(owner, task.id, e));
       if (closed) return;
       const latest = get(owner, task.id);
       retryAt.delete(key);
@@ -405,6 +447,22 @@ export function createPiTasks(
       return { events, cursor: events.at(-1)?.seq ?? after };
     },
     add(owner, p) {
+      if (p.projectId === undefined) {
+        const existing = bindings.get(owner, 'server', p.conversationId);
+        if (existing) p = { ...p, projectId: existing.projectId };
+      }
+      const runtime = bindings.assert(
+        owner,
+        'server',
+        p.conversationId,
+        serverPiRuntime(owner, p.conversationId, p.projectId),
+      );
+      if (p.runtime) {
+        const requested = bindings.assert(owner, 'server', p.conversationId, p.runtime);
+        if (Object.keys(runtime).some((key) => requested[key] !== runtime[key]))
+          throw fail(409, '任务不能更换 Agent 或执行位置。');
+      }
+      p = { ...p, runtime };
       if (
         db
           .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
@@ -455,6 +513,7 @@ export function createPiTasks(
         metrics: { modelTurns: 0, toolCalls: 0 },
         createdAt: new Date().toISOString(),
       };
+      bindings.bind(owner, 'server', p.conversationId, runtime);
       db.prepare(
         'INSERT INTO pi_tasks(owner,id,conversation_id,payload,state) VALUES(?,?,?,?,?)',
       ).run(owner, p.id, p.conversationId, JSON.stringify(p), JSON.stringify(state));
@@ -466,7 +525,7 @@ export function createPiTasks(
           .catch(() => {})
           .then(() => {
             if (closed || get(owner, task.id)?.status !== 'delivering') return;
-            return steer(owner, task);
+            return drivers.invoke('steer', owner, task);
           });
         deliveries.set(key, delivery);
         void delivery
@@ -539,7 +598,7 @@ export function createPiTasks(
       });
       try {
         if (!respond) throw fail(503, '执行器暂不支持插件交互。');
-        await respond(owner, task, reply);
+        await drivers.invoke('respond', owner, task, reply);
         const latest = get(owner, id);
         return update(owner, id, {
           uiRequests: latest.uiRequests.map((r) =>
@@ -579,8 +638,14 @@ export function createPiTasks(
           throw fail(409, '此对话还有运行中或结果未知的任务，请先核对。');
       };
       check();
+      bindings.bind(
+        owner,
+        'server',
+        original.conversationId,
+        serverPiRuntime(owner, original.conversationId, original.projectId),
+      );
       if (!prepareQuestionResume) throw fail(503, '执行器暂不支持问题续接。');
-      await prepareQuestionResume(owner, original);
+      await drivers.invoke('prepareQuestionResume', owner, original);
       next = questionContinuation(owner, get(owner, id), reply);
       if (next.reused) return get(owner, next.id);
       check();
@@ -627,7 +692,7 @@ export function createPiTasks(
         return update(owner, id, { status: 'cancelled', revision: t.revision + 1 });
       if (t.parentId) throw fail(409, '补充已交给 Pi，无法单独撤回；可停止当前任务。');
       update(owner, id, { status: 'stopping', phase: '正在停止' });
-      await cancel(owner, t);
+      await drivers.invoke('cancel', owner, t);
       return get(owner, id);
     },
     close() {

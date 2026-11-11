@@ -13,6 +13,12 @@
 !deploy/pi/long-goal-command.mjs
 !deploy/pi/goal-plan.mjs
 !deploy/pi/question-continuation.mjs
+!deploy/pi/chat-content.mjs
+!deploy/pi/document-text.mjs
+!deploy/pi/office-content.mjs
+!deploy/pi/pdf-document.mjs
+!deploy/pi/pdf-content.mjs
+!deploy/pi/attachments.mjs
 !dist/
 !dist/**
 **/node_modules/**

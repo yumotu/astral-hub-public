@@ -247,7 +247,9 @@ export function MemorySettings({ settings }: { settings: Settings }) {
                 ? '手动记录'
                 : m.source.origin === 'computer'
                   ? '电脑对话'
-                  : '服务器对话'}
+                  : m.source.origin === 'dsh'
+                    ? 'DSH 对话'
+                    : '服务器对话'}
               {m.source.conversationId ? ' · ' + m.source.conversationId : ''}
             </p>
             <blockquote>{m.source.quote}</blockquote>

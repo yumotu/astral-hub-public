@@ -1,4 +1,5 @@
 import { fail } from './accounts.mjs';
+import { createAgentBindings, serverPiRuntime } from './agent-bindings.mjs';
 
 export function createPiConversations(db, { now = Date.now } = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS pi_conversations(
@@ -19,10 +20,34 @@ export function createPiConversations(db, { now = Date.now } = {}) {
     db.exec('ALTER TABLE pi_conversations ADD COLUMN title_attempted INTEGER NOT NULL DEFAULT 0');
   const select = `SELECT id,title,title_source AS titleSource,project_id AS projectId,access,pinned_at AS pinnedAt,
     archived_at AS archivedAt,created_at AS createdAt,updated_at AS updatedAt FROM pi_conversations`;
-  const get = (owner, id) => db.prepare(`${select} WHERE owner=? AND id=?`).get(owner, id) || null;
+  const bindings = createAgentBindings(db);
+  for (const row of db.prepare('SELECT owner,id,project_id FROM pi_conversations').all())
+    bindings.bind(row.owner, 'server', row.id, serverPiRuntime(row.owner, row.id, row.project_id));
+  // Pre-metadata releases can have history without a sidebar record.
+  for (const table of ['pi_turns', 'pi_jobs']) {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))
+      continue;
+    for (const row of db
+      .prepare(`SELECT DISTINCT owner,conversation_id AS id,project_id FROM ${table}`)
+      .all())
+      bindings.bind(
+        row.owner,
+        'server',
+        row.id,
+        serverPiRuntime(row.owner, row.id, row.project_id),
+      );
+  }
+  const view = (owner, row) =>
+    row ? { ...row, runtime: serverPiRuntime(owner, row.id, row.projectId) } : null;
+  const get = (owner, id) =>
+    view(owner, db.prepare(`${select} WHERE owner=? AND id=?`).get(owner, id));
   return {
     get,
-    list: (owner) => db.prepare(`${select} WHERE owner=?`).all(owner),
+    list: (owner) =>
+      db
+        .prepare(`${select} WHERE owner=?`)
+        .all(owner)
+        .map((row) => view(owner, row)),
     preferences(owner) {
       const row = db
         .prepare('SELECT default_project_id AS defaultProjectId FROM pi_preferences WHERE owner=?')
@@ -36,6 +61,8 @@ export function createPiConversations(db, { now = Date.now } = {}) {
       return this.preferences(owner);
     },
     create(owner, id, { projectId = null, access = 'read' } = {}) {
+      const runtime = serverPiRuntime(owner, id, projectId);
+      bindings.assert(owner, 'server', id, runtime);
       const existing = get(owner, id);
       if (existing) {
         if (existing.projectId !== projectId)
@@ -48,6 +75,7 @@ export function createPiConversations(db, { now = Date.now } = {}) {
       )
         throw fail(400, '对话数量已达上限，请先删除不需要的对话。');
       const timestamp = new Date(now()).toISOString();
+      bindings.bind(owner, 'server', id, runtime);
       db.prepare(
         'INSERT INTO pi_conversations(owner,id,project_id,access,created_at,updated_at) VALUES(?,?,?,?,?,?)',
       ).run(owner, id, projectId, access, timestamp, timestamp);

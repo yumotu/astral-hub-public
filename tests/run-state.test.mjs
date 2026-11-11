@@ -10,5 +10,5 @@ test('real task status wins over stale phase and visibly distinguishes execution
   assert.equal(runState('cancelled', '正在执行工具').label, '已停止');
   assert.equal(runState('cancelled').busy, false);
   assert.equal(runState('done', '正在思考').label, '已完成');
-  assert.equal(runState('interrupted').state, 'failed');
+  assert.equal(runState('interrupted').state, 'unknown');
 });

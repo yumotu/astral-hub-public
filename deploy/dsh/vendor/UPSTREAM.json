@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/liguobao/ds-harness-remote",
+  "commit": "14037e78f45e14f7a5ad56c2266944548def7e3d",
+  "build": "Source bundles used by prior actual Harness acceptance; relay-only; no npm plugin substitution",
+  "files": {
+    "remote-host.mjs": "27aaa76bcd62037a7044c34f43ea13aec2c22716388797ee02d86d5edecf1f29",
+    "remote-server.mjs": "a999aaa6e73605ea2a89424921840ad5e0088e078b034a2d8491c87ec56949d9"
+  }
+}

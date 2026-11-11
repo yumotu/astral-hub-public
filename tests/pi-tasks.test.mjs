@@ -84,7 +84,10 @@ async function fixture(t, options = {}) {
       forkCalls.push(p);
       return Response.json({ native: true });
     }
-    return Response.json({ nativeSessions: options.nativeSessions === true });
+    return Response.json({
+      nativeSessions: options.nativeSessions === true,
+      ...(options.health || {}),
+    });
   };
   const app = await createApp({
     token,
@@ -934,4 +937,85 @@ test('continuous submissions choose the live parent at admission and deliver in 
   f.finish(late.id);
   assert.equal((await f.req('/pi/submissions', a, f.owner)).status, 200);
   assert.equal(f.calls.length, 2);
+});
+
+test('server Pi exposes immutable runtime bindings and host-reported capabilities without accepting backend overrides', async (t) => {
+  const f = await fixture(t),
+    id = randomUUID(),
+    p = message(id, 'runtime binding', { projectId: 'alpha' });
+  const submission = await f.req('/pi/tasks', p, f.owner);
+  assert.equal(submission.status, 202);
+  const runtime = submission.body.task.runtime;
+  assert.equal(runtime.backend, 'pi');
+  assert.equal(runtime.transport, 'server');
+  assert.equal(runtime.location, 'server');
+  assert.equal(runtime.projectId, 'alpha');
+  assert.equal(runtime.sessionKey.length, 64);
+  assert.equal(runtime.deviceId, null);
+  await eventually(() => f.calls.some((c) => c.requestId === p.id));
+  const running = await f.task(p.id);
+  assert.equal(running.runState.state, 'executing');
+  assert.equal(f.calls.at(-1).sessionKey, runtime.sessionKey);
+  const q = {
+    type: 'extension_ui_request',
+    id: 'binding-question',
+    method: 'input',
+    title: 'synthetic question',
+  };
+  f.emit(p.id, q);
+  await eventually(
+    () => f.task(p.id),
+    (task) => task?.runState.state === 'waiting',
+  );
+  await f.req('/pi/tasks/' + p.id + '/ui', { id: q.id, value: 'answer' }, f.owner);
+  await eventually(
+    () => f.task(p.id),
+    (task) => task?.runState.state === 'executing',
+  );
+  assert.equal(
+    (await f.req('/pi/tasks', message(id, 'forged', { runtime: { backend: 'dsh' } }), f.owner))
+      .status,
+    400,
+  );
+  assert.equal(
+    (await f.req('/pi/tasks', message(id, 'switch project', { projectId: 'readonly' }), f.owner))
+      .status,
+    409,
+  );
+  f.finish(p.id);
+  await eventually(
+    () => f.task(p.id),
+    (task) => task?.status === 'done',
+  );
+  assert.deepEqual(
+    (await f.req('/pi/conversations/' + id, null, f.owner)).body.conversation.runtime,
+    runtime,
+  );
+  assert.equal((await f.task(p.id)).runState.state, 'complete');
+  const status = (await f.req('/pi/status', null, f.owner)).body;
+  assert.equal(status.dsh.enabled, false);
+  assert.equal(status.agent.backend, 'pi');
+  assert.equal(status.agent.capabilities.attachments.supported, false);
+  assert.ok(status.agent.capabilities.attachments.reason);
+});
+
+test('server capability reports require actual readiness and strict host booleans without granting a terminal', async (t) => {
+  const health = {
+    ready: true,
+    streaming: true,
+    attachments: true,
+    agentCapabilities: { thinking: true, steer: true, stop: true, terminal: true, goal: 'true' },
+  };
+  const f = await fixture(t, { health });
+  const first = (await f.req('/pi/status', null, f.owner)).body;
+  assert.equal(first.agent.capabilities.streaming.supported, true);
+  assert.equal(first.agent.capabilities.thinking.supported, true);
+  assert.equal(first.agent.capabilities.attachments.supported, true);
+  assert.equal(first.agent.capabilities.goal.supported, false);
+  assert.equal(first.agent.capabilities.terminal.supported, false);
+  assert.equal(first.dsh.enabled, false);
+  health.ready = false;
+  const pending = (await f.req('/pi/status', null, f.owner)).body;
+  assert.equal(pending.agent.capabilities.streaming.supported, false);
+  assert.match(pending.agent.capabilities.thinking.reason, /就绪/);
 });

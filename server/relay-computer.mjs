@@ -4,6 +4,8 @@ import { createRelayArtifacts } from './relay-artifacts.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 import { parseGoalPlan } from '../deploy/pi/goal-plan.mjs';
 import { Readable } from 'node:stream';
+import { agentRunState } from '../shared/agent-runtime.mjs';
+import { createAgentBindings, computerPiRuntime } from './agent-bindings.mjs';
 import {
   questionReplySchema,
   questionContinuation,
@@ -155,6 +157,17 @@ export function createRelayComputer(
   db.exec(
     'CREATE TABLE IF NOT EXISTS relay_closed_conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,project_id TEXT NOT NULL,closed_at TEXT NOT NULL)',
   );
+  const bindings = createAgentBindings(db);
+  for (const c of db
+    .prepare(
+      `SELECT owner,id,device_id,project_id FROM relay_conversations
+       UNION SELECT owner,conversation_id AS id,device_id,project_id
+       FROM relay_jobs WHERE conversation_id IS NOT NULL AND project_id IS NOT NULL`,
+    )
+    .all())
+    bindings.bind(c.owner, 'computer', c.id, computerPiRuntime(c.device_id, c.project_id, c.id));
+  const runtimeFor = (owner, device, pid, conversation) =>
+    bindings.assert(owner, 'computer', conversation, computerPiRuntime(device, pid, conversation));
   const view = (j) =>
     j && {
       id: j.id,
@@ -177,6 +190,15 @@ export function createRelayComputer(
         chatFiles?.selected(j.owner, j.conversation_id, JSON.parse(j.attachments || '[]')) || [],
       execute: !!j.execute,
       status: j.status,
+      runtime: runtimeFor(j.owner, j.device_id, j.project_id, j.conversation_id),
+      runState: agentRunState({
+        ...JSON.parse(j.state || '{}'),
+        status: j.status,
+        stopPending:
+          j.status === 'cancelled' &&
+          !!JSON.parse(j.state || '{}').stop &&
+          !JSON.parse(j.state || '{}').stop.acknowledgedAt,
+      }),
       output: j.output,
       thinking: JSON.parse(j.state || '{}').thinking || '',
       phase: JSON.parse(j.state || '{}').phase || '',
@@ -211,6 +233,7 @@ export function createRelayComputer(
     );
   function allowed(j) {
     if (!j.project_id) return;
+    runtimeFor(j.owner, j.device_id, j.project_id, j.conversation_id);
     const p = project(j.device_id, j.project_id);
     if (j.access === 'edit' && !p.allow_write) throw fail(403, '本机已撤销文件修改权限。');
     if (j.execute && !p.allow_execute) throw fail(403, '本机未授权执行命令。');
@@ -424,7 +447,7 @@ export function createRelayComputer(
         db.prepare(
           "UPDATE relay_jobs SET status='running',lease_until=?,updated_at=? WHERE id=?",
         ).run(now() + 45000, new Date(now()).toISOString(), next.id);
-        json(200, { job: { ...view(next), model, status: 'running' } });
+        json(200, { job: { ...view(job(d.id, next.id)), model } });
         return true;
       }
       const match = path.match(
@@ -677,6 +700,7 @@ export function createRelayComputer(
           .parse(await body(req));
         const device = ownedDevice(p.deviceId, actor.id);
         const pr = project(p.deviceId, p.projectId);
+        const runtime = runtimeFor(actor.id, p.deviceId, p.projectId, p.conversationId);
         if (p.access === 'edit' && !pr.allow_write) throw fail(403, '本机未允许修改此项目。');
         if (p.execute && !pr.allow_execute) throw fail(403, '本机未授权终端或Agent执行命令。');
         if (db.prepare('SELECT 1 FROM relay_closed_conversations WHERE id=?').get(p.conversationId))
@@ -777,6 +801,7 @@ export function createRelayComputer(
         const at = new Date(now()).toISOString();
         db.exec('BEGIN IMMEDIATE');
         try {
+          bindings.bind(actor.id, 'computer', p.conversationId, runtime);
           if (internal.resumeFrom) {
             const original = db
               .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=?')
@@ -883,6 +908,7 @@ export function createRelayComputer(
         json(200, {
           conversations: page.map(({ seq, ...c }) => ({
             ...c,
+            runtime: runtimeFor(actor.id, device, pid, c.id),
             version: versionText(stats.get(c.id)),
             active: stats.get(c.id)?.active || 0,
           })),
@@ -922,6 +948,7 @@ export function createRelayComputer(
               title: c.title,
               deviceId: c.device_id,
               projectId: c.project_id,
+              runtime: runtimeFor(actor.id, c.device_id, c.project_id, c.id),
               pinnedAt: c.pinned_at,
               archivedAt: c.archived_at,
               version: version(actor.id, c.id),
