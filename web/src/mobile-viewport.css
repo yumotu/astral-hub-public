@@ -4,7 +4,7 @@ html[data-mobile-viewport] .workspace.assistant-workspace {
 @media (max-height: 320px) {
   /* Connection errors and recovery controls must share the short viewport
      with the editor, including after the landscape keyboard closes. */
-  .assistant-workspace > .assistant-main > .error {
+  .assistant-workspace :is(.assistant-main, .assistant-runtime-surface) > .error {
     max-height: 28px;
     padding: 3px 8px;
     margin: 4px 12px;
@@ -67,7 +67,7 @@ html[data-mobile-viewport] .workspace.assistant-workspace {
    one row; normal navigation and history return when the IME closes. */
 @media (max-height: 220px) and (max-width: 1000px) {
   html[data-keyboard='open'] .assistant-workspace:has(.assistant-composer:focus-within)
-    > .assistant-main > .error { display: none; }
+    :is(.assistant-main, .assistant-runtime-surface) > .error { display: none; }
   html[data-keyboard='open'] .assistant-workspace:has(.assistant-composer:focus-within)
     :is(.assistant-workspace-heading, .assistant-toolbar, .assistant-statusbar,
         .pi-message-area, .background-task-bar, .pi-archived-banner) {

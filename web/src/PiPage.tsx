@@ -274,7 +274,7 @@ export function PiPage(props: {
             manage={() => setConnectionsOpen(true)}
           />
         ) : null}
-        <div style={{ display: driver === 'pi' ? 'contents' : 'none' }}>
+        <div className="assistant-runtime-surface" style={{ display: driver === 'pi' ? 'contents' : 'none' }}>
           <ServerPiPage
             key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
             driver={driver}
