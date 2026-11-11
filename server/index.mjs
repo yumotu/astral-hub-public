@@ -38,13 +38,24 @@ const entrySchema = z
     if (e.deleted && e.data !== null)
       ctx.addIssue({ code: 'custom', message: '删除记录的内容必须为 null' });
   });
-async function body(req) {
+async function body(req, { maxBytes = 2 * 1024 * 1024, tooLargeMessage = '请求内容过大' } = {}) {
+  // A route may opt into a larger bounded payload only after authenticating it.
+  if (Number(req.headers['content-length']) > maxBytes) {
+    req.resume();
+    throw fail(413, tooLargeMessage);
+  }
   let size = 0;
   const chunks = [];
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw fail(413, '请求内容过大');
-    chunks.push(chunk);
+  try {
+    // Keep the socket writable so a chunked over-limit request receives its 413.
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+      size += chunk.length;
+      if (size > maxBytes) throw fail(413, tooLargeMessage);
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    req.resume();
+    throw error;
   }
   try {
     return JSON.parse(Buffer.concat(chunks).toString());

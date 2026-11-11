@@ -6,6 +6,7 @@ import { digest, fail } from './accounts.mjs';
 import { createRelayWorkspace } from './relay-workspace.mjs';
 const uuid = z.string().uuid(),
   access = z.enum(['read', 'edit']);
+const PROJECT_MODEL_MAX_BYTES = 16 * 1024 * 1024;
 export function createRelay(db, { body, config, options = {} }) {
   const now = options.now ?? Date.now,
     providerFetch = options.relayFetch ?? config.fetch;
@@ -119,6 +120,13 @@ export function createRelay(db, { body, config, options = {} }) {
     workspace.sweep();
   }, 5000);
   leaseTimer.unref();
+  function activeModelJob(device, id) {
+    const j = deviceJob(device, id);
+    if (j.status !== 'running' || j.lease_until <= now())
+      throw fail(403, '只有正在执行的任务可以调用模型。');
+    workspace.computer.allowed(j);
+    return j;
+  }
   return {
     schedule: (run) => workspace.computer.schedule(run),
     async before(req, url, res, json) {
@@ -271,22 +279,35 @@ export function createRelay(db, { body, config, options = {} }) {
         return true;
       }
       if (path === '/api/relay/provider/chat/completions' && req.method === 'POST') {
-        const id = uuid.parse(req.headers['x-astral-job']),
-          j = deviceJob(d, id);
-        if (j.status !== 'running' || j.lease_until <= now())
-          throw fail(403, '只有正在执行的任务可以调用模型。');
-        workspace.computer.allowed(j);
+        const id = uuid.parse(req.headers['x-astral-job']);
+        let j = activeModelJob(d, id);
         if (!config.apiKey) throw fail(503, '服务器未配置 DeepSeek。');
         limit('model:' + d.id, j.project_id ? 120 : 12);
         limit('model:all', j.project_id ? 240 : 30);
-        const p = await body(req);
+        const p = await body(
+          req,
+          j.project_id
+            ? {
+                maxBytes: PROJECT_MODEL_MAX_BYTES,
+                tooLargeMessage:
+                  '远程电脑模型请求超过 16 MiB，请压缩对话上下文或减少本轮图片后再发送。原会话已保留。',
+              }
+            : undefined,
+        );
+        // A large/slow upload must not outlive stop, lease expiry or revocation.
+        j = activeModelJob(authenticate(req), id);
         if (
+          !p ||
+          typeof p !== 'object' ||
+          Array.isArray(p) ||
           !Array.isArray(p.messages) ||
-          p.messages.length > (j.project_id ? 1000 : 100) ||
-          !p.messages.length ||
-          JSON.stringify(p).length > (j.project_id ? 1000000 : 300000)
+          !p.messages.length
         )
-          throw fail(400, '模型请求格式不正确或过大。');
+          throw fail(400, '模型请求格式不正确：messages 必须是非空数组。');
+        // Native project context is bounded by UTF-8 request bytes, not turns.
+        // Retain the smaller envelope for the legacy one-shot executor.
+        if (!j.project_id && (p.messages.length > 100 || JSON.stringify(p).length > 300000))
+          throw fail(413, '旧版电脑模型请求过大，请减少上下文或更新电脑执行器。');
         if (controllers.has(id)) throw fail(429, '本任务已有模型请求。');
         const controller = new AbortController();
         controllers.set(id, controller);

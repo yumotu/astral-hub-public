@@ -38,11 +38,11 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, appendFileSync } from 'node:fs';
+          import { packageRelease } from './shared/release-intent.mjs';
           const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
           const e = process.env;
-          const tagged = e.GITHUB_EVENT_NAME === 'push' && e.GITHUB_REF === `refs/tags/v${version}`;
-          const manual = e.GITHUB_EVENT_NAME === 'workflow_dispatch' && e.PUBLISH_RELEASE === 'true' && e.GITHUB_REF === `refs/heads/${e.DEFAULT_BRANCH}`;
-          appendFileSync(e.GITHUB_OUTPUT, `release=${e.ANDROID_ONLY !== 'true' && (tagged || manual)}\n`);
+          const release = packageRelease({ version, eventName: e.GITHUB_EVENT_NAME, ref: e.GITHUB_REF, defaultBranch: e.DEFAULT_BRANCH, publishRelease: e.PUBLISH_RELEASE, androidOnly: e.ANDROID_ONLY, headMessage: JSON.parse(readFileSync(e.GITHUB_EVENT_PATH, 'utf8')).head_commit?.message });
+          appendFileSync(e.GITHUB_OUTPUT, `release=${release}\n`);
           NODE
       - run: node scripts/audit-public-source.mjs
       - name: Scan committed public history for secrets

@@ -1,3 +1,7 @@
+# Astral Hub 0.8.11 candidate
+
+Fixes remote-computer model relay rejection of long native conversations. [Release notes](docs/release-0.8.11.md). Full CI, signing and release checks are pending. Existing Pi conversations and device pairing are preserved. Experimental DSH changes are not included.
+
 # 星屿 Astral Hub
 
 可自托管的多平台 AI 工作空间。通过同一聊天界面使用服务器项目、明确授权的电脑项目、邮件、学习资料与应用工具。
