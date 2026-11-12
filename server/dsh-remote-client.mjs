@@ -182,7 +182,7 @@ export function createRemoteServerApi({ origin, allowedOrigins, fetch: request =
             role: 'client',
             platform: 'astral-hub',
             identityKey: identity.publicKey,
-            clientVersion: '0.8.12',
+            clientVersion: '0.8.13',
           },
         },
         webToken,

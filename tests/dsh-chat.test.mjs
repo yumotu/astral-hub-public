@@ -376,6 +376,7 @@ function conversationsFixture(t) {
     deviceId = randomUUID();
   let closed = false,
     uncertain = false,
+    reconnectGate = null,
     stops = 0,
     creates = 0;
   const chat = {
@@ -419,7 +420,10 @@ function conversationsFixture(t) {
         throw Object.assign(Error('revoked'), { status: 404 });
       return { state: 'ready' };
     },
-    connection: async () => ({ ...(await connection()), client }),
+    connection: async () => {
+      if (reconnectGate) await reconnectGate;
+      return { ...(await connection()), client };
+    },
     catalogue: async () => ({
       host: { deviceId, location: 'computer' },
       workspaces: [{ id: 'project' }],
@@ -449,6 +453,16 @@ function conversationsFixture(t) {
     watchers,
     connectionId,
     actions,
+    pauseReconnect() {
+      let release;
+      reconnectGate = new Promise((r) => {
+        release = r;
+      });
+      return () => {
+        reconnectGate = null;
+        release();
+      };
+    },
     restart() {
       service.close();
       watchers.clear();
@@ -504,6 +518,40 @@ test('DSH conversations isolate native bindings, journal exact submissions and n
     status: 404,
   });
   assert.equal(f.actions.length, 2);
+});
+test('DSH cached history returns during a stalled reconnect and resumes without replaying messages', async (t) => {
+  const f = conversationsFixture(t),
+    id = randomUUID();
+  await f.call('', {
+    id,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'native',
+  });
+  f.watchers.get('native')(
+    record(0, 'user/message', {
+      content: [{ type: 'text', text: 'preserved message' }],
+      source: { kind: 'user' },
+    }),
+  );
+  f.restart();
+  const resume = f.pauseReconnect();
+  t.after(resume);
+  let timer;
+  const cached = await Promise.race([
+    f.call('/' + id),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error('History blocked on reconnect')), 1500);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  assert.equal(cached.conversation.messages[0].text, 'preserved message');
+  assert.equal(cached.conversation.connection, 'reconnecting');
+  resume();
+  const recovered = await f.call('/' + id);
+  assert.equal(recovered.conversation.connection, 'connected');
+  assert.equal(recovered.conversation.messages[0].text, 'preserved message');
+  assert.equal(f.actions.length, 0);
+  assert.equal(f.counts().creates, 0);
 });
 test('DSH local conversation metadata persists without modifying host paths, handles or native messages', async (t) => {
   const f = conversationsFixture(t),

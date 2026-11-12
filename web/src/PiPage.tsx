@@ -29,6 +29,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { CopyButton } from './CopyButton';
+import { readAssistantSelection, saveAssistantSelection } from '../../shared/assistant-resume.mjs';
 import { useMobilePanels } from './MobilePanels';
 import { AssistantComposer } from './AssistantComposer';
 import { AssistantUserMessage } from './AssistantUserMessage';
@@ -56,7 +57,7 @@ import { RemoteAgentsPage } from './RemoteAgentsPage';
 import { AssistantComputerProjects } from './AssistantComputerProjects';
 import { ComputerAssistantView } from './ComputerAssistantView';
 import { useAssistantComputers, type ComputerTarget } from './assistant-computers';
-import { assistantTargetStorageKey, readAssistantTarget } from '../../shared/assistant-target.mjs';
+import { assistantTargetStorageKey } from '../../shared/assistant-target.mjs';
 import { serverIdentity } from './session';
 import { commandMenu, completeCommand, type PiCommand, type PiSkill } from './pi-commands';
 import { usePiTasks, taskPending, taskLabel, type PiTask } from './pi-tasks';
@@ -138,13 +139,15 @@ export function PiPage(props: {
   const driverKey = `astral.agent.last:${props.settings.url}:${props.session?.user.id || 'guest'}`;
   const [driver, setDriver] = useState<'pi' | 'dsh'>(() => {
     try {
-      return sessionStorage.getItem(driverKey) === 'dsh' ? 'dsh' : 'pi';
+      return readAssistantSelection(localStorage, sessionStorage, driverKey, 'driver') === 'dsh'
+        ? 'dsh'
+        : 'pi';
     } catch {
       return 'pi';
     }
   });
   useEffect(() => {
-    sessionStorage.setItem(driverKey, driver);
+    saveAssistantSelection(localStorage, driverKey, 'driver', driver);
   }, [driverKey, driver]);
   const [dshAvailable, setDshAvailable] = useState(false);
   const { setConversationsAvailable } = useMobilePanels();
@@ -274,7 +277,10 @@ export function PiPage(props: {
             manage={() => setConnectionsOpen(true)}
           />
         ) : null}
-        <div className="assistant-runtime-surface" style={{ display: driver === 'pi' ? 'contents' : 'none' }}>
+        <div
+          className="assistant-runtime-surface"
+          style={{ display: driver === 'pi' ? 'contents' : 'none' }}
+        >
           <ServerPiPage
             key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
             driver={driver}
@@ -360,9 +366,16 @@ function ServerPiPage({
     serverIdentity(settings),
     session?.user.id || 'guest',
   );
-  const [computerTarget, setComputerTarget] = useState<ComputerTarget | null>(() =>
-    readAssistantTarget(sessionStorage, computerKey),
+  const [computerTarget, setComputerTarget] = useState<ComputerTarget | null>(
+    () =>
+      readAssistantSelection(
+        localStorage,
+        sessionStorage,
+        computerKey,
+        'computer',
+      ) as ComputerTarget | null,
   );
+  const restoredComputer = useRef(computerTarget);
   const computers = useAssistantComputers(settings, !!session, session?.user.id);
   const computerGroup = computers.groups.find((g) => g.device.id === computerTarget?.deviceId);
   const computerProject = computerGroup?.projects.find((p) => p.id === computerTarget?.projectId);
@@ -383,9 +396,42 @@ function ServerPiPage({
           )?.conversations.find((c) => c.id === computerTarget.conversationId)?.title || '新对话'
         : '';
   useEffect(() => {
-    if (computerTarget) sessionStorage.setItem(computerKey, JSON.stringify(computerTarget));
-    else sessionStorage.removeItem(computerKey);
+    saveAssistantSelection(localStorage, computerKey, 'computer', computerTarget);
+    try {
+      sessionStorage.removeItem(computerKey);
+    } catch {}
   }, [computerTarget, computerKey]);
+  useEffect(() => {
+    if (!computerTarget || !computers.ready || computers.error) return;
+    // An offline device keeps its project/history. Only a successful catalogue
+    // proving removal or revoked access returns to the server view.
+    if (!computerGroup || (!computerGroup.error && !computerProject)) setComputerTarget(null);
+  }, [computers.ready, computers.error, computerGroup, computerProject, computerTarget]);
+  useEffect(() => {
+    const target = restoredComputer.current;
+    if (!target || !computerProject || computerTarget?.conversationId !== target.conversationId)
+      return;
+    restoredComputer.current = null;
+    let active = true;
+    void api(
+      settings,
+      '/relay/conversations/' + target.conversationId,
+      undefined,
+      undefined,
+      false,
+      { fresh: true },
+    ).catch((e) => {
+      if (active && e.status === 404)
+        setComputerTarget((old) =>
+          old?.conversationId === target.conversationId
+            ? { ...old, conversationId: crypto.randomUUID() }
+            : old,
+        );
+    });
+    return () => {
+      active = false;
+    };
+  }, [computerTarget?.conversationId, !!computerProject, settings]);
   useEffect(() => {
     if (!connectionsOpen) computers.refresh();
   }, [connectionsOpen, computers.refresh]);
@@ -415,11 +461,17 @@ function ServerPiPage({
   }
   const [conversation, setConversation] = useState(() => {
     try {
-      return localStorage.getItem(viewKey) || crypto.randomUUID();
+      return (
+        (readAssistantSelection(localStorage, null, viewKey, 'conversation') as string) ||
+        crypto.randomUUID()
+      );
     } catch {
       return crypto.randomUUID();
     }
   });
+  const restoredConversation = useRef(
+    readAssistantSelection(localStorage, null, viewKey, 'conversation') as string | null,
+  );
   const [loadingHistory, setLoadingHistory] = useState(
     () => !peekAPI(settings, `/pi/conversations/${conversation}`),
   );
@@ -808,6 +860,35 @@ function ServerPiPage({
         if (live) {
           setStatus(s);
           setConversations(c.conversations);
+          const restored = restoredConversation.current;
+          restoredConversation.current = null;
+          if (
+            restored &&
+            restored === currentConversation.current &&
+            !c.conversations.some((v) => v.id === restored)
+          ) {
+            const recent = c.conversations
+              .filter((v) => !v.archivedAt)
+              .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+            // A shortened catalogue alone cannot prove deletion. Preserve an
+            // older conversation if its actual history still exists.
+            void api<{ turns: PiTurn[]; conversation?: Conversation | null }>(
+              settings,
+              `/pi/conversations/${restored}`,
+            )
+              .then((history) => {
+                if (
+                  live &&
+                  currentConversation.current === restored &&
+                  !history.conversation &&
+                  !history.turns.length
+                ) {
+                  setConversation(recent?.id || crypto.randomUUID());
+                  setProjectId(recent?.projectId || '');
+                }
+              })
+              .catch(() => {});
+          }
         }
       })
       .catch((e) => {

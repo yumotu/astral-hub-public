@@ -411,6 +411,8 @@ export function createDshRemote(
     fileCatalog: (ctx) => conversations.fileCatalog(ctx),
     fileRead: (ctx, p) => conversations.fileRead(ctx, p),
     conversations: (owner, id) => conversations.read(owner, id),
+    extensions: conversations.extensions,
+    extensionActor: (ctx, actor) => conversations.extensionActor(ctx, actor),
     status(owner) {
       return {
         enabled,

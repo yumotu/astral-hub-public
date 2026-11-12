@@ -2,6 +2,7 @@ import { Paperclip, Send, Square, TerminalSquare } from 'lucide-react';
 import { ThinkingControl } from './ThinkingControl';
 import { VoiceInput } from './VoiceInput';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { AvailabilityButton } from './AvailabilityButton';
 import './assistant-controls.css';
 export function AssistantComposerActions({
@@ -28,6 +29,8 @@ export function AssistantComposerActions({
   sendDisabledReason,
   sendLabel,
   sendAria,
+  thinkingControl,
+  commandsAria = '打开Pi命令',
 }: {
   scope: string;
   thinkingLevel: 'off' | 'low' | 'high' | 'max';
@@ -52,6 +55,8 @@ export function AssistantComposerActions({
   sendDisabledReason?: string;
   sendLabel: string;
   sendAria: string;
+  thinkingControl?: ReactNode;
+  commandsAria?: string;
 }) {
   const reasons = {
     thinking: thinkingDisabled ? thinkingDisabledReason || '当前操作完成后可调整思考强度。' : '',
@@ -79,13 +84,15 @@ export function AssistantComposerActions({
           >
             <TerminalSquare size={16} />
           </AvailabilityButton>
-          <ThinkingControl
-            value={thinkingLevel}
-            disabled={thinkingDisabled}
-            onUnavailable={() => explain(reasons.thinking)}
-            disabledReason={reasons.thinking}
-            onChange={changeThinking}
-          />
+          {thinkingControl || (
+            <ThinkingControl
+              value={thinkingLevel}
+              disabled={thinkingDisabled}
+              onUnavailable={() => explain(reasons.thinking)}
+              disabledReason={reasons.thinking}
+              onChange={changeThinking}
+            />
+          )}
           <VoiceInput key={scope} scope={scope} insert={insertVoice} />
           <AvailabilityButton
             type="button"
@@ -101,7 +108,7 @@ export function AssistantComposerActions({
           <AvailabilityButton
             type="button"
             className="command-toggle"
-            aria-label="打开Pi命令"
+            aria-label={commandsAria}
             reason={reasons.commands}
             explain={explain}
             onClick={commands}

@@ -4,6 +4,8 @@ import { fail } from './accounts.mjs';
 import { createAgentBindings } from './agent-bindings.mjs';
 import { createDshAppTools } from './dsh-app-tools.mjs';
 import { createDshFiles } from './dsh-files.mjs';
+import { createDshWorkbench } from './dsh-workbench.mjs';
+import { createDshExtensions } from './dsh-extensions.mjs';
 import { agentCapabilities, agentRunState } from '../shared/agent-runtime.mjs';
 import {
   applyDshFrame,
@@ -41,6 +43,7 @@ export function createDshConversations(
 ) {
   const bindings = createAgentBindings(db),
     watching = new Map(),
+    syncing = new Map(),
     busy = new Map();
   let closed = false;
   db.exec(`CREATE TABLE IF NOT EXISTS dsh_conversations(
@@ -111,8 +114,12 @@ export function createDshConversations(
     },
   });
   const attachments = createDshFiles(db, {
-    files, now, task: (ctx) => software.task(ctx), active: (ctx) => software.active(ctx),
-    sessionActive: actor => !!actor.sessionHash && !!appTools.sessionActive?.(actor.id, actor.sessionHash),
+    files,
+    now,
+    task: (ctx) => software.task(ctx),
+    active: (ctx) => software.active(ctx),
+    sessionActive: (actor) =>
+      !!actor.sessionHash && !!appTools.sessionActive?.(actor.id, actor.sessionHash),
   });
   const persist = (r, state, stopCursor = r.stop_cursor) => {
     if (closed) return;
@@ -158,6 +165,7 @@ export function createDshConversations(
     if (old?.client === client) {
       await old.opened;
       target(owner, row(owner, id));
+      workbench.connected(owner, r.connection_id, client.chat());
       return { r: row(owner, id), chat: client.chat() };
     }
     if ([...watching.values()].filter((v) => v.owner === owner).length >= 16 || watching.size >= 64)
@@ -183,6 +191,7 @@ export function createDshConversations(
       throw error;
     }
     target(owner, row(owner, id));
+    workbench.connected(owner, r.connection_id, client.chat());
     return { r: row(owner, id), chat: client.chat() };
   }
   function disconnect(owner, connectionId) {
@@ -192,6 +201,7 @@ export function createDshConversations(
     for (const r of db
       .prepare('SELECT * FROM dsh_conversations WHERE owner=? AND connection_id=?')
       .all(owner, connectionId)) {
+      workbench.revoke(owner, r.id);
       software.revoke(owner, r.id);
       persist(r, applyDshFrame(stateOf(r), { type: 'disconnected' }, r.session_id));
     }
@@ -213,7 +223,7 @@ export function createDshConversations(
         'SELECT id,kind,state,reference FROM dsh_actions WHERE owner=? AND conversation_id=? ORDER BY created_at DESC LIMIT 30',
       )
       .all(r.owner, r.id);
-    const messages = value.messages.map(m => {
+    const messages = value.messages.map((m) => {
       const task = m.role === 'user' && m.rpcId && software.task({ owner: r.owner, task: m.rpcId });
       return task?.conversation_id === r.id ? { ...m, text: task.input } : m;
     });
@@ -253,7 +263,12 @@ export function createDshConversations(
         enabled: r.app_tools === 1,
         tasks: software.tasks(r.owner, r.id),
       },
-      fileLimits: { upload: 50 * 1024 * 1024, downloadToHost: 20 * 1024 * 1024, export: 10 * 1024 * 1024, exportTotal: 20 * 1024 * 1024 },
+      fileLimits: {
+        upload: 50 * 1024 * 1024,
+        downloadToHost: 20 * 1024 * 1024,
+        export: 10 * 1024 * 1024,
+        exportTotal: 20 * 1024 * 1024,
+      },
       actions,
       pinnedAt: r.pinned_at,
       archivedAt: r.archived_at,
@@ -308,11 +323,44 @@ export function createDshConversations(
       throw error;
     }
   }
+  const workbench = createDshWorkbench({
+    body,
+    ensure,
+    target,
+    row,
+    view,
+    action,
+    rate,
+    now,
+    active: (actor) => !!appTools.sessionActive?.(actor.id, actor.sessionHash),
+  });
+  const extensions = createDshExtensions({
+    db,
+    body,
+    ensure,
+    target,
+    row,
+    action,
+    rate,
+    now,
+    active: (actor) => !!appTools.sessionActive?.(actor.id, actor.sessionHash),
+  });
   return {
     disconnect,
     appActive: (ctx) => software.active(ctx),
     before: (...args) => software.before(...args),
-    revokeAccount: (owner) => software.revoke(owner),
+    revokeAccount: (owner) => {
+      software.revoke(owner);
+      workbench.revoke(owner);
+      extensions.revoke(owner);
+    },
+    extensions,
+    extensionActor(ctx, actor) {
+      const task = software.task(ctx);
+      if (!task || task.conversation_id !== ctx.conversation || !software.active(ctx))
+        throw fail(403, '此任务的软件功能授权已失效。');
+      return { ...actor, sessionHash: task.session_hash };
+    },
     fileCatalog: (ctx) => attachments.catalog(ctx),
     fileRead: (ctx, p) => attachments.read(ctx, p),
     read(owner, id) {
@@ -446,13 +494,30 @@ export function createDshConversations(
         json(201, { conversation: view(row(owner, p.id)) });
         return true;
       }
-      const fileRoute = url.pathname.match(/^\/api\/agent\/remote\/conversations\/([^/]+)\/files(?:\/[^/]+)?$/);
+      const fileRoute = url.pathname.match(
+        /^\/api\/agent\/remote\/conversations\/([^/]+)\/files(?:\/[^/]+)?$/,
+      );
       if (fileRoute) {
         const current = row(owner, uuid.parse(fileRoute[1]));
-        const kind = req.method === 'POST' ? 'file-upload' : req.method === 'DELETE' ? 'file-delete' : 'file-read';
+        const kind =
+          req.method === 'POST'
+            ? 'file-upload'
+            : req.method === 'DELETE'
+              ? 'file-delete'
+              : 'file-read';
         rate(owner, kind, req.method === 'POST' ? 20 : req.method === 'DELETE' ? 60 : 120);
         return attachments.handle(req, url, json, actor, current, res);
       }
+      const workbenchRoute = url.pathname.match(
+        /^\/api\/agent\/remote\/conversations\/([^/]+)\/(controls|terminals)(?:\/|$)/,
+      );
+      if (workbenchRoute)
+        return workbench.handle(req, url, json, actor, row(owner, uuid.parse(workbenchRoute[1])));
+      const extensionRoute = url.pathname.match(
+        /^\/api\/agent\/remote\/conversations\/([^/]+)\/extensions(?:\/|$)/,
+      );
+      if (extensionRoute)
+        return extensions.handle(req, url, json, actor, uuid.parse(extensionRoute[1]));
       const match = url.pathname.match(
         /^\/api\/agent\/remote\/conversations\/([^/]+)(?:\/(prompt|stop|respond|history|tools))?$/,
       );
@@ -506,10 +571,33 @@ export function createDshConversations(
         // even if credentials were revoked or the remote host is offline.
         let warning = '';
         if (r.state === 'ready') {
+          // Reconnecting a native transport can take much longer than a read.
+          // Share one reconnect and return the durable snapshot promptly;
+          // only the background follow updates it, never a replayed prompt.
+          const k = key(owner, id);
+          let pending = syncing.get(k);
+          if (!pending) {
+            pending = ensure(owner, id)
+              .then(
+                () => true,
+                () => false,
+              )
+              .finally(() => {
+                if (syncing.get(k) === pending) syncing.delete(k);
+              });
+            syncing.set(k, pending);
+          }
+          let timer;
           try {
-            await ensure(owner, id);
-          } catch {
-            warning = '连接中断，已保留历史；发送结果不会自动重试。';
+            const connected = await Promise.race([
+              pending,
+              new Promise((resolve) => {
+                timer = setTimeout(() => resolve(false), 1000);
+              }),
+            ]);
+            if (!connected) warning = '正在重新连接，先显示已保存的记录。';
+          } finally {
+            clearTimeout(timer);
           }
         }
         json(200, { conversation: view(row(owner, id)), warning });
@@ -572,10 +660,16 @@ export function createDshConversations(
         return action(owner, id, p.id, op, p, async () => {
           if (op === 'prompt') {
             if (p.attachments.length && current.app_tools !== 1)
-              throw Object.assign(fail(409, '请先在此对话设置中启用星屿软件功能，才能读取附件。'), { localRejected: true });
+              throw Object.assign(fail(409, '请先在此对话设置中启用星屿软件功能，才能读取附件。'), {
+                localRejected: true,
+              });
             try {
-              try { if (p.attachments.length) attachments.selected(owner, id, p.attachments); }
-              catch (error) { error.localRejected = true; throw error; }
+              try {
+                if (p.attachments.length) attachments.selected(owner, id, p.attachments);
+              } catch (error) {
+                error.localRejected = true;
+                throw error;
+              }
               if (current.app_tools === 1) await software.prepare(actor, current, p, chat);
               if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
               target(owner, row(owner, id));
@@ -613,6 +707,8 @@ export function createDshConversations(
       return true;
     },
     close() {
+      workbench.close();
+      extensions.close();
       software.close();
       closed = true;
       watching.clear();

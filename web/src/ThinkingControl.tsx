@@ -8,19 +8,23 @@ const levels = [
   { value: 'max', label: '充分', description: '使用模型支持的最高思考强度' },
 ] as const;
 type ThinkingLevel = (typeof levels)[number]['value'];
-export function ThinkingControl({
+export function ThinkingControl<T extends string = ThinkingLevel>({
   value,
   disabled,
   onChange,
   onUnavailable,
   disabledReason,
+  options,
 }: {
-  value: ThinkingLevel;
+  value: T;
   disabled?: boolean;
-  onChange: (value: ThinkingLevel) => void;
+  onChange: (value: T) => void;
   onUnavailable?: () => void;
   disabledReason?: string;
+  options?: readonly { value: T; label: string; description?: string }[];
 }) {
+  const choices =
+    options || (levels as unknown as readonly { value: T; label: string; description?: string }[]);
   const ref = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const close = (e: PointerEvent) => {
@@ -46,7 +50,7 @@ export function ThinkingControl({
   return (
     <details className={`thinking-picker ${value !== 'off' ? 'is-active' : ''}`} ref={ref}>
       <summary
-        aria-label={`思考强度：${levels.find((l) => l.value === value)?.label}`}
+        aria-label={`思考强度：${choices.find((l) => l.value === value)?.label || value || '读取中'}`}
         aria-disabled={disabled || undefined}
         aria-description={disabledReason || undefined}
         title={disabledReason || undefined}
@@ -59,12 +63,12 @@ export function ThinkingControl({
       >
         <Brain size={15} />
         <span>思考</span>
-        <b>{levels.find((l) => l.value === value)?.label}</b>
+        <b>{choices.find((l) => l.value === value)?.label || value || '读取中'}</b>
         <ChevronDown size={11} />
       </summary>
       <div className="thinking-picker-options" role="radiogroup" aria-label="思考强度">
         <strong>思考强度</strong>
-        {levels.map((level) => (
+        {choices.map((level) => (
           <button
             type="button"
             role="radio"

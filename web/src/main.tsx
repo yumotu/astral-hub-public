@@ -693,6 +693,7 @@ function Workspace({
               />
             ) : page === 'pi' ? (
               <PiPage
+                key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
                 settings={settings}
                 session={session}
                 login={() => navigate('account')}

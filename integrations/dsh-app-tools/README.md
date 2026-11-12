@@ -28,3 +28,19 @@ S4 增加 `chat_files`、`chat_read`、`chat_download`、`chat_export`，也在�
 文件下载暂存到显式配置工作区的 `.astral-attachments/<task>/`，导出拒绝工作区外路径、私有配置、符号链接和硬链接。服务端在二进制读取/上传后再次核对当前任务和账号；导出按原生工具调用编号生成稳定文件ID，未知回执不自动重放。只有真实交付回执才显示文件卡片；历史附件可继续由原账号下载。服务器镜像显式将 `ASTRAL_DSH_WORKSPACE` 配为其独立 `/workspace`；外部主机应填写上面的 `workspaceRoot`。
 
 目标/定时、终端和外部主机统一计费仍为独立阶段，不能通过开启本插件宣称已支持。主机代码/网络/文件的原生权限仍由目标 Harness 控制，星屿业务授权不改变它们。
+
+## 扩展管理增量
+
+独立开发分支已加入扩展管理，未部署。它使用同一固定 Harness 的 `extensions.mjs` 入口，额外需要可解析的 `@deepseek-ai/dsh-mcp-client@0.2.2-rc.1`、`@deepseek-ai/dsh-scope@0.2.2-rc.1` 和 `yaml@2.9.1`，以及原生 pluginManager、skills、mcpResources 等服务。Profile 安装命令使用固定 pnpm `11.25.0`。不能把本包默认 `index.mjs` 的软件工具桥当成扩展桥已装。
+
+保留目录层级：`integrations/dsh-app-tools/` 旁还需要仓库的 `shared/dsh-extensions.mjs`，该入口会导入共用严格 schema。复制整个目录后，在原 Profile 增加独立 overlay：
+
+```yaml
+- insert:
+    - id: astral-extensions
+      name: /星屿源码/integrations/dsh-app-tools/extensions.mjs
+```
+
+不要重复添加已有行。受管理服务器的 `host.mjs` 在下一次完整镜像构建时生成独立 overlay；原补丁、凭据和模型选择不覆盖。外部主机需用户自行配置，不自动安装到已配对电脑。`extensions-qa-provider.mjs` 仅隔离验收用，不加入生产 Profile。
+
+管理命令 `/astral-extensions` 是 human-only，输入不写会话日志；输出仅返回脱敏目录和固定回执。App 校验当前登录管理员、账号/连接/工作区/原生会话和操作ID。聊天工具只准备预览，管理员在设置里确认后才实际应用。Skill/MCP按工作区，npm bundle按主机Profile；主机加密文件与key应同时备份。详细用法、字段和限制见[扩展管理](../../docs/dsh-extensions.md)及[发行说明](../../docs/release-0.8.13.md)。

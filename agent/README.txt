@@ -1,4 +1,4 @@
-星屿远程 Pi 执行器 0.8.12
+星屿远程 Pi 执行器 0.8.13
 需要 Node.js 24 或更新版本，支持 macOS 和 Windows。
 1. 在此目录运行 npm install --ignore-scripts
 2. 在网页 智能助手 / 电脑连接 生成配对码

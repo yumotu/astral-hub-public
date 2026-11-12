@@ -6,6 +6,8 @@
   "main": "index.mjs",
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.1",
+    "yaml": "2.9.1"
   }
 }

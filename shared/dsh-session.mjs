@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dshPermissions } from './dsh-controls.mjs';
 
 const seq = z.number().int().nonnegative();
 const eventSchema = z
@@ -196,13 +197,26 @@ export function emptyDshSession() {
 function applyProjections(state, values, at) {
   if (!object(values) || !Number.isSafeInteger(at)) return;
   for (const [key, value] of Object.entries(values)) {
-    if (!['inbox', 'userQuestions', 'turnBoundary', 'title', 'modelSelection'].includes(key))
+    if (
+      ![
+        'inbox',
+        'userQuestions',
+        'turnBoundary',
+        'title',
+        'modelSelection',
+        'permissions',
+      ].includes(key)
+    )
       continue;
     if ((state.projectionSeqs[key] ?? -1) > at) continue;
     state.projectionSeqs[key] = at;
     // Questions are surfaced only through the authenticated interaction carrier.
     // Do not return unvalidated projection data or model/tool configuration.
-    if (key === 'title')
+    if (key === 'permissions') {
+      const parsed = dshPermissions.safeParse(value);
+      if (parsed.success) state.projections.permissions = parsed.data;
+      else delete state.projections.permissions;
+    } else if (key === 'title')
       state.projections.title = typeof value === 'string' ? text(value, 500) : '';
     else if (key === 'turnBoundary' && object(value))
       state.projections.turnBoundary = {
@@ -401,6 +415,7 @@ export function dshSessionView(state, { stopPending = false } = {}) {
     interactions: state.interactions,
     queue: state.projections.inbox || [],
     model: state.projections.modelSelection || null,
+    permissions: state.projections.permissions || null,
     cursor: state.cursor,
     hasMore: state.hasMore,
     firstSeq: state.events[0]?.seq ?? null,

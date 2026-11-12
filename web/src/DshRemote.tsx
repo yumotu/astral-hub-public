@@ -9,9 +9,13 @@ import {
 } from 'react';
 import { Menu, PanelRight, Plus, RefreshCw, Settings2, X } from 'lucide-react';
 import { api, dateLabel } from './data';
+import { readAssistantSelection, saveAssistantSelection } from '../../shared/assistant-resume.mjs';
 import type { Settings } from './types';
 import { AssistantComposer } from './AssistantComposer';
 import { AssistantComposerActions } from './AssistantComposerActions';
+import { ThinkingControl } from './ThinkingControl';
+import { DshPermissions, DshSkills, useDshControls } from './DshControls';
+import { DshExtensions } from './DshExtensions';
 import { AssistantUserMessage } from './AssistantUserMessage';
 import { CopyButton } from './CopyButton';
 import { JumpToLatest } from './JumpToLatest';
@@ -33,6 +37,7 @@ import { useAssistantPreferences } from './assistant-preferences';
 import { useBackLayer } from './back-navigation';
 import './dsh-remote.css';
 const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
+const Terminal = lazy(() => import('./DshTerminal').then((m) => ({ default: m.DshTerminal })));
 export type RemoteConnection = {
   id: string;
   name: string;
@@ -99,6 +104,7 @@ type DshConversation = Conversation & {
   uiRequests: { status: string }[];
   queue: { id: string; rpcId: string; text: string }[];
   model?: { provider: string; model: string; reasoningEffort?: string };
+  permissions?: { currentValue: string } | null;
   hasMore: boolean;
   runState: { label: string; busy: boolean; state: string };
   actions: { id: string; kind: string; state: string; reference?: string }[];
@@ -181,7 +187,7 @@ export function RemoteConnectionManager({
             <div className="surface">
               <h3>{status.managedServer.name}</h3>
               <p className="field-help">
-                服务器上的独立DSH工作区，仅当前管理员可关联。文字聊天和星屿软件功能已接入，附件、目标与定时任务仍由Pi提供。
+                服务器上的独立DSH工作区，仅当前管理员可关联。支持聊天、附件和星屿软件功能；终端、思考与技能按主机实际提供的能力展示。
               </p>
               <button
                 className="secondary"
@@ -437,10 +443,17 @@ export function DshRemoteWorkspace({
     [catalogues, setCatalogues] = useState<Record<string, Catalogue>>({}),
     [conversations, setConversations] = useState<DshConversation[]>([]),
     [selected, setSelected] = useState(
-      () => sessionStorage.getItem(`astral.dsh.last:${settings.url}:${owner}`) || '',
+      () =>
+        (readAssistantSelection(
+          localStorage,
+          sessionStorage,
+          `astral.dsh.last:${settings.url}:${owner}`,
+          'conversation',
+        ) as string) || '',
     ),
     [conversation, setConversation] = useState<DshConversation | null>(null),
     [error, setError] = useState(''),
+    [syncError, setSyncError] = useState(''),
     [busy, setBusy] = useState(false),
     [menu, setMenu] = useState<MenuAnchor | null>(null),
     [editing, setEditing] = useState<Conversation | null>(null),
@@ -450,7 +463,15 @@ export function DshRemoteWorkspace({
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   useEffect(() => {
-    sessionStorage.setItem(`astral.dsh.last:${settings.url}:${owner}`, selected);
+    saveAssistantSelection(
+      localStorage,
+      `astral.dsh.last:${settings.url}:${owner}`,
+      'conversation',
+      selected || null,
+    );
+    try {
+      sessionStorage.removeItem(`astral.dsh.last:${settings.url}:${owner}`);
+    } catch {}
   }, [settings.url, owner, selected]);
   const scope = settings.url + ':' + owner;
   const [names, setNames] = useState<Record<string, string>>(() => {
@@ -467,6 +488,9 @@ export function DshRemoteWorkspace({
     ]);
     setConnections(c.connections);
     setConversations(list.conversations);
+    if (selectedRef.current && !list.conversations.some((v) => v.id === selectedRef.current)) {
+      setSelected(list.conversations.find((v) => !v.archivedAt)?.id || '');
+    }
     const result: Record<string, Catalogue> = {};
     await Promise.all(
       c.connections
@@ -527,7 +551,9 @@ export function DshRemoteWorkspace({
     }
     let live = true,
       timer: ReturnType<typeof setTimeout>;
+    const abort = new AbortController();
     setConversation(null);
+    setSyncError('');
     const sync = async () => {
       try {
         const r = await api<{ conversation: DshConversation }>(
@@ -536,14 +562,15 @@ export function DshRemoteWorkspace({
           undefined,
           undefined,
           false,
-          { fresh: true, timeout: 75000 },
+          { fresh: true, timeout: 10000, signal: abort.signal },
         );
         if (live) {
+          setSyncError('');
           setConversation(r.conversation);
           setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== selected)]);
         }
       } catch (e) {
-        if (live) setError((e as Error).message);
+        if (live) setSyncError((e as Error).message);
       } finally {
         if (live) timer = setTimeout(sync, document.hidden ? 12000 : 650);
       }
@@ -551,6 +578,7 @@ export function DshRemoteWorkspace({
     void sync();
     return () => {
       live = false;
+      abort.abort();
       clearTimeout(timer);
     };
   }, [selected, settings]);
@@ -583,6 +611,7 @@ export function DshRemoteWorkspace({
             DSH · {current?.host?.name || '选择已有主机'}
             {projectName ? ` · ${projectName}` : ''}
           </small>
+          {syncError && <small role="status">连接暂时中断，正在重新同步…</small>}
         </div>
         {actions}
         <button
@@ -808,10 +837,16 @@ function DshChat({
   const draftKey = `astral.dsh.draft:${settings.url}:${owner}:${c.id}`;
   type Pending = { id: string; text: string; mode: string; state: string; files?: ChatFile[] };
   const [attachments, setAttachments] = useState<ChatFile[]>(() => {
-    try { return JSON.parse(sessionStorage.getItem(draftKey + ':files') || '[]'); } catch { return []; }
+    try {
+      return JSON.parse(sessionStorage.getItem(draftKey + ':files') || '[]');
+    } catch {
+      return [];
+    }
   });
   const [uploading, setUploading] = useState(false);
-  const attachmentInput = useRef<HTMLInputElement>(null), uploadLock = useRef(false), uploadAbort = useRef(new AbortController());
+  const attachmentInput = useRef<HTMLInputElement>(null),
+    uploadLock = useRef(false),
+    uploadAbort = useRef(new AbortController());
   const attachmentsRef = useRef(attachments);
   function saveAttachments(files: ChatFile[]) {
     attachmentsRef.current = files;
@@ -843,6 +878,18 @@ function DshChat({
     lock = useRef(false),
     alive = useRef(true);
   const { messageMode, showThinking } = useAssistantPreferences();
+  const control = useDshControls(settings, c.id, c.connection === 'connected');
+  const [terminalOpen, setTerminalOpen] = useState(false),
+    [skillsOpen, setSkillsOpen] = useState(false),
+    [extensionsOpen, setExtensionsOpen] = useState(false);
+  const nativeModel = control.controls?.model;
+  const nativeReasoning = control.controls?.models?.groups
+    .find((g) => g.id === nativeModel?.provider)
+    ?.models.find((m) => m.id === nativeModel?.model)?.reasoning;
+  const effort = nativeModel?.reasoningEffort || nativeReasoning?.defaultEffort || '';
+  useEffect(() => {
+    void control.reload();
+  }, [c.model?.provider, c.model?.model, c.model?.reasoningEffort, c.permissions?.currentValue]);
   useEffect(() => {
     alive.current = true;
     uploadAbort.current = new AbortController();
@@ -868,8 +915,9 @@ function DshChat({
     if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [c.messages, c.interactions]);
   async function upload(files: File[]) {
-    if (uploadLock.current || !c.appTools.available || !c.appTools.enabled || c.connection !== 'connected') {
-      setError('请在此对话设置中启用星屿软件功能，并连接DSH主机后添加附件。');
+    if (!files.length) return;
+    if (uploadLock.current || !c.appTools.available || c.connection !== 'connected') {
+      setError('请连接支持星屿软件功能的DSH主机后添加附件。');
       return;
     }
     uploadLock.current = true;
@@ -877,13 +925,25 @@ function DshChat({
     setError('');
     try {
       if (attachmentsRef.current.length + files.length > 8) throw Error('每条消息最多8个附件。');
+      // Choosing/pasting a file is explicit intent to use the file bridge.
+      // Open the native chooser synchronously; enable the reversible bridge
+      // after a file is selected, without losing browser user activation.
+      if (!c.appTools.enabled) await perform('tools', { enabled: true });
+      if (!alive.current || uploadAbort.current.signal.aborted) return;
       for (const file of files) {
-        const result = await uploadChatFile(settings, c.id, file, { source: 'dsh', signal: uploadAbort.current.signal });
+        const result = await uploadChatFile(settings, c.id, file, {
+          source: 'dsh',
+          signal: uploadAbort.current.signal,
+        });
         if (!alive.current) return;
         saveAttachments([...attachmentsRef.current, result]);
       }
-    } catch (e) { if (alive.current) setError((e as Error).message); }
-    finally { uploadLock.current = false; if (alive.current) setUploading(false); }
+    } catch (e) {
+      if (alive.current) setError((e as Error).message);
+    } finally {
+      uploadLock.current = false;
+      if (alive.current) setUploading(false);
+    }
   }
   async function perform(kind: string, body: object) {
     const r = await api<{ conversation: DshConversation; operation: { state: string } }>(
@@ -895,7 +955,13 @@ function DshChat({
     return r;
   }
   async function send() {
-    if (lock.current || uploadLock.current || (!input.trim() && !attachments.length) || c.connection !== 'connected') return;
+    if (
+      lock.current ||
+      uploadLock.current ||
+      (!input.trim() && !attachments.length) ||
+      c.connection !== 'connected'
+    )
+      return;
     lock.current = true;
     setBusy(true);
     setError('');
@@ -904,7 +970,10 @@ function DshChat({
       id = crypto.randomUUID();
     try {
       if (pendingRef.current.length >= 50) throw Error('待核对消息较多，请先查看主机进度。');
-      savePending([...pendingRef.current, { id, text, mode: messageMode, state: 'sending', files }]);
+      savePending([
+        ...pendingRef.current,
+        { id, text, mode: messageMode, state: 'sending', files },
+      ]);
     } catch (e) {
       lock.current = false;
       setBusy(false);
@@ -916,7 +985,12 @@ function DshChat({
     saveAttachments([]);
     follow.current = true;
     try {
-      const result = await perform('prompt', { id, text, mode: messageMode, attachments: files.map(f => f.id) });
+      const result = await perform('prompt', {
+        id,
+        text,
+        mode: messageMode,
+        attachments: files.map((f) => f.id),
+      });
       if (alive.current)
         savePending(
           pendingRef.current.map((v) =>
@@ -967,11 +1041,56 @@ function DshChat({
   const unresolvedPending = pending.filter((v) => !displayedRequestIds.has(v.id));
   return (
     <div className="surface chat-panel">
-      <details className="dsh-chat-settings">
+      <details
+        className="dsh-chat-settings"
+        onToggle={(e) => {
+          if (e.currentTarget.open) void control.reload();
+        }}
+      >
         <summary>
           <Settings2 size={16} />
           设置
         </summary>
+        <DshPermissions
+          controls={control.controls}
+          disabled={control.loading || c.connection !== 'connected'}
+          select={(v) => void control.select('permission', v)}
+        />
+        <div className="dsh-workbench-actions">
+          <button
+            type="button"
+            className="secondary"
+            disabled={control.loading || c.connection !== 'connected'}
+            onClick={() => void control.reload()}
+          >
+            <RefreshCw size={14} />
+            刷新主机设置
+          </button>
+          <button type="button" className="secondary" onClick={() => setSkillsOpen(true)}>
+            技能
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={c.connection !== 'connected'}
+            onClick={() => setExtensionsOpen(true)}
+          >
+            扩展管理
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!control.controls?.terminal || c.connection !== 'connected'}
+            onClick={() => setTerminalOpen(true)}
+          >
+            终端
+          </button>
+        </div>
+        {control.error && (
+          <p className="error" role="alert">
+            {control.error}
+          </p>
+        )}
         <label>
           <input
             type="checkbox"
@@ -1058,7 +1177,15 @@ function DshChat({
                 command: t.name === 'bash' ? t.arguments : undefined,
               }))}
             />
-            {!!c.artifacts?.length && <section aria-label="DSH交付文件"><ChatFiles files={c.artifacts.map(a => a.file)} settings={settings} conversation={c.id} /></section>}
+            {!!c.artifacts?.length && (
+              <section aria-label="DSH交付文件">
+                <ChatFiles
+                  files={c.artifacts.map((a) => a.file)}
+                  settings={settings}
+                  conversation={c.id}
+                />
+              </section>
+            )}
             <RunSummary
               backend="dsh"
               status={c.status}
@@ -1136,7 +1263,13 @@ function DshChat({
                   className="text-link"
                   onClick={() => {
                     setInput((old) => v.text + (old ? '\n\n' + old : ''));
-                    saveAttachments([...new Map([...attachmentsRef.current, ...(v.files || [])].map(f => [f.id, f])).values()].slice(0, 8));
+                    saveAttachments(
+                      [
+                        ...new Map(
+                          [...attachmentsRef.current, ...(v.files || [])].map((f) => [f.id, f]),
+                        ).values(),
+                      ].slice(0, 8),
+                    );
                     savePending(pendingRef.current.filter((p) => p.id !== v.id));
                   }}
                 >
@@ -1152,14 +1285,23 @@ function DshChat({
           {error}
         </p>
       )}
-      <input ref={attachmentInput} type="file" multiple hidden aria-label="选择DSH附件" onChange={e => { const files = [...(e.target.files || [])]; e.target.value = ''; void upload(files); }} />
-      {uploading && <p role="status" className="field-help">正在上传附件…</p>}
-      <ChatFiles files={attachments} settings={settings} conversation={c.id} remove={id => {
-        if (uploadLock.current || lock.current) return;
-        void api(settings, remoteBase + `/conversations/${c.id}/files/${id}`, undefined, 'DELETE').then(() => {
-          if (alive.current) saveAttachments(attachmentsRef.current.filter(f => f.id !== id));
-        }).catch(e => setError(e.message));
-      }} />
+      <input
+        ref={attachmentInput}
+        type="file"
+        multiple
+        hidden
+        aria-label="选择DSH附件"
+        onChange={(e) => {
+          const files = [...(e.target.files || [])];
+          e.target.value = '';
+          void upload(files);
+        }}
+      />
+      {uploading && (
+        <p role="status" className="field-help">
+          正在上传附件…
+        </p>
+      )}
       <AssistantComposer
         area={area}
         history={scroll}
@@ -1171,33 +1313,137 @@ function DshChat({
           'aria-label': '发送给DSH的消息',
           placeholder: '发送消息… 执行中也可继续补充',
         }}
+        header={
+          <ChatFiles
+            files={attachments}
+            settings={settings}
+            conversation={c.id}
+            remove={(id) => {
+              if (uploadLock.current || lock.current) return;
+              void api(
+                settings,
+                remoteBase + `/conversations/${c.id}/files/${id}`,
+                undefined,
+                'DELETE',
+              )
+                .then(() => {
+                  if (alive.current)
+                    saveAttachments(attachmentsRef.current.filter((f) => f.id !== id));
+                })
+                .catch((e) => setError(e.message));
+            }}
+          />
+        }
       >
         <AssistantComposerActions
           scope={c.id}
           thinkingLevel="off"
-          thinkingDisabled
-          thinkingDisabledReason="此主机使用自己的模型设置；思考强度修改尚未接入。"
+          thinkingControl={
+            <ThinkingControl
+              value={effort}
+              options={(nativeReasoning?.efforts || []).map((e) => ({
+                value: e.id,
+                label:
+                  (
+                    { off: '关闭', low: '轻量', high: '深入', max: '充分' } as Record<
+                      string,
+                      string
+                    >
+                  )[e.id] || e.name,
+                description: e.description,
+              }))}
+              disabled={
+                control.loading || !nativeReasoning?.efforts.length || c.connection !== 'connected'
+              }
+              disabledReason={
+                control.loading
+                  ? '正在核对主机设置…'
+                  : !nativeReasoning?.efforts.length
+                    ? control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。'
+                    : c.connection !== 'connected'
+                      ? '请恢复主机连接。'
+                      : undefined
+              }
+              onUnavailable={() =>
+                setError(control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。')
+              }
+              onChange={(v) => void control.select('thinking', v)}
+            />
+          }
           changeThinking={() => {}}
           insertVoice={(v) => setInput((old) => old + v)}
-          terminal={() => {}}
-          terminalDisabled
-          terminalDisabledReason="此Remote连接的终端尚未接入。"
+          terminal={() => setTerminalOpen(true)}
+          terminalDisabled={!control.controls?.terminal || c.connection !== 'connected'}
+          terminalDisabledReason="主机未提供终端，请在DSH主机的Remote设置中开启远程终端并刷新。"
           attach={() => attachmentInput.current?.click()}
-          attachmentDisabled={busy || uploading || !c.appTools.enabled || !c.appTools.available || c.connection !== 'connected'}
-          attachmentDisabledReason={!c.appTools.enabled ? '请在此对话设置中启用星屿软件功能后使用附件。' : undefined}
+          attachmentDisabled={
+            busy || uploading || !c.appTools.available || c.connection !== 'connected'
+          }
+          attachmentDisabledReason={
+            !c.appTools.available ? '此服务器尚未提供DSH附件入口。' : undefined
+          }
           attachmentTitle="单文件50 MiB；传输原件至DSH主机最多20 MiB，较大文档可分页读取"
-          commands={() => {}}
-          commandsDisabled
-          commandsDisabledReason="此Remote连接的原生命令菜单尚未接入。"
+          commands={() => setSkillsOpen(true)}
+          commandsAria="打开DSH技能"
           working={c.runState.busy}
           hasContent={!!input.trim() || !!attachments.length}
           stop={() => void stop()}
-          sendDisabled={busy || uploading || (!input.trim() && !attachments.length) || c.connection !== 'connected'}
+          sendDisabled={
+            busy ||
+            uploading ||
+            (!input.trim() && !attachments.length) ||
+            c.connection !== 'connected'
+          }
           sendDisabledReason={c.connection !== 'connected' ? '请等待主机重新连接。' : undefined}
           sendLabel={c.runState.busy ? (messageMode === 'steer' ? '补充' : '排队') : '发送'}
           sendAria="发送给DSH"
         />
       </AssistantComposer>
+      {skillsOpen && (
+        <DshSkills
+          skills={control.controls?.skills ?? null}
+          refresh={() => void control.reload()}
+          loading={control.loading}
+          close={() => setSkillsOpen(false)}
+          choose={(name) => {
+            setInput((old) => '/' + name + (old ? ' ' + old : ' '));
+            setSkillsOpen(false);
+            area.current?.focus();
+          }}
+        />
+      )}
+      {extensionsOpen && (
+        <DshExtensions
+          settings={settings}
+          owner={owner}
+          id={c.id}
+          close={() => setExtensionsOpen(false)}
+          updated={() => void control.reload()}
+        />
+      )}
+      {terminalOpen && (
+        <div
+          className="assistant-modal-backdrop dsh-workbench-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setTerminalOpen(false);
+          }}
+        >
+          <section
+            className="assistant-modal dsh-terminal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="DSH工作区终端"
+          >
+            <Suspense fallback={<p>正在打开终端…</p>}>
+              <Terminal
+                settings={settings}
+                conversation={c.id}
+                close={() => setTerminalOpen(false)}
+              />
+            </Suspense>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

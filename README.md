@@ -1,6 +1,6 @@
-# Astral Hub 0.8.12
+# Astral Hub 0.8.13
 
-Adds the deployed DSH dsh2 chat, scoped software tools and attachment bridge to all native clients. Pi remains the default. [Release notes](docs/release-0.8.12.md); publication status is determined by the matching Release and successful signing workflow.
+Brings the deployed DSH dsh4 workbench, terminal, thinking/permissions, conversation restore and Skill/plugin/MCP management to native clients. Pi remains the default. [Release notes](docs/release-0.8.13.md); publication status is determined by the matching Release and successful signing workflow.
 
 # 星屿 Astral Hub
 
@@ -9,7 +9,7 @@ Adds the deployed DSH dsh2 chat, scoped software tools and attachment bridge to 
 ## 功能
 
 - 智能助手：流式回复、连续补充、历史分支、项目与文件、独立终端、语音草稿、附件预览。
-- 可选DSH：固定Harness/Remote的原生聊天、软件工具与附件/文件交付；与Pi共用聊天界面，按任务授权。DSH终端、目标/定时及统一费用仍待接入，见[DSH说明](docs/dsh-runtime.md)。
+- 可选DSH：固定Harness/Remote的原生聊天、软件工具与附件/文件交付；与Pi共用聊天界面，按任务授权。DSH终端、原生思考/权限与扩展管理已接入；目标/定时及统一费用仍待接入，见[DSH说明](docs/dsh-runtime.md)。
 - 电脑连接：桌面内置执行器、主动 HTTPS 连接、按项目授权读取/修改/执行，支持文件回传和插件许愿安装。
 - 邮件与学习：邮件阅读/摘要/分类、草稿与发送预览；知识讲解、练习、智能判题、错题本。
 - 账号记忆：有来源的画像、偏好与跨对话记忆，可纠正、删除和关闭；[使用说明](docs/account-memory.md)。

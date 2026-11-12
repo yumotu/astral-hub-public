@@ -78,7 +78,7 @@ jobs:
           try { const response = await fetch("http://127.0.0.1:" + app.server.address().port + "/api/health"); assert.equal(response.status, 200); console.log("SERVER_RUNTIME_HEALTH_OK"); }
           finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); }
           '
-      - name: Build and verify the pinned DSH dsh2 package without model access
+      - name: Build and verify the pinned DSH dsh4 package without model access
         run: |
           docker build -f deploy/dsh/Dockerfile -t astral-dsh-qa .
           docker run --rm --init --read-only --network=none --memory=512m --cpus=1 --pids-limit=192 --tmpfs /tmp:rw,noexec,nosuid,size=128m --tmpfs /state:rw,nosuid,size=128m,mode=1777 --tmpfs /workspace:rw,nosuid,size=32m,mode=1777 --cap-drop=ALL --security-opt=no-new-privileges -e ASTRAL_DSH_PACKAGE_QA=1 --entrypoint=node astral-dsh-qa /opt/astral/deploy/dsh/verify-package.mjs

@@ -1,12 +1,13 @@
 import { runProfile } from '@deepseek-ai/dsh/profile-boot';
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment';
 import * as Connection from '@deepseek-ai/dsh-client-connection';
-import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, lstat, readlink, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createRemoteServer } from './vendor/remote-server.mjs';
+import { pnpmEnvironment } from './pnpm-environment.mjs';
 import {
   HostPluginRuntime,
   IdentityStore,
@@ -34,10 +35,18 @@ if (
   throw Error('Invalid local DSH deployment configuration');
 const profileDir = resolve(root, 'profiles/astral-server');
 await mkdir(profileDir, { recursive: true, mode: 0o700 });
-try {
-  await symlink(resolve(here, 'node_modules'), resolve(profileDir, 'node_modules'), 'dir');
-} catch (e) {
-  if (e.code !== 'EEXIST') throw e;
+// Old profiles pointed node_modules at the immutable installation. Keep the
+// installation as the runtime fallback; profile packages need their own tree.
+const profileModules = resolve(profileDir, 'node_modules');
+const profileModulesInfo = await lstat(profileModules).catch((e) => {
+  if (e.code !== 'ENOENT') throw e;
+  return null;
+});
+if (profileModulesInfo?.isSymbolicLink()) {
+  const link = await readlink(profileModules);
+  if (resolve(profileDir, link) !== resolve(here, 'node_modules'))
+    throw Error('Unexpected profile dependency link; manual inspection required');
+  await unlink(profileModules); // only the known link; the installed tree stays intact
 }
 async function initial(path, text) {
   try {
@@ -46,6 +55,13 @@ async function initial(path, text) {
     if (e.code !== 'EEXIST') throw e;
   }
 }
+// Match the pinned Harness Profile layout. Stable package paths let its
+// native HMR compare and replace a changed package rather than reuse an old
+// pnpm symlink target. Existing user-owned pnpm configuration is preserved.
+await initial(
+  resolve(profileDir, 'pnpm-workspace.yaml'),
+  'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n',
+);
 await initial(
   resolve(profileDir, 'package.json'),
   JSON.stringify({
@@ -79,6 +95,14 @@ await initial(
       config:
         endpoint: http://127.0.0.1:8787/api/agent/dsh/app-access
 `,
+);
+// Separate overlay also upgrades existing persisted profiles without replacing
+// their user-owned patch, provider selection or credentials.
+const extensionsPatch = resolve(root, 'astral-extensions.patch.yml');
+await writeFile(
+  extensionsPatch,
+  `- insert:\n    - id: astral-extensions\n      name: ${JSON.stringify(resolve(here, '../../integrations/dsh-app-tools/extensions.mjs'))}\n`,
+  { mode: 0o600 },
 );
 // Credentials remain inside this server container, and are not used as browser
 // or Remote authentication. The native Messages adapter owns model traffic.
@@ -118,8 +142,13 @@ try {
   runtime = await runProfile({
     profile: 'astral-server',
     environment,
-    patchFiles: [],
+    patchFiles: [extensionsPatch],
     args: ['--port', '0', '--no-open'],
+    packageManager: {
+      command: process.execPath,
+      args: [resolve(here, 'node_modules/pnpm/bin/pnpm.mjs')],
+      env: pnpmEnvironment(root),
+    },
   });
   const ctx = runtime.ctx;
   if (!ctx.sessionController || !ctx.typertGateway || !ctx.agentLoop)
@@ -149,7 +178,7 @@ try {
       serverUrl: config.origin,
       deviceName: config.name,
       forceRelay: true,
-      terminal: { enabled: false },
+      terminal: { enabled: true },
       codex: { enabled: false },
       cursor: { enabled: false },
       acp: { enabled: false, backends: [] },
@@ -171,9 +200,11 @@ try {
     .digest('hex')
     .toUpperCase();
   const proof = {
-    version: '0.8.12',
-    revision: 'dsh2',
+    version: '0.8.13',
+    revision: 'dsh4',
     fileBridgeVersion: 1,
+    workbenchVersion: 1,
+    extensionManagerVersion: 1,
     harness: '0.2.2-rc.1',
     remote: '14037e78f45e14f7a5ad56c2266944548def7e3d',
     deviceId: identity.deviceId,
