@@ -12,6 +12,8 @@ import appPackage from '../package.json' with { type: 'json' };
 import { chatEntrySchema } from '../shared/chat.mjs';
 import { createStore } from './store.mjs';
 import { createUsage } from './usage.mjs';
+import { createUnifiedConversations, conversationCreateSchema } from './unified-conversations.mjs';
+import { unifiedAdapters } from './unified-adapters.mjs';
 import { createCommunity } from './community.mjs';
 import { createRelay } from './relay.mjs';
 import { createMail } from './mail.mjs';
@@ -71,7 +73,7 @@ export async function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? resolve(root, 'data'));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const store = createStore(options.dbPath ?? resolve(dataDir, 'astral.sqlite'));
-  let mailAgent, appFunctions, relay, community;
+  let mailAgent, appFunctions, relay, community, unified;
   const dshRemote = createDshRemote(store.db, {
     token,
     body,
@@ -88,6 +90,7 @@ export async function createApp(options = {}) {
     connect: options.dshRemote?.connect,
     now: options.now,
     files: () => community?.chatFiles,
+    unified: () => unified,
     appTools: {
       endpoint: options.dshRemote?.appToolsUrl || process.env.DSH_APP_TOOLS_URL || '',
       engine: () => appFunctions,
@@ -154,6 +157,7 @@ export async function createApp(options = {}) {
     options: {
       ...options,
       usage,
+      unified: () => unified,
       notifications,
       terminals,
       goals,
@@ -239,6 +243,7 @@ export async function createApp(options = {}) {
     options: {
       ...options,
       usage,
+      unified: () => unified,
       notifications,
       chatFiles: community.chatFiles,
       draftComputerPlugin,
@@ -246,6 +251,57 @@ export async function createApp(options = {}) {
       appFunctions: (...a) => appFunctions.execute(...a),
     },
   });
+  const adapters = unifiedAdapters(store.db, { community, relay, dshRemote, now: options.now });
+  unified = createUnifiedConversations(store.db, { ...adapters, now: options.now });
+  const unifiedRate = new Map();
+  async function unifiedHandle(req, url, json, actor) {
+    if (!url.pathname.startsWith('/api/assistant/')) return false;
+    if (!actor?.id) throw fail(403, '请先使用独立账号登录。');
+    const key = actor.id + ':' + (req.method === 'GET' ? 'read' : 'write'),
+      time = (options.now || Date.now)(),
+      old = unifiedRate.get(key);
+    if (old && old.until > time) {
+      if (++old.n > (req.method === 'GET' ? 120 : 30)) throw fail(429, '请求较多，请稍后重试。');
+    } else unifiedRate.set(key, { until: time + 60000, n: 1 });
+    if (unifiedRate.size > 2000)
+      for (const [k, v] of unifiedRate) if (v.until <= time) unifiedRate.delete(k);
+    if (url.pathname === '/api/assistant/preferences' && req.method === 'PATCH') {
+      json(200, { preferences: unified.preferences(actor.id, await body(req)) });
+      return true;
+    }
+    if (url.pathname === '/api/assistant/conversations') {
+      if (req.method === 'GET') {
+        json(200, await unified.list(actor));
+        return true;
+      }
+      if (req.method === 'POST') {
+        json(201, {
+          conversation: await unified.create(
+            actor,
+            conversationCreateSchema.parse(await body(req)),
+          ),
+        });
+        return true;
+      }
+    }
+    const match = url.pathname.match(/^\/api\/assistant\/conversations\/([^/]+)(\/switch)?$/);
+    if (match) {
+      const id = z.string().uuid().parse(match[1]);
+      if (req.method === 'POST' && match[2]) {
+        json(200, { conversation: await unified.switch(actor, id, await body(req)) });
+        return true;
+      }
+      if (req.method === 'PATCH' && !match[2]) {
+        json(200, { conversation: await unified.patch(actor, id, await body(req)) });
+        return true;
+      }
+      if (req.method === 'DELETE' && !match[2]) {
+        json(200, await unified.remove(actor, id));
+        return true;
+      }
+    }
+    return false;
+  }
   function parsePluginJSON(text) {
     const raw = typeof text === 'string' ? text.trim() : '';
     const candidates = [raw];
@@ -442,6 +498,7 @@ export async function createApp(options = {}) {
     body,
     relay,
     dshRemote,
+    unified,
   });
   const origins = new Set(
     (
@@ -516,6 +573,7 @@ export async function createApp(options = {}) {
             owner: actor?.id || owner,
             source: url.pathname.replace(/^\/api\//, ''),
           });
+          if (await unifiedHandle(req, url, json, actor)) return;
           if (await dshRemote.handle(req, url, json, actor, res)) return;
           if (await usage.handle(req, url, json, actor)) return;
           if (await updates.handle(req, url, res, json, actor, body)) return;

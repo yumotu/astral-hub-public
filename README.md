@@ -1,6 +1,6 @@
-# Astral Hub 0.8.13
+# Astral Hub 0.8.14
 
-Brings the deployed DSH dsh4 workbench, terminal, thinking/permissions, conversation restore and Skill/plugin/MCP management to native clients. Pi remains the default. [Release notes](docs/release-0.8.13.md); publication status is determined by the matching Release and successful signing workflow.
+Unified Pi/computer/DSH conversations, per-conversation engine selection, bounded visible context for temporary chats and unframed replies with explicit writing cards. [Release notes](docs/release-0.8.14.md); publication status is determined by the matching Release and successful signing workflow.
 
 # 星屿 Astral Hub
 
@@ -39,7 +39,7 @@ npm run dev
 
 公开 Actions 使用标准 Ubuntu/macOS/Windows 托管 runner 构建本仓库源码。完整原生检查通过后才发布 Release；Android 签名材料由受限发行步骤读取 Secrets，不进入源码、普通构建或公共缓存。GitHub 的大规格 runner、存储及其他服务按各自规则处理。
 
-当前源码版本为 0.8.12；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
+当前源码版本为 0.8.14；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
 
 ## 权限与数据
 

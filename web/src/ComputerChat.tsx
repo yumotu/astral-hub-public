@@ -1,5 +1,8 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { FileWorkbenchProvider, FileWorkbenchPanel } from './FileWorkbench';
+import { usePiTasks } from './pi-tasks';
+import { ConversationEngineSettings, ConversationSegmentHistory } from './UnifiedConversations';
 import { AssistantComposerActions } from './AssistantComposerActions';
 import { AssistantComposer } from './AssistantComposer';
 import { AssistantUserMessage } from './AssistantUserMessage';
@@ -33,7 +36,7 @@ import { computerChatStorageKey } from '../../shared/assistant-target.mjs';
 import { insertPastedText } from './composer-paste';
 import type { ComputerProject } from './computer-api';
 import type { Settings, PiMetrics, PiContext } from './types';
-const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
+const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })));
 type Conversation = {
   id: string;
   title: string;
@@ -116,6 +119,7 @@ export function ComputerChat({
       '&archived=include',
     key = computerChatStorageKey(serverIdentity(settings), owner, deviceId, project.id);
   const id = conversationId;
+  const helperTasks = usePiTasks(settings, true).tasks;
   const preferenceKey = operationPreferenceKey(serverIdentity(settings), owner, 'computer', [
     deviceId,
     project.id,
@@ -437,335 +441,353 @@ export function ComputerChat({
     }
   }
   return (
-    <section className="computer-chat" aria-label="电脑项目对话">
-      <div className="pi-message-area">
-        <div
-          className="pi-messages computer-messages"
-          data-conversation-swipe
-          ref={scroll}
-          role="log"
-          aria-label="电脑对话消息"
-          onScroll={() => {
-            const e = scroll.current!;
-            follow.current = e.scrollHeight - e.clientHeight - e.scrollTop < 48;
-            setShowLatest(!follow.current);
-          }}
-        >
-          <div ref={content} className="pi-message-content">
-            {older && (
-              <button className="text-link" onClick={() => void loadOlder()}>
-                加载更早记录
-              </button>
-            )}
-            {!jobs.length && (
-              <p className="field-help">
-                当前对话绑定这台电脑的“{project.name}
-                ”。可读取项目、解释代码，或按本机授权修改和执行任务。
-              </p>
-            )}
-            {jobs
-              .filter((j) => !j.parentId)
-              .map((j) => (
-                <article className="pi-turn" data-message-id={j.id} key={j.id}>
-                  <AssistantUserMessage
-                    input={j.input}
-                    at={j.createdAt}
-                    files={j.attachments || []}
-                    settings={settings}
-                    conversation={id}
-                  />
-                  <div className="message assistant">
-                    <RunSummary
-                      status={j.stopPending ? 'stopping' : j.status}
-                      phase={phase(j)}
-                      uiRequests={j.uiRequests}
-                    />
-                    <LongGoalCard
-                      goal={j.longGoal}
-                      status={j.status}
-                      waiting={j.uiRequests?.some((q) => q.status === 'pending')}
-                    />
-                    {jobs
-                      .filter((c) => c.parentId === j.id)
-                      .map((c) => (
-                        <div className="computer-supplement" key={c.id}>
-                          <small>
-                            {(
-                              {
-                                delivering: '补充送达中',
-                                accepted: '已接受补充',
-                                applied: '已加入当前任务',
-                                done: '任务补充',
-                                interrupted: '补充应用待确认',
-                                error: '补充未送达',
-                              } as Record<string, string>
-                            )[c.status] || c.status}
-                          </small>
-                          <p>{c.input}</p>
-                          {c.error && <p className="error">{c.error}</p>}
-                        </div>
-                      ))}
-                    {j.thinking && (
-                      <details>
-                        <summary>思考过程</summary>
-                        <p>{j.thinking}</p>
-                      </details>
-                    )}
-                    <AppFunctionRequests
-                      settings={settings}
-                      taskId={j.id}
-                      active={j.status === 'running'}
-                    />
-                    <ToolLog tools={j.tools} />
-                    <PluginRequests
-                      settings={settings}
-                      task={j}
-                      target="computer"
-                      onAnswered={() => reload.current()}
-                    />
-                    {j.output && (
-                      <Suspense fallback={<pre>{j.output}</pre>}>
-                        <Markdown text={j.output} />
-                      </Suspense>
-                    )}
-                    {!!j.artifacts?.length && (
-                      <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
-                    )}
-                    {j.error && (
-                      <p role="alert" className="error">
-                        {j.error}
-                      </p>
-                    )}
-                    {!pending(j) && <RunMetrics metrics={j.metrics} />}
-                    {j.output && !pending(j) && (
-                      <div className="message-actions">
-                        <CopyButton text={j.output} label="复制电脑Agent回复" />
-                      </div>
-                    )}
-                  </div>
-                </article>
-              ))}
-          </div>
-        </div>
-        {showLatest && (
-          <JumpToLatest
-            onClick={() => {
-              follow.current = true;
-              scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' });
-              setShowLatest(false);
-            }}
-          />
-        )}
-      </div>
-      <MessageOutbox
-        rows={rows.filter((r) => r.payload.conversationId === id)}
-        retry={outbox.retry}
-        reconcile={outbox.reconcile}
-        restore={(r) => {
-          setStaged((old) =>
-            [...new Map([...r.files, ...old].map((f) => [f.id, f])).values()].slice(0, 8),
-          );
-          setInput((old) => r.payload.input + (old ? '\n\n' + old : ''));
-          outbox.remove(r.payload.id);
-          area.current?.focus();
-        }}
-      />
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <AssistantComposer
-        header={(() => {
-          const todo = conversationTodo([], jobs, id);
-          return todo ? <TodoDropdown items={todo.items as TodoItem[]} /> : null;
-        })()}
-        area={area}
-        history={scroll}
-        value={input}
-        send={send}
-        upload={uploadFiles}
-        attributes={{ 'aria-label': '发送给电脑Agent' }}
-        onValue={(value) => {
-          setInput(value);
-          setCommandsOpen(value === '/');
-        }}
-        onKeyDown={(e) => {
-          if (commandsOpen && e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            setCommandsOpen(false);
-          }
-        }}
+    <FileWorkbenchProvider
+      settings={settings}
+      tasks={helperTasks}
+      conversation={id}
+      source={{ origin: 'computer', id }}
+      projects={[]}
+      projectId={null}
+    >
+      <section
+        data-assistance-source={`computer:${id}`}
+        className="computer-chat"
+        aria-label="电脑项目对话"
       >
-        {commandsOpen && (
-          <div className="pi-command-menu" aria-label="电脑项目命令">
-            <div className="pi-command-heading">
-              <b>项目命令</b>
-              <small>Esc关闭</small>
+        <div className="pi-message-area">
+          <div
+            className="pi-messages computer-messages"
+            data-conversation-swipe
+            ref={scroll}
+            role="log"
+            aria-label="电脑对话消息"
+            onScroll={() => {
+              const e = scroll.current!;
+              follow.current = e.scrollHeight - e.clientHeight - e.scrollTop < 48;
+              setShowLatest(!follow.current);
+            }}
+          >
+            <div ref={content} className="pi-message-content">
+              <ConversationSegmentHistory settings={settings} origin="computer" nativeId={id} />
+              {older && (
+                <button className="text-link" onClick={() => void loadOlder()}>
+                  加载更早记录
+                </button>
+              )}
+              {!jobs.length && (
+                <p className="field-help">
+                  当前对话绑定这台电脑的“{project.name}
+                  ”。可读取项目、解释代码，或按本机授权修改和执行任务。
+                </p>
+              )}
+              {jobs
+                .filter((j) => !j.parentId)
+                .map((j) => (
+                  <article className="pi-turn" data-message-id={j.id} key={j.id}>
+                    <AssistantUserMessage
+                      input={j.input}
+                      at={j.createdAt}
+                      files={j.attachments || []}
+                      settings={settings}
+                      conversation={id}
+                    />
+                    <div className="message assistant">
+                      <RunSummary
+                        status={j.stopPending ? 'stopping' : j.status}
+                        phase={phase(j)}
+                        uiRequests={j.uiRequests}
+                      />
+                      <LongGoalCard
+                        goal={j.longGoal}
+                        status={j.status}
+                        waiting={j.uiRequests?.some((q) => q.status === 'pending')}
+                      />
+                      {jobs
+                        .filter((c) => c.parentId === j.id)
+                        .map((c) => (
+                          <div className="computer-supplement" key={c.id}>
+                            <small>
+                              {(
+                                {
+                                  delivering: '补充送达中',
+                                  accepted: '已接受补充',
+                                  applied: '已加入当前任务',
+                                  done: '任务补充',
+                                  interrupted: '补充应用待确认',
+                                  error: '补充未送达',
+                                } as Record<string, string>
+                              )[c.status] || c.status}
+                            </small>
+                            <p>{c.input}</p>
+                            {c.error && <p className="error">{c.error}</p>}
+                          </div>
+                        ))}
+                      {j.thinking && (
+                        <details>
+                          <summary>思考过程</summary>
+                          <p>{j.thinking}</p>
+                        </details>
+                      )}
+                      <AppFunctionRequests
+                        settings={settings}
+                        taskId={j.id}
+                        active={j.status === 'running'}
+                      />
+                      <ToolLog tools={j.tools} />
+                      <PluginRequests
+                        settings={settings}
+                        task={j}
+                        target="computer"
+                        onAnswered={() => reload.current()}
+                      />
+                      {j.output && (
+                        <Suspense fallback={<pre>{j.output}</pre>}>
+                          <Markdown text={j.output} />
+                        </Suspense>
+                      )}
+                      {!!j.artifacts?.length && (
+                        <ChatFiles files={j.artifacts} settings={settings} conversation={id} />
+                      )}
+                      {j.error && (
+                        <p role="alert" className="error">
+                          {j.error}
+                        </p>
+                      )}
+                      {!pending(j) && <RunMetrics metrics={j.metrics} />}
+                      {j.output && !pending(j) && (
+                        <div className="message-actions">
+                          <CopyButton text={j.output} label="复制电脑Agent回复" assistant />
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                ))}
             </div>
-            {[
-              { name: 'files', label: '查看项目文件', run: files },
-              { name: 'terminal', label: '打开目标电脑终端', run: terminal },
-              { name: 'plugins', label: '查看电脑工具和插件', run: plugins },
-              { name: 'new', label: '新建同项目对话', run: newConversation },
-            ].map((c) => (
-              <button
-                type="button"
-                key={c.name}
-                onClick={() => {
-                  setInput('');
-                  setCommandsOpen(false);
-                  c.run();
-                }}
-              >
-                <code>/{c.name}</code>
-                <span>{c.label}</span>
-              </button>
-            ))}
           </div>
-        )}
-        {uploadError && (
-          <div className="composer-attachment-error" role="alert">
-            <span>{uploadError}</span>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="关闭附件错误"
-              onClick={() => setUploadError('')}
-            >
-              ×
-            </button>
-          </div>
-        )}
-        <ChatFiles
-          files={staged}
-          settings={settings}
-          conversation={id}
-          remove={(fileId) =>
-            void api(settings, `/pi/conversations/${id}/files/${fileId}`, undefined, 'DELETE')
-              .then(() => setStaged((old) => old.filter((f) => f.id !== fileId)))
-              .catch((e) => setUploadError(e.message))
-          }
-        />
-        {uploading && (
-          <p className="field-help composer-upload-status" role="status">
-            <span>正在上传 {uploadLabel}…</span>
-            <button type="button" className="text-link" onClick={() => uploader.current?.abort()}>
-              取消上传
-            </button>
-          </p>
-        )}
-        <input
-          type="file"
-          multiple
-          hidden
-          ref={fileInput}
-          aria-label="选择聊天附件"
-          onChange={(e) => {
-            void uploadFiles(Array.from(e.target.files || []));
-            e.target.value = '';
-          }}
-        />
-        <AssistantComposerActions
-          scope={key + ':' + id}
-          thinkingLevel={capabilities.includes('thinking_levels') ? thinkingLevel : 'off'}
-          changeThinking={(level) => {
-            setThinkingLevel(level);
-            saveOperationPreferences(localStorage, thinkingPreferenceKey, { thinkingLevel: level });
-          }}
-          thinkingDisabled={!!unavailable.thinking}
-          thinkingDisabledReason={unavailable.thinking}
-          insertVoice={(text) =>
-            setInput(
-              (old) =>
-                insertPastedText(
-                  old,
-                  text,
-                  area.current?.selectionStart ?? old.length,
-                  area.current?.selectionEnd ?? old.length,
-                ).value,
-            )
-          }
-          terminal={terminal}
-          terminalDisabled={!project.allowExecute}
-          terminalDisabledReason="此项目尚未在目标电脑授权终端执行。请在目标电脑的本机设置中授权。"
-          attach={() => fileInput.current?.click()}
-          attachmentDisabled={!!unavailable.attachment}
-          attachmentDisabledReason={unavailable.attachment}
-          attachmentTitle={
-            capabilities.includes('chat_inputs')
-              ? `上传图片、PDF或文件。${attachmentSizeMessage}`
-              : '请先更新目标电脑的客户端或执行器，再上传附件。'
-          }
-          commands={() => {
-            setCommandsOpen(!commandsOpen);
-            area.current?.focus();
-          }}
-          working={working}
-          hasContent={!!input.trim() || !!staged.length}
-          stop={() => void stop()}
-          sendDisabled={uploading || (!input.trim() && !staged.length)}
-          sendAria="发送给电脑Agent"
-          sendLabel={active ? (mode === 'steer' && !staged.length ? '立即补充' : '排队') : '发送'}
-        />
-      </AssistantComposer>
-      <div className="assistant-statusbar">
-        <SessionTelemetry
-          target="computer"
-          settings={settings}
-          conversationId={id}
-          context={
-            jobs
-              .slice()
-              .reverse()
-              .find((j) => !j.parentId && j.context)?.context || null
-          }
-          metrics={
-            active?.metrics ||
-            jobs
-              .slice()
-              .reverse()
-              .find((j) => !j.parentId && j.metrics)?.metrics
-          }
-        />
-      </div>
-      {settingsContainer &&
-        createPortal(
-          <AssistantSettings location={locationName}>
-            <AssistantMode
-              value={access}
-              projectName={project.name}
-              readOnly={project.readOnly}
-              locked={working ? '当前任务和队列结束后可切换模式' : undefined}
-              onChange={(access) => {
-                saveOperationPreferences(localStorage, preferenceKey, { access });
-                setAccess(access);
+          {showLatest && (
+            <JumpToLatest
+              onClick={() => {
+                follow.current = true;
+                scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' });
+                setShowLatest(false);
               }}
             />
-            <label>
-              <input
-                type="checkbox"
-                checked={execute}
-                disabled={working || !project.allowExecute}
-                onChange={(e) => {
-                  saveOperationPreferences(localStorage, preferenceKey, {
-                    execute: e.target.checked,
-                  });
-                  setExecute(e.target.checked);
+          )}
+        </div>
+        <MessageOutbox
+          rows={rows.filter((r) => r.payload.conversationId === id)}
+          retry={outbox.retry}
+          reconcile={outbox.reconcile}
+          restore={(r) => {
+            setStaged((old) =>
+              [...new Map([...r.files, ...old].map((f) => [f.id, f])).values()].slice(0, 8),
+            );
+            setInput((old) => r.payload.input + (old ? '\n\n' + old : ''));
+            outbox.remove(r.payload.id);
+            area.current?.focus();
+          }}
+        />
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <AssistantComposer
+          header={(() => {
+            const todo = conversationTodo([], jobs, id);
+            return todo ? <TodoDropdown items={todo.items as TodoItem[]} /> : null;
+          })()}
+          area={area}
+          history={scroll}
+          value={input}
+          send={send}
+          upload={uploadFiles}
+          attributes={{ 'aria-label': '发送给电脑Agent' }}
+          onValue={(value) => {
+            setInput(value);
+            setCommandsOpen(value === '/');
+          }}
+          onKeyDown={(e) => {
+            if (commandsOpen && e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              setCommandsOpen(false);
+            }
+          }}
+        >
+          {commandsOpen && (
+            <div className="pi-command-menu" aria-label="电脑项目命令">
+              <div className="pi-command-heading">
+                <b>项目命令</b>
+                <small>Esc关闭</small>
+              </div>
+              {[
+                { name: 'files', label: '查看项目文件', run: files },
+                { name: 'terminal', label: '打开目标电脑终端', run: terminal },
+                { name: 'plugins', label: '查看电脑工具和插件', run: plugins },
+                { name: 'new', label: '新建同项目对话', run: newConversation },
+              ].map((c) => (
+                <button
+                  type="button"
+                  key={c.name}
+                  onClick={() => {
+                    setInput('');
+                    setCommandsOpen(false);
+                    c.run();
+                  }}
+                >
+                  <code>/{c.name}</code>
+                  <span>{c.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {uploadError && (
+            <div className="composer-attachment-error" role="alert">
+              <span>{uploadError}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="关闭附件错误"
+                onClick={() => setUploadError('')}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <ChatFiles
+            files={staged}
+            settings={settings}
+            conversation={id}
+            remove={(fileId) =>
+              void api(settings, `/pi/conversations/${id}/files/${fileId}`, undefined, 'DELETE')
+                .then(() => setStaged((old) => old.filter((f) => f.id !== fileId)))
+                .catch((e) => setUploadError(e.message))
+            }
+          />
+          {uploading && (
+            <p className="field-help composer-upload-status" role="status">
+              <span>正在上传 {uploadLabel}…</span>
+              <button type="button" className="text-link" onClick={() => uploader.current?.abort()}>
+                取消上传
+              </button>
+            </p>
+          )}
+          <input
+            type="file"
+            multiple
+            hidden
+            ref={fileInput}
+            aria-label="选择聊天附件"
+            onChange={(e) => {
+              void uploadFiles(Array.from(e.target.files || []));
+              e.target.value = '';
+            }}
+          />
+          <AssistantComposerActions
+            scope={key + ':' + id}
+            thinkingLevel={capabilities.includes('thinking_levels') ? thinkingLevel : 'off'}
+            changeThinking={(level) => {
+              setThinkingLevel(level);
+              saveOperationPreferences(localStorage, thinkingPreferenceKey, {
+                thinkingLevel: level,
+              });
+            }}
+            thinkingDisabled={!!unavailable.thinking}
+            thinkingDisabledReason={unavailable.thinking}
+            insertVoice={(text) =>
+              setInput(
+                (old) =>
+                  insertPastedText(
+                    old,
+                    text,
+                    area.current?.selectionStart ?? old.length,
+                    area.current?.selectionEnd ?? old.length,
+                  ).value,
+              )
+            }
+            terminal={terminal}
+            terminalDisabled={!project.allowExecute}
+            terminalDisabledReason="此项目尚未在目标电脑授权终端执行。请在目标电脑的本机设置中授权。"
+            attach={() => fileInput.current?.click()}
+            attachmentDisabled={!!unavailable.attachment}
+            attachmentDisabledReason={unavailable.attachment}
+            attachmentTitle={
+              capabilities.includes('chat_inputs')
+                ? `上传图片、PDF或文件。${attachmentSizeMessage}`
+                : '请先更新目标电脑的客户端或执行器，再上传附件。'
+            }
+            commands={() => {
+              setCommandsOpen(!commandsOpen);
+              area.current?.focus();
+            }}
+            working={working}
+            hasContent={!!input.trim() || !!staged.length}
+            stop={() => void stop()}
+            sendDisabled={uploading || (!input.trim() && !staged.length)}
+            sendAria="发送给电脑Agent"
+            sendLabel={active ? (mode === 'steer' && !staged.length ? '立即补充' : '排队') : '发送'}
+          />
+        </AssistantComposer>
+        <div className="assistant-statusbar">
+          <SessionTelemetry
+            target="computer"
+            settings={settings}
+            conversationId={id}
+            context={
+              jobs
+                .slice()
+                .reverse()
+                .find((j) => !j.parentId && j.context)?.context || null
+            }
+            metrics={
+              active?.metrics ||
+              jobs
+                .slice()
+                .reverse()
+                .find((j) => !j.parentId && j.metrics)?.metrics
+            }
+          />
+        </div>
+        {settingsContainer &&
+          createPortal(
+            <AssistantSettings location={locationName}>
+              <ConversationEngineSettings origin="computer" nativeId={id} />
+              <AssistantMode
+                value={access}
+                projectName={project.name}
+                readOnly={project.readOnly}
+                locked={working ? '当前任务和队列结束后可切换模式' : undefined}
+                onChange={(access) => {
+                  saveOperationPreferences(localStorage, preferenceKey, { access });
+                  setAccess(access);
                 }}
               />
-              允许终端与Agent执行命令
-            </label>
-            <p className="field-help">
-              {project.allowExecute
-                ? '命令以目标电脑当前系统用户权限和网络运行；项目目录不是Shell沙箱。'
-                : '此项目未在目标电脑授权执行命令，可在目标电脑的本机设置中授权。'}
-              服务器Bash联网开关不控制这台电脑。
-            </p>
-          </AssistantSettings>,
-          settingsContainer,
-        )}
-    </section>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={execute}
+                  disabled={working || !project.allowExecute}
+                  onChange={(e) => {
+                    saveOperationPreferences(localStorage, preferenceKey, {
+                      execute: e.target.checked,
+                    });
+                    setExecute(e.target.checked);
+                  }}
+                />
+                允许终端与Agent执行命令
+              </label>
+              <p className="field-help">
+                {project.allowExecute
+                  ? '命令以目标电脑当前系统用户权限和网络运行；项目目录不是Shell沙箱。'
+                  : '此项目未在目标电脑授权执行命令，可在目标电脑的本机设置中授权。'}
+                服务器Bash联网开关不控制这台电脑。
+              </p>
+            </AssistantSettings>,
+            settingsContainer,
+          )}
+        <FileWorkbenchPanel browserProject={null} onCloseBrowser={() => {}} />
+      </section>
+    </FileWorkbenchProvider>
   );
 }

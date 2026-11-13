@@ -113,6 +113,7 @@ test('web and release executors share deterministic bytes, the current version a
     'protocol.mjs',
     'file-diff.mjs',
     'rpc-prompt.mjs',
+    'assistant-artifacts.mjs',
     'activity-deadline.mjs',
     'ask-user.mjs',
     'question-continuation.mjs',
@@ -240,29 +241,56 @@ test('update publication cannot label incomplete distribution evidence as notari
 test('public release requires commit-bound Android signing evidence and refuses changed APKs without replacing the update feed', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'astral-public-release-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const version = '0.8.9', commit = 'd'.repeat(40), dir = join(root, 'artifacts/native');
+  const version = '0.8.9',
+    commit = 'd'.repeat(40),
+    dir = join(root, 'artifacts/native');
   const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
   await mkdir(dir, { recursive: true });
   await mkdir(join(root, 'docs'));
   await writeFile(join(root, 'package.json'), JSON.stringify({ version }));
   await writeFile(join(root, 'docs/release-0.8.9.md'), 'Synthetic release fixture.');
   for (const name of expectedReleaseAssets(version)) await writeFile(join(dir, name), name);
-  await writeFile(join(dir, 'macos-verification.json'), JSON.stringify({
-    version, commit, mode: 'integrity-only',
-    apps: ['arm64', 'x86_64'].map(arch => ({ arch, integrity: true, notarized: false, gatekeeperAccepted: false })),
-    assets: expectedReleaseAssets(version).filter(name => name.includes('-mac-')).map(name => ({ name, sha256: digest(name) })),
-  }));
+  await writeFile(
+    join(dir, 'macos-verification.json'),
+    JSON.stringify({
+      version,
+      commit,
+      mode: 'integrity-only',
+      apps: ['arm64', 'x86_64'].map((arch) => ({
+        arch,
+        integrity: true,
+        notarized: false,
+        gatekeeperAccepted: false,
+      })),
+      assets: expectedReleaseAssets(version)
+        .filter((name) => name.includes('-mac-'))
+        .map((name) => ({ name, sha256: digest(name) })),
+    }),
+  );
   await assert.rejects(prepareRelease({ root, commit }), /Android release signature provenance/);
   const apkName = `Astral-Hub-${version}-android-debug.apk`;
-  const report = { version, commit, integrity: true, certificateSha256: 'e'.repeat(64), schemes: ['v2', 'v3'], apkSha256: digest(apkName) };
-  await writeFile(join(dir, 'android-verification.json'), JSON.stringify({ ...report, commit: 'f'.repeat(40) }));
+  const report = {
+    version,
+    commit,
+    integrity: true,
+    certificateSha256: 'e'.repeat(64),
+    schemes: ['v2', 'v3'],
+    apkSha256: digest(apkName),
+  };
+  await writeFile(
+    join(dir, 'android-verification.json'),
+    JSON.stringify({ ...report, commit: 'f'.repeat(40) }),
+  );
   await assert.rejects(prepareRelease({ root, commit }), /Android release signature provenance/);
   await writeFile(join(dir, 'android-verification.json'), JSON.stringify(report));
   await prepareRelease({ root, commit });
-  const from = join(root, 'release/publish'), to = join(root, 'updates');
+  const from = join(root, 'release/publish'),
+    to = join(root, 'updates');
   const info = JSON.parse(await readFile(join(from, 'build-info.json'), 'utf8'));
   assert.deepEqual(info.androidVerification, report);
-  assert.ok(info.verifiedJobs.includes('source-audit') && info.verifiedJobs.includes('android-sign'));
+  assert.ok(
+    info.verifiedJobs.includes('source-audit') && info.verifiedJobs.includes('android-sign'),
+  );
   const manifest = await publishUpdates(from, to);
   assert.equal(manifest.commit, commit);
   const originalFeed = await readFile(join(to, 'manifest.json'), 'utf8');

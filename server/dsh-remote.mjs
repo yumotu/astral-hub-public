@@ -68,6 +68,7 @@ export function createDshRemote(
     connect = connectDshRemote,
     appTools,
     files,
+    unified,
     now = Date.now,
   },
 ) {
@@ -101,6 +102,7 @@ export function createDshRemote(
     now,
     appTools,
     files,
+    unified,
   });
   const rowFor = (owner, id) =>
     db

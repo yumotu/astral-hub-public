@@ -87,6 +87,7 @@ export function createRelayWorkspace(
     draftComputerPlugin,
     onlinePackages,
     appFunctions,
+    unified,
   },
 ) {
   const labels = createProjectLabels(db);
@@ -146,6 +147,7 @@ export function createRelayWorkspace(
     notifications,
     chatFiles,
     appFunctions,
+    unified,
   });
   const terminals = createRelayTerminals(db, { body, now, limit, ownedDevice, project });
   return {

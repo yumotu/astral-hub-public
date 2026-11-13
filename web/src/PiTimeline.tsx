@@ -14,7 +14,9 @@ import type { PiTimelineItem, Settings } from './types';
 import { activityTarget, groupActivities, isTodoTool } from '../../shared/pi-activity.mjs';
 import { toolLabels } from './ToolLog';
 import { useFileWorkbench } from './FileWorkbench';
-const MarkdownView = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
+const MarkdownView = lazy(() =>
+  import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })),
+);
 type Activity = Exclude<PiTimelineItem, { kind: 'text' }>;
 type Group =
   { kind: 'text'; text: string; key: number } | { kind: 'process'; items: Activity[]; key: number };

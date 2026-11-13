@@ -5,7 +5,9 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { normalizeMathDelimiters } from '../../shared/markdown-math.mjs';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, FileText } from 'lucide-react';
+import { CopyButton } from './CopyButton';
+import { splitAssistantArtifacts } from '../../shared/assistant-artifacts.mjs';
 function CodeBlock({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLPreElement>(null),
     [copied, setCopied] = useState(false);
@@ -49,6 +51,29 @@ export function PiMarkdown({ text }: { text: string }) {
       >
         {normalizeMathDelimiters(text)}
       </Markdown>
+    </div>
+  );
+}
+
+/** Agent replies use plain Markdown unless the model explicitly emits a finished writing block. */
+export function AssistantReply({ text }: { text: string }) {
+  const parts = splitAssistantArtifacts(text);
+  return (
+    <div className="assistant-reply">
+      {parts.map((part, index) =>
+        part.kind === 'artifact' ? (
+          <section className="assistant-artifact" aria-label={part.title || '文稿'} key={index}>
+            <header className="assistant-artifact-heading">
+              <FileText size={15} aria-hidden="true" />
+              <strong>{part.title || (part.variant === 'email' ? '邮件文稿' : '文稿')}</strong>
+              <CopyButton text={part.text} label="复制文稿" />
+            </header>
+            <PiMarkdown text={part.text} />
+          </section>
+        ) : (
+          <PiMarkdown text={part.text} key={index} />
+        ),
+      )}
     </div>
   );
 }

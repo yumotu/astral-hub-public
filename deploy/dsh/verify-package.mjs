@@ -61,7 +61,7 @@ try {
   assert.equal(response.status, 200);
   const proof = await response.json();
   assert.equal(proof.ok, true);
-  assert.equal(proof.version, '0.8.13');
+  assert.equal(proof.version, '0.8.14');
   assert.equal(proof.revision, 'dsh4');
   assert.equal(proof.fileBridgeVersion, 1);
   assert.equal(proof.workbenchVersion, 1);

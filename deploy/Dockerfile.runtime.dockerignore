@@ -8,6 +8,7 @@
 !deploy/
 !deploy/pi/
 !deploy/pi/concurrency.mjs
+!deploy/pi/assistant-artifacts.mjs
 !deploy/pi/attachment-limits.mjs
 !deploy/pi/activity-deadline.mjs
 !deploy/pi/long-goal-command.mjs

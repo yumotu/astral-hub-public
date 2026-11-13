@@ -32,10 +32,19 @@ import {
   type MenuAnchor,
   type Conversation,
 } from './ConversationMenu';
+import { FileWorkbenchProvider, FileWorkbenchPanel } from './FileWorkbench';
+import { usePiTasks } from './pi-tasks';
 import { useMobilePanels } from './MobilePanels';
 import { useAssistantPreferences } from './assistant-preferences';
 import { useBackLayer } from './back-navigation';
 import './dsh-remote.css';
+import {
+  useUnifiedConversations,
+  UnifiedConversationNavigation,
+  ConversationEngineSettings,
+  ConversationSegmentHistory,
+} from './UnifiedConversations';
+const Reply = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })));
 const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
 const Terminal = lazy(() => import('./DshTerminal').then((m) => ({ default: m.DshTerminal })));
 export type RemoteConnection = {
@@ -432,13 +441,16 @@ export function DshRemoteWorkspace({
   actions,
   openNavigation,
   manage,
+  navigationControls,
 }: {
   settings: Settings;
   owner: string;
   actions: ReactNode;
   openNavigation: () => void;
   manage: () => void;
+  navigationControls?: { newProject: () => void; defaultDirectory: ReactNode };
 }) {
+  const unified = useUnifiedConversations();
   const [connections, setConnections] = useState<RemoteConnection[]>([]),
     [catalogues, setCatalogues] = useState<Record<string, Catalogue>>({}),
     [conversations, setConversations] = useState<DshConversation[]>([]),
@@ -488,7 +500,11 @@ export function DshRemoteWorkspace({
     ]);
     setConnections(c.connections);
     setConversations(list.conversations);
-    if (selectedRef.current && !list.conversations.some((v) => v.id === selectedRef.current)) {
+    if (
+      !unified &&
+      selectedRef.current &&
+      !list.conversations.some((v) => v.id === selectedRef.current)
+    ) {
       setSelected(list.conversations.find((v) => !v.archivedAt)?.id || '');
     }
     const result: Record<string, Catalogue> = {};
@@ -529,6 +545,7 @@ export function DshRemoteWorkspace({
     );
     if (existing) {
       setSelected(existing.id);
+      unified?.select({ origin: 'remote', nativeId: existing.id });
       setPanel(null);
       return;
     }
@@ -539,11 +556,16 @@ export function DshRemoteWorkspace({
         { id: crypto.randomUUID(), connectionId, workspaceId, ...(sessionId ? { sessionId } : {}) },
       );
       setSelected(r.conversation.id);
+      unified?.select({ origin: 'remote', nativeId: r.conversation.id });
+      void unified?.refresh();
       setConversation(r.conversation);
       setPanel(null);
       setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== r.conversation.id)]);
     });
   }
+  useEffect(() => {
+    if (unified?.selected?.origin === 'remote') setSelected(unified.selected.nativeId);
+  }, [unified?.selected?.origin, unified?.selected?.nativeId]);
   useEffect(() => {
     if (!selected) {
       setConversation(null);
@@ -606,7 +628,13 @@ export function DshRemoteWorkspace({
           <Menu size={19} />
         </button>
         <div className="pi-heading-info">
-          <h1>{conversation?.title || 'DSH智能助手'}</h1>
+          <h1>
+            {unified?.conversations.find((c) =>
+              c.segments.some((s) => s.origin === 'remote' && s.nativeId === selected),
+            )?.title ||
+              conversation?.title ||
+              'DSH智能助手'}
+          </h1>
           <small className="pi-model-status">
             DSH · {current?.host?.name || '选择已有主机'}
             {projectName ? ` · ${projectName}` : ''}
@@ -628,145 +656,157 @@ export function DshRemoteWorkspace({
         </p>
       )}
       <div className="chat-layout pi-layout assistant-layout dsh-workspace">
-        <button
-          className={`project-navigation-scrim ${navigationOpen ? 'is-open' : ''}`}
-          tabIndex={navigationOpen ? 0 : -1}
-          aria-hidden={!navigationOpen}
-          aria-label="关闭项目与对话"
-          onClick={() => setPanel(null)}
-        />
-        <aside
-          aria-label="项目与对话"
-          className={`surface contact-list project-conversation-list ${navigationOpen ? 'is-open' : ''}`}
-        >
-          <div className="project-navigation-heading">
-            <strong>项目与对话</strong>
-            <button className="icon-btn" aria-label="收起项目与对话" onClick={() => setPanel(null)}>
-              <X size={18} />
-            </button>
-          </div>
-          <div className="action-row">
-            <button className="secondary" onClick={manage}>
-              管理连接
-            </button>
+        {unified ? (
+          <UnifiedConversationNavigation manage={manage} {...navigationControls} />
+        ) : (
+          <>
             <button
-              className="icon-btn"
-              aria-label="刷新DSH项目"
-              disabled={busy}
-              onClick={() => void task(refresh)}
+              className={`project-navigation-scrim ${navigationOpen ? 'is-open' : ''}`}
+              tabIndex={navigationOpen ? 0 : -1}
+              aria-hidden={!navigationOpen}
+              aria-label="关闭项目与对话"
+              onClick={() => setPanel(null)}
+            />
+            <aside
+              aria-label="项目与对话"
+              className={`surface contact-list project-conversation-list ${navigationOpen ? 'is-open' : ''}`}
             >
-              <RefreshCw size={16} />
-            </button>
-          </div>
-          {connections
-            .filter((c) => c.host)
-            .map((c) => {
-              const cat = catalogues[c.id];
-              const projects =
-                cat?.workspaces ||
-                [
-                  ...new Set(
-                    conversations.filter((v) => v.connectionId === c.id).map((v) => v.projectId),
-                  ),
-                ].map((id) => ({ id, name: 'DSH项目' }));
-              return (
-                <section className="assistant-computer-projects" key={c.id}>
-                  <h2>
-                    {c.host!.location === 'server' ? '服务器' : '电脑'} · {c.host!.name}
-                  </h2>
-                  {!cat && <p className="field-help">主机暂未连接，已关联的对话仍可查看。</p>}
-                  {projects.map((project) => {
-                    const key = c.id + ':' + project.id,
-                      title = names[key] || project.name;
-                    const list = conversations
-                      .filter(
-                        (v) =>
-                          v.connectionId === c.id &&
-                          v.projectId === project.id &&
-                          !!v.archivedAt === archived,
-                      )
-                      .sort(
-                        (a, b) =>
-                          Number(!!b.pinnedAt) - Number(!!a.pinnedAt) ||
-                          b.updatedAt.localeCompare(a.updatedAt),
-                      );
-                    return (
-                      <details className="project-tree" key={project.id} open>
-                        <ProjectSummary
-                          name={title}
-                          detail={list.length || ''}
-                          newConversation={() => void open(c.id, project.id)}
-                          saveName={async (name) => {
-                            const next = { ...names };
-                            if (name) next[key] = name;
-                            else delete next[key];
-                            localStorage.setItem(
-                              'astral.dsh.projectNames:' + scope,
-                              JSON.stringify(next),
-                            );
-                            setNames(next);
-                          }}
-                        />
-                        <div className="project-conversations">
-                          <ProjectConversationList>
-                            {list.map((v) => (
-                              <ConversationRow
-                                key={v.id}
-                                conversation={v}
-                                selected={selected === v.id}
-                                disabled={busy}
-                                detail={
-                                  v.runState?.busy ? v.runState.label : dateLabel(v.updatedAt)
-                                }
-                                choose={() => {
-                                  setSelected(v.id);
-                                  setPanel(null);
-                                }}
-                                openMenu={setMenu}
-                              />
-                            ))}
-                          </ProjectConversationList>
-                          {!archived &&
-                          cat?.sessions.filter(
-                            (s) =>
-                              s.workspaceIds.includes(project.id) &&
-                              !conversations.some(
-                                (v) => v.connectionId === c.id && v.sessionId === s.id,
-                              ),
-                          ).length ? (
-                            <details>
-                              <summary>主机上的其他对话</summary>
-                              {cat.sessions
-                                .filter(
-                                  (s) =>
-                                    s.workspaceIds.includes(project.id) &&
-                                    !conversations.some(
-                                      (v) => v.connectionId === c.id && v.sessionId === s.id,
-                                    ),
-                                )
-                                .map((s) => (
-                                  <button
-                                    key={s.id}
-                                    className="contact-choice"
+              <div className="project-navigation-heading">
+                <strong>项目与对话</strong>
+                <button
+                  className="icon-btn"
+                  aria-label="收起项目与对话"
+                  onClick={() => setPanel(null)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="action-row">
+                <button className="secondary" onClick={manage}>
+                  管理连接
+                </button>
+                <button
+                  className="icon-btn"
+                  aria-label="刷新DSH项目"
+                  disabled={busy}
+                  onClick={() => void task(refresh)}
+                >
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+              {connections
+                .filter((c) => c.host)
+                .map((c) => {
+                  const cat = catalogues[c.id];
+                  const projects =
+                    cat?.workspaces ||
+                    [
+                      ...new Set(
+                        conversations
+                          .filter((v) => v.connectionId === c.id)
+                          .map((v) => v.projectId),
+                      ),
+                    ].map((id) => ({ id, name: 'DSH项目' }));
+                  return (
+                    <section className="assistant-computer-projects" key={c.id}>
+                      <h2>
+                        {c.host!.location === 'server' ? '服务器' : '电脑'} · {c.host!.name}
+                      </h2>
+                      {!cat && <p className="field-help">主机暂未连接，已关联的对话仍可查看。</p>}
+                      {projects.map((project) => {
+                        const key = c.id + ':' + project.id,
+                          title = names[key] || project.name;
+                        const list = conversations
+                          .filter(
+                            (v) =>
+                              v.connectionId === c.id &&
+                              v.projectId === project.id &&
+                              !!v.archivedAt === archived,
+                          )
+                          .sort(
+                            (a, b) =>
+                              Number(!!b.pinnedAt) - Number(!!a.pinnedAt) ||
+                              b.updatedAt.localeCompare(a.updatedAt),
+                          );
+                        return (
+                          <details className="project-tree" key={project.id} open>
+                            <ProjectSummary
+                              name={title}
+                              detail={list.length || ''}
+                              newConversation={() => void open(c.id, project.id)}
+                              saveName={async (name) => {
+                                const next = { ...names };
+                                if (name) next[key] = name;
+                                else delete next[key];
+                                localStorage.setItem(
+                                  'astral.dsh.projectNames:' + scope,
+                                  JSON.stringify(next),
+                                );
+                                setNames(next);
+                              }}
+                            />
+                            <div className="project-conversations">
+                              <ProjectConversationList>
+                                {list.map((v) => (
+                                  <ConversationRow
+                                    key={v.id}
+                                    conversation={v}
+                                    selected={selected === v.id}
                                     disabled={busy}
-                                    onClick={() => void open(c.id, project.id, s.id)}
-                                  >
-                                    {s.title}
-                                  </button>
+                                    detail={
+                                      v.runState?.busy ? v.runState.label : dateLabel(v.updatedAt)
+                                    }
+                                    choose={() => {
+                                      setSelected(v.id);
+                                      setPanel(null);
+                                    }}
+                                    openMenu={setMenu}
+                                  />
                                 ))}
-                            </details>
-                          ) : null}
-                        </div>
-                      </details>
-                    );
-                  })}
-                </section>
-              );
-            })}
-          <button className="text-link" onClick={() => setArchived((v) => !v)}>
-            {archived ? '返回最近对话' : '已归档对话'}
-          </button>
-        </aside>
+                              </ProjectConversationList>
+                              {!archived &&
+                              cat?.sessions.filter(
+                                (s) =>
+                                  s.workspaceIds.includes(project.id) &&
+                                  !conversations.some(
+                                    (v) => v.connectionId === c.id && v.sessionId === s.id,
+                                  ),
+                              ).length ? (
+                                <details>
+                                  <summary>主机上的其他对话</summary>
+                                  {cat.sessions
+                                    .filter(
+                                      (s) =>
+                                        s.workspaceIds.includes(project.id) &&
+                                        !conversations.some(
+                                          (v) => v.connectionId === c.id && v.sessionId === s.id,
+                                        ),
+                                    )
+                                    .map((s) => (
+                                      <button
+                                        key={s.id}
+                                        className="contact-choice"
+                                        disabled={busy}
+                                        onClick={() => void open(c.id, project.id, s.id)}
+                                      >
+                                        {s.title}
+                                      </button>
+                                    ))}
+                                </details>
+                              ) : null}
+                            </div>
+                          </details>
+                        );
+                      })}
+                    </section>
+                  );
+                })}
+              <button className="text-link" onClick={() => setArchived((v) => !v)}>
+                {archived ? '返回最近对话' : '已归档对话'}
+              </button>
+            </aside>
+          </>
+        )}
         {conversation ? (
           <DshChat
             key={selected}
@@ -834,6 +874,7 @@ function DshChat({
   conversation: DshConversation;
   update: (c: DshConversation) => void;
 }) {
+  const helperTasks = usePiTasks(settings, true).tasks;
   const draftKey = `astral.dsh.draft:${settings.url}:${owner}:${c.id}`;
   type Pending = { id: string; text: string; mode: string; state: string; files?: ChatFile[] };
   const [attachments, setAttachments] = useState<ChatFile[]>(() => {
@@ -1040,411 +1081,425 @@ function DshChat({
   ]);
   const unresolvedPending = pending.filter((v) => !displayedRequestIds.has(v.id));
   return (
-    <div className="surface chat-panel">
-      <details
-        className="dsh-chat-settings"
-        onToggle={(e) => {
-          if (e.currentTarget.open) void control.reload();
-        }}
-      >
-        <summary>
-          <Settings2 size={16} />
-          设置
-        </summary>
-        <DshPermissions
-          controls={control.controls}
-          disabled={control.loading || c.connection !== 'connected'}
-          select={(v) => void control.select('permission', v)}
-        />
-        <div className="dsh-workbench-actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={control.loading || c.connection !== 'connected'}
-            onClick={() => void control.reload()}
-          >
-            <RefreshCw size={14} />
-            刷新主机设置
-          </button>
-          <button type="button" className="secondary" onClick={() => setSkillsOpen(true)}>
-            技能
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={c.connection !== 'connected'}
-            onClick={() => setExtensionsOpen(true)}
-          >
-            扩展管理
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!control.controls?.terminal || c.connection !== 'connected'}
-            onClick={() => setTerminalOpen(true)}
-          >
-            终端
-          </button>
-        </div>
-        {control.error && (
-          <p className="error" role="alert">
-            {control.error}
-          </p>
-        )}
-        <label>
-          <input
-            type="checkbox"
-            checked={c.appTools.enabled}
-            disabled={busy || !c.appTools.available || c.connection !== 'connected'}
-            onChange={(e) => {
-              setBusy(true);
-              setError('');
-              void perform('tools', { enabled: e.target.checked })
-                .catch((e) => setError(e.message))
-                .finally(() => {
-                  if (alive.current) setBusy(false);
-                });
-            }}
-          />
-          在此对话使用星屿软件功能
-        </label>
-        <p className="field-help">
-          {c.appTools.available
-            ? '启用后，新消息可使用附件、文件交付，以及当前账号的邮件、联系人、学习和记忆。指定主机需安装星屿工具插件；发送邮件或消息时在这里确认。关闭后撤销正在使用的工具授权。'
-            : '服务器尚未配置软件工具入口。'}
-        </p>
-      </details>
-      <div className="pi-message-area" data-conversation-swipe>
-        <div
-          className="message-scroll pi-messages"
-          role="region"
-          aria-label="对话消息"
-          tabIndex={0}
-          ref={scroll}
-          onScroll={() => {
-            const node = scroll.current!;
-            follow.current = node.scrollHeight - node.clientHeight - node.scrollTop < 48;
-            setShowLatest(!follow.current);
+    <FileWorkbenchProvider
+      settings={settings}
+      tasks={helperTasks}
+      conversation={c.id}
+      source={{ origin: 'remote', id: c.id }}
+      projects={[]}
+      projectId={null}
+    >
+      <div data-assistance-source={`remote:${c.id}`} className="surface chat-panel">
+        <details
+          className="dsh-chat-settings"
+          onToggle={(e) => {
+            if (e.currentTarget.open) void control.reload();
           }}
         >
-          <div className="pi-message-content">
-            {c.hasMore && (
-              <button
-                className="load-history text-link"
-                disabled={busy}
-                onClick={() => {
-                  setBusy(true);
-                  follow.current = false;
-                  void perform('history', {})
-                    .catch((e) => setError(e.message))
-                    .finally(() => setBusy(false));
-                }}
-              >
-                加载更早对话 · 不影响模型上下文
-              </button>
-            )}
-            {c.messages.map((m) =>
-              m.role === 'user' ? (
-                <AssistantUserMessage
-                  key={m.id}
-                  input={m.text}
-                  at={new Date(m.time).toISOString()}
-                  settings={settings}
-                  conversation={c.id}
-                  files={c.inputs?.[m.rpcId || ''] || []}
-                />
-              ) : (
-                <div className="message assistant" key={m.id}>
-                  {m.thinking && showThinking && (
-                    <details className="pi-thinking">
-                      <summary>思考过程</summary>
-                      <Suspense fallback={<pre>{m.thinking}</pre>}>
-                        <Markdown text={m.thinking} />
-                      </Suspense>
-                    </details>
-                  )}
-                  <Suspense fallback={<pre>{m.text}</pre>}>
-                    <Markdown text={m.text} />
-                  </Suspense>
-                  {!m.id.startsWith('live:') && <CopyButton text={m.text} />}
-                </div>
-              ),
-            )}
-            <ToolLog
-              tools={c.tools.map((t) => ({
-                ...t,
-                path: '.',
-                command: t.name === 'bash' ? t.arguments : undefined,
-              }))}
-            />
-            {!!c.artifacts?.length && (
-              <section aria-label="DSH交付文件">
-                <ChatFiles
-                  files={c.artifacts.map((a) => a.file)}
-                  settings={settings}
-                  conversation={c.id}
-                />
-              </section>
-            )}
-            <RunSummary
-              backend="dsh"
-              status={c.status}
-              phase={c.phase}
-              stopPending={c.stopPending}
-              uiRequests={c.uiRequests}
-              connection={c.connection}
-            />
-            {c.error && <p className="error">{c.error}</p>}
-            {c.interactions.map((item) => (
-              <DshInteraction
-                key={item.id}
-                item={item}
-                blocked={c.actions.some(
-                  (v) =>
-                    v.kind === 'respond' &&
-                    v.reference === item.id &&
-                    ['sending', 'unknown', 'accepted', 'observed'].includes(v.state),
-                )}
-                reply={(response) =>
-                  perform('respond', {
-                    id: crypto.randomUUID(),
-                    interactionId: item.id,
-                    response,
-                  }).then(() => {})
-                }
-              />
-            ))}
-            {c.appTools.tasks.map((task) => (
-              <AppFunctionRequests
-                key={task.id}
-                settings={settings}
-                taskId={task.id}
-                active={task.state !== 'binding'}
-              />
-            ))}
-          </div>
-        </div>
-        {showLatest && (
-          <JumpToLatest
-            onClick={() => {
-              follow.current = true;
-              scroll.current?.scrollTo({ top: scroll.current.scrollHeight });
-              setShowLatest(false);
-            }}
+          <summary>
+            <Settings2 size={16} />
+            设置
+          </summary>
+          <ConversationEngineSettings origin="remote" nativeId={c.id} />
+          <DshPermissions
+            controls={control.controls}
+            disabled={control.loading || c.connection !== 'connected'}
+            select={(v) => void control.select('permission', v)}
           />
-        )}
-      </div>
-      {c.queue.length > 0 && (
-        <details className="dsh-pending-messages">
-          <summary>待处理补充 · {c.queue.length}</summary>
-          {c.queue.map((v) => (
-            <p key={v.id}>{v.text}</p>
-          ))}
+          <div className="dsh-workbench-actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={control.loading || c.connection !== 'connected'}
+              onClick={() => void control.reload()}
+            >
+              <RefreshCw size={14} />
+              刷新主机设置
+            </button>
+            <button type="button" className="secondary" onClick={() => setSkillsOpen(true)}>
+              技能
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={c.connection !== 'connected'}
+              onClick={() => setExtensionsOpen(true)}
+            >
+              扩展管理
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!control.controls?.terminal || c.connection !== 'connected'}
+              onClick={() => setTerminalOpen(true)}
+            >
+              终端
+            </button>
+          </div>
+          {control.error && (
+            <p className="error" role="alert">
+              {control.error}
+            </p>
+          )}
+          <label>
+            <input
+              type="checkbox"
+              checked={c.appTools.enabled}
+              disabled={busy || !c.appTools.available || c.connection !== 'connected'}
+              onChange={(e) => {
+                setBusy(true);
+                setError('');
+                void perform('tools', { enabled: e.target.checked })
+                  .catch((e) => setError(e.message))
+                  .finally(() => {
+                    if (alive.current) setBusy(false);
+                  });
+              }}
+            />
+            在此对话使用星屿软件功能
+          </label>
+          <p className="field-help">
+            {c.appTools.available
+              ? '启用后，新消息可使用附件、文件交付，以及当前账号的邮件、联系人、学习和记忆。指定主机需安装星屿工具插件；发送邮件或消息时在这里确认。关闭后撤销正在使用的工具授权。'
+              : '服务器尚未配置软件工具入口。'}
+          </p>
         </details>
-      )}
-      {latest && ['unknown', 'sending'].includes(latest.state) && (
-        <p className="field-help">上一条消息结果待核对，系统不会自动重发。</p>
-      )}
-      {unresolvedPending.length > 0 && (
-        <details className="dsh-pending-messages">
-          <summary>尚未出现在主机记录中 · {unresolvedPending.length}</summary>
-          {unresolvedPending.map((v) => (
-            <div key={v.id}>
-              <p>{v.text}</p>
-              <small>
-                {v.state === 'rejected'
-                  ? '此次消息未提交'
-                  : v.state === 'accepted'
-                    ? '主机已接收，等待记录更新'
-                    : '送达结果待核对，不会自动重发'}
-              </small>
-              {v.state === 'rejected' && (
+        <div className="pi-message-area" data-conversation-swipe>
+          <div
+            className="message-scroll pi-messages"
+            role="region"
+            aria-label="对话消息"
+            tabIndex={0}
+            ref={scroll}
+            onScroll={() => {
+              const node = scroll.current!;
+              follow.current = node.scrollHeight - node.clientHeight - node.scrollTop < 48;
+              setShowLatest(!follow.current);
+            }}
+          >
+            <div className="pi-message-content">
+              <ConversationSegmentHistory settings={settings} origin="remote" nativeId={c.id} />
+              {c.hasMore && (
                 <button
-                  className="text-link"
+                  className="load-history text-link"
+                  disabled={busy}
                   onClick={() => {
-                    setInput((old) => v.text + (old ? '\n\n' + old : ''));
-                    saveAttachments(
-                      [
-                        ...new Map(
-                          [...attachmentsRef.current, ...(v.files || [])].map((f) => [f.id, f]),
-                        ).values(),
-                      ].slice(0, 8),
-                    );
-                    savePending(pendingRef.current.filter((p) => p.id !== v.id));
+                    setBusy(true);
+                    follow.current = false;
+                    void perform('history', {})
+                      .catch((e) => setError(e.message))
+                      .finally(() => setBusy(false));
                   }}
                 >
-                  恢复到草稿
+                  加载更早对话 · 不影响模型上下文
                 </button>
               )}
+              {c.messages.map((m) =>
+                m.role === 'user' ? (
+                  <AssistantUserMessage
+                    key={m.id}
+                    input={m.text}
+                    at={new Date(m.time).toISOString()}
+                    settings={settings}
+                    conversation={c.id}
+                    files={c.inputs?.[m.rpcId || ''] || []}
+                  />
+                ) : (
+                  <div className="message assistant" key={m.id}>
+                    {m.thinking && showThinking && (
+                      <details className="pi-thinking">
+                        <summary>思考过程</summary>
+                        <Suspense fallback={<pre>{m.thinking}</pre>}>
+                          <Markdown text={m.thinking} />
+                        </Suspense>
+                      </details>
+                    )}
+                    <Suspense fallback={<pre>{m.text}</pre>}>
+                      <Reply text={m.text} />
+                    </Suspense>
+                    {!m.id.startsWith('live:') && <CopyButton text={m.text} assistant />}
+                  </div>
+                ),
+              )}
+              <ToolLog
+                tools={c.tools.map((t) => ({
+                  ...t,
+                  path: '.',
+                  command: t.name === 'bash' ? t.arguments : undefined,
+                }))}
+              />
+              {!!c.artifacts?.length && (
+                <section aria-label="DSH交付文件">
+                  <ChatFiles
+                    files={c.artifacts.map((a) => a.file)}
+                    settings={settings}
+                    conversation={c.id}
+                  />
+                </section>
+              )}
+              <RunSummary
+                backend="dsh"
+                status={c.status}
+                phase={c.phase}
+                stopPending={c.stopPending}
+                uiRequests={c.uiRequests}
+                connection={c.connection}
+              />
+              {c.error && <p className="error">{c.error}</p>}
+              {c.interactions.map((item) => (
+                <DshInteraction
+                  key={item.id}
+                  item={item}
+                  blocked={c.actions.some(
+                    (v) =>
+                      v.kind === 'respond' &&
+                      v.reference === item.id &&
+                      ['sending', 'unknown', 'accepted', 'observed'].includes(v.state),
+                  )}
+                  reply={(response) =>
+                    perform('respond', {
+                      id: crypto.randomUUID(),
+                      interactionId: item.id,
+                      response,
+                    }).then(() => {})
+                  }
+                />
+              ))}
+              {c.appTools.tasks.map((task) => (
+                <AppFunctionRequests
+                  key={task.id}
+                  settings={settings}
+                  taskId={task.id}
+                  active={task.state !== 'binding'}
+                />
+              ))}
             </div>
-          ))}
-        </details>
-      )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <input
-        ref={attachmentInput}
-        type="file"
-        multiple
-        hidden
-        aria-label="选择DSH附件"
-        onChange={(e) => {
-          const files = [...(e.target.files || [])];
-          e.target.value = '';
-          void upload(files);
-        }}
-      />
-      {uploading && (
-        <p role="status" className="field-help">
-          正在上传附件…
-        </p>
-      )}
-      <AssistantComposer
-        area={area}
-        history={scroll}
-        value={input}
-        onValue={setInput}
-        send={send}
-        upload={upload}
-        attributes={{
-          'aria-label': '发送给DSH的消息',
-          placeholder: '发送消息… 执行中也可继续补充',
-        }}
-        header={
-          <ChatFiles
-            files={attachments}
-            settings={settings}
-            conversation={c.id}
-            remove={(id) => {
-              if (uploadLock.current || lock.current) return;
-              void api(
-                settings,
-                remoteBase + `/conversations/${c.id}/files/${id}`,
-                undefined,
-                'DELETE',
-              )
-                .then(() => {
-                  if (alive.current)
-                    saveAttachments(attachmentsRef.current.filter((f) => f.id !== id));
-                })
-                .catch((e) => setError(e.message));
-            }}
-          />
-        }
-      >
-        <AssistantComposerActions
-          scope={c.id}
-          thinkingLevel="off"
-          thinkingControl={
-            <ThinkingControl
-              value={effort}
-              options={(nativeReasoning?.efforts || []).map((e) => ({
-                value: e.id,
-                label:
-                  (
-                    { off: '关闭', low: '轻量', high: '深入', max: '充分' } as Record<
-                      string,
-                      string
-                    >
-                  )[e.id] || e.name,
-                description: e.description,
-              }))}
-              disabled={
-                control.loading || !nativeReasoning?.efforts.length || c.connection !== 'connected'
-              }
-              disabledReason={
-                control.loading
-                  ? '正在核对主机设置…'
-                  : !nativeReasoning?.efforts.length
-                    ? control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。'
-                    : c.connection !== 'connected'
-                      ? '请恢复主机连接。'
-                      : undefined
-              }
-              onUnavailable={() =>
-                setError(control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。')
-              }
-              onChange={(v) => void control.select('thinking', v)}
+          </div>
+          {showLatest && (
+            <JumpToLatest
+              onClick={() => {
+                follow.current = true;
+                scroll.current?.scrollTo({ top: scroll.current.scrollHeight });
+                setShowLatest(false);
+              }}
+            />
+          )}
+        </div>
+        {c.queue.length > 0 && (
+          <details className="dsh-pending-messages">
+            <summary>待处理补充 · {c.queue.length}</summary>
+            {c.queue.map((v) => (
+              <p key={v.id}>{v.text}</p>
+            ))}
+          </details>
+        )}
+        {latest && ['unknown', 'sending'].includes(latest.state) && (
+          <p className="field-help">上一条消息结果待核对，系统不会自动重发。</p>
+        )}
+        {unresolvedPending.length > 0 && (
+          <details className="dsh-pending-messages">
+            <summary>尚未出现在主机记录中 · {unresolvedPending.length}</summary>
+            {unresolvedPending.map((v) => (
+              <div key={v.id}>
+                <p>{v.text}</p>
+                <small>
+                  {v.state === 'rejected'
+                    ? '此次消息未提交'
+                    : v.state === 'accepted'
+                      ? '主机已接收，等待记录更新'
+                      : '送达结果待核对，不会自动重发'}
+                </small>
+                {v.state === 'rejected' && (
+                  <button
+                    className="text-link"
+                    onClick={() => {
+                      setInput((old) => v.text + (old ? '\n\n' + old : ''));
+                      saveAttachments(
+                        [
+                          ...new Map(
+                            [...attachmentsRef.current, ...(v.files || [])].map((f) => [f.id, f]),
+                          ).values(),
+                        ].slice(0, 8),
+                      );
+                      savePending(pendingRef.current.filter((p) => p.id !== v.id));
+                    }}
+                  >
+                    恢复到草稿
+                  </button>
+                )}
+              </div>
+            ))}
+          </details>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <input
+          ref={attachmentInput}
+          type="file"
+          multiple
+          hidden
+          aria-label="选择DSH附件"
+          onChange={(e) => {
+            const files = [...(e.target.files || [])];
+            e.target.value = '';
+            void upload(files);
+          }}
+        />
+        {uploading && (
+          <p role="status" className="field-help">
+            正在上传附件…
+          </p>
+        )}
+        <AssistantComposer
+          area={area}
+          history={scroll}
+          value={input}
+          onValue={setInput}
+          send={send}
+          upload={upload}
+          attributes={{
+            'aria-label': '发送给DSH的消息',
+            placeholder: '发送消息… 执行中也可继续补充',
+          }}
+          header={
+            <ChatFiles
+              files={attachments}
+              settings={settings}
+              conversation={c.id}
+              remove={(id) => {
+                if (uploadLock.current || lock.current) return;
+                void api(
+                  settings,
+                  remoteBase + `/conversations/${c.id}/files/${id}`,
+                  undefined,
+                  'DELETE',
+                )
+                  .then(() => {
+                    if (alive.current)
+                      saveAttachments(attachmentsRef.current.filter((f) => f.id !== id));
+                  })
+                  .catch((e) => setError(e.message));
+              }}
             />
           }
-          changeThinking={() => {}}
-          insertVoice={(v) => setInput((old) => old + v)}
-          terminal={() => setTerminalOpen(true)}
-          terminalDisabled={!control.controls?.terminal || c.connection !== 'connected'}
-          terminalDisabledReason="主机未提供终端，请在DSH主机的Remote设置中开启远程终端并刷新。"
-          attach={() => attachmentInput.current?.click()}
-          attachmentDisabled={
-            busy || uploading || !c.appTools.available || c.connection !== 'connected'
-          }
-          attachmentDisabledReason={
-            !c.appTools.available ? '此服务器尚未提供DSH附件入口。' : undefined
-          }
-          attachmentTitle="单文件50 MiB；传输原件至DSH主机最多20 MiB，较大文档可分页读取"
-          commands={() => setSkillsOpen(true)}
-          commandsAria="打开DSH技能"
-          working={c.runState.busy}
-          hasContent={!!input.trim() || !!attachments.length}
-          stop={() => void stop()}
-          sendDisabled={
-            busy ||
-            uploading ||
-            (!input.trim() && !attachments.length) ||
-            c.connection !== 'connected'
-          }
-          sendDisabledReason={c.connection !== 'connected' ? '请等待主机重新连接。' : undefined}
-          sendLabel={c.runState.busy ? (messageMode === 'steer' ? '补充' : '排队') : '发送'}
-          sendAria="发送给DSH"
-        />
-      </AssistantComposer>
-      {skillsOpen && (
-        <DshSkills
-          skills={control.controls?.skills ?? null}
-          refresh={() => void control.reload()}
-          loading={control.loading}
-          close={() => setSkillsOpen(false)}
-          choose={(name) => {
-            setInput((old) => '/' + name + (old ? ' ' + old : ' '));
-            setSkillsOpen(false);
-            area.current?.focus();
-          }}
-        />
-      )}
-      {extensionsOpen && (
-        <DshExtensions
-          settings={settings}
-          owner={owner}
-          id={c.id}
-          close={() => setExtensionsOpen(false)}
-          updated={() => void control.reload()}
-        />
-      )}
-      {terminalOpen && (
-        <div
-          className="assistant-modal-backdrop dsh-workbench-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setTerminalOpen(false);
-          }}
         >
-          <section
-            className="assistant-modal dsh-terminal-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="DSH工作区终端"
-          >
-            <Suspense fallback={<p>正在打开终端…</p>}>
-              <Terminal
-                settings={settings}
-                conversation={c.id}
-                close={() => setTerminalOpen(false)}
+          <AssistantComposerActions
+            scope={c.id}
+            thinkingLevel="off"
+            thinkingControl={
+              <ThinkingControl
+                value={effort}
+                options={(nativeReasoning?.efforts || []).map((e) => ({
+                  value: e.id,
+                  label:
+                    (
+                      { off: '关闭', low: '轻量', high: '深入', max: '充分' } as Record<
+                        string,
+                        string
+                      >
+                    )[e.id] || e.name,
+                  description: e.description,
+                }))}
+                disabled={
+                  control.loading ||
+                  !nativeReasoning?.efforts.length ||
+                  c.connection !== 'connected'
+                }
+                disabledReason={
+                  control.loading
+                    ? '正在核对主机设置…'
+                    : !nativeReasoning?.efforts.length
+                      ? control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。'
+                      : c.connection !== 'connected'
+                        ? '请恢复主机连接。'
+                        : undefined
+                }
+                onUnavailable={() =>
+                  setError(control.error || '主机未提供可用思考档位；请在设置中刷新主机状态。')
+                }
+                onChange={(v) => void control.select('thinking', v)}
               />
-            </Suspense>
-          </section>
-        </div>
-      )}
-    </div>
+            }
+            changeThinking={() => {}}
+            insertVoice={(v) => setInput((old) => old + v)}
+            terminal={() => setTerminalOpen(true)}
+            terminalDisabled={!control.controls?.terminal || c.connection !== 'connected'}
+            terminalDisabledReason="主机未提供终端，请在DSH主机的Remote设置中开启远程终端并刷新。"
+            attach={() => attachmentInput.current?.click()}
+            attachmentDisabled={
+              busy || uploading || !c.appTools.available || c.connection !== 'connected'
+            }
+            attachmentDisabledReason={
+              !c.appTools.available ? '此服务器尚未提供DSH附件入口。' : undefined
+            }
+            attachmentTitle="单文件50 MiB；传输原件至DSH主机最多20 MiB，较大文档可分页读取"
+            commands={() => setSkillsOpen(true)}
+            commandsAria="打开DSH技能"
+            working={c.runState.busy}
+            hasContent={!!input.trim() || !!attachments.length}
+            stop={() => void stop()}
+            sendDisabled={
+              busy ||
+              uploading ||
+              (!input.trim() && !attachments.length) ||
+              c.connection !== 'connected'
+            }
+            sendDisabledReason={c.connection !== 'connected' ? '请等待主机重新连接。' : undefined}
+            sendLabel={c.runState.busy ? (messageMode === 'steer' ? '补充' : '排队') : '发送'}
+            sendAria="发送给DSH"
+          />
+        </AssistantComposer>
+        {skillsOpen && (
+          <DshSkills
+            skills={control.controls?.skills ?? null}
+            refresh={() => void control.reload()}
+            loading={control.loading}
+            close={() => setSkillsOpen(false)}
+            choose={(name) => {
+              setInput((old) => '/' + name + (old ? ' ' + old : ' '));
+              setSkillsOpen(false);
+              area.current?.focus();
+            }}
+          />
+        )}
+        {extensionsOpen && (
+          <DshExtensions
+            settings={settings}
+            owner={owner}
+            id={c.id}
+            close={() => setExtensionsOpen(false)}
+            updated={() => void control.reload()}
+          />
+        )}
+        {terminalOpen && (
+          <div
+            className="assistant-modal-backdrop dsh-workbench-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setTerminalOpen(false);
+            }}
+          >
+            <section
+              className="assistant-modal dsh-terminal-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="DSH工作区终端"
+            >
+              <Suspense fallback={<p>正在打开终端…</p>}>
+                <Terminal
+                  settings={settings}
+                  conversation={c.id}
+                  close={() => setTerminalOpen(false)}
+                />
+              </Suspense>
+            </section>
+          </div>
+        )}
+        <FileWorkbenchPanel browserProject={null} onCloseBrowser={() => {}} />
+      </div>
+    </FileWorkbenchProvider>
   );
 }
 

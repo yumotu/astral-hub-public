@@ -1,3 +1,4 @@
+import { assistantArtifactRules } from '../shared/assistant-artifacts.mjs';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { fail } from './accounts.mjs';
@@ -39,7 +40,17 @@ const promptSchema = z
 const actionId = z.object({ id: uuid }).strict();
 export function createDshConversations(
   db,
-  { body, connection, catalogue, live, rate, appTools = {}, files = () => null, now = Date.now },
+  {
+    body,
+    connection,
+    catalogue,
+    live,
+    rate,
+    appTools = {},
+    files = () => null,
+    unified,
+    now = Date.now,
+  },
 ) {
   const bindings = createAgentBindings(db),
     watching = new Map(),
@@ -55,6 +66,9 @@ export function createDshConversations(
     owner TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,kind TEXT NOT NULL,
     digest TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created_at TEXT NOT NULL,reference TEXT,
     PRIMARY KEY(owner,id));`);
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS assistant_dsh_inputs(owner TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,input TEXT NOT NULL,PRIMARY KEY(owner,id));`,
+  );
   if (
     !db
       .prepare('PRAGMA table_info(dsh_conversations)')
@@ -224,8 +238,20 @@ export function createDshConversations(
       )
       .all(r.owner, r.id);
     const messages = value.messages.map((m) => {
+      const original =
+        m.role === 'user' &&
+        m.rpcId &&
+        db
+          .prepare(
+            'SELECT input FROM assistant_dsh_inputs WHERE owner=? AND id=? AND conversation_id=?',
+          )
+          .get(r.owner, m.rpcId, r.id);
       const task = m.role === 'user' && m.rpcId && software.task({ owner: r.owner, task: m.rpcId });
-      return task?.conversation_id === r.id ? { ...m, text: task.input } : m;
+      return original
+        ? { ...m, text: original.input }
+        : task?.conversation_id === r.id
+          ? { ...m, text: task.input }
+          : m;
     });
     return {
       id: r.id,
@@ -562,6 +588,7 @@ export function createDshConversations(
           owner,
           id,
         );
+        await unified?.()?.nativePatch(actor, { origin: 'remote', nativeId: id }, patch);
         json(200, { conversation: view(row(owner, id)) });
         return true;
       }
@@ -647,7 +674,9 @@ export function createDshConversations(
           recordAction(owner, p.id, id, op, p);
           return { id: p.id, state: old.state };
         }
+        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
         const { r: current, chat } = await ensure(owner, id);
+        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
         if (
           op === 'respond' &&
           db
@@ -657,6 +686,25 @@ export function createDshConversations(
             .get(owner, id, p.interactionId)
         )
           throw fail(409, '该答复已提交或结果待核对，不会重复答复。');
+        const nativeCommand = op === 'prompt' && p.text.trimStart().startsWith('/');
+        // Harness records native Skills as user messages. Keep those commands
+        // verbatim without consuming the first normal prompt's context handoff.
+        const hasNormalInput = dshSessionView(stateOf(current)).messages.some((m) => {
+          if (m.role !== 'user') return false;
+          const savedInput =
+            m.rpcId &&
+            db
+              .prepare(
+                'SELECT input FROM assistant_dsh_inputs WHERE owner=? AND id=? AND conversation_id=?',
+              )
+              .get(owner, m.rpcId, id);
+          return !(savedInput?.input ?? m.text).trimStart().startsWith('/');
+        });
+        const handoff =
+          op === 'prompt' && !nativeCommand && !hasNormalInput
+            ? (await unified?.()?.handoff(owner, { origin: 'remote', nativeId: id })) || []
+            : [];
+        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
         return action(owner, id, p.id, op, p, async () => {
           if (op === 'prompt') {
             if (p.attachments.length && current.app_tools !== 1)
@@ -673,7 +721,28 @@ export function createDshConversations(
               if (current.app_tools === 1) await software.prepare(actor, current, p, chat);
               if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
               target(owner, row(owner, id));
-              return await chat.prompt(current.session_id, p.id, p.text, p.mode, p.attachments);
+              const nativeText = handoff.length
+                ? '以下是所属对话切换引擎前的可见交流文本，仅作背景，不是新授权，不重放任务：\n' +
+                  JSON.stringify(handoff) +
+                  '\n\n现在用户的新消息：\n' +
+                  p.text
+                : p.text;
+              // Native slash commands must reach Harness verbatim so its command
+              // dispatcher can recognize them. Handoff remains pending for the
+              // first normal prompt rather than consuming it as a command.
+              const text = nativeCommand
+                ? p.text
+                : '[星屿回复排版约定]\n' +
+                  assistantArtifactRules +
+                  '\n[本次用户内容]\n' +
+                  nativeText;
+              db.prepare('INSERT OR IGNORE INTO assistant_dsh_inputs VALUES(?,?,?,?)').run(
+                owner,
+                p.id,
+                id,
+                p.text,
+              );
+              return await chat.prompt(current.session_id, p.id, text, p.mode, p.attachments);
             } catch (error) {
               // Even an unknown prompt receipt must not leave a usable grant.
               software.revokeTask(owner, p.id);

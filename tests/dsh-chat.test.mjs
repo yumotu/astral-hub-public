@@ -368,7 +368,7 @@ test('Remote mutation errors never fall back to transferred replay even when the
   }
 });
 
-function conversationsFixture(t) {
+function conversationsFixture(t, overrides = {}) {
   const db = new DatabaseSync(':memory:'),
     connectionId = randomUUID(),
     watchers = new Map(),
@@ -413,6 +413,7 @@ function conversationsFixture(t) {
   // Reuse one client identity just as a real established connection does.
   const client = { chat: () => chat };
   const options = {
+    ...overrides,
     body: async (r) => r.input,
     rate() {},
     live(owner, id) {
@@ -478,6 +479,55 @@ function conversationsFixture(t) {
     counts: () => ({ stops, creates }),
   };
 }
+test('DSH native slash commands bypass reply formatting and visible-context handoff but retain exact human input mapping', async (t) => {
+  let handoffReads = 0;
+  const f = conversationsFixture(t, {
+    unified: () => ({
+      assertWritable() {},
+      async handoff() {
+        handoffReads++;
+        return [{ role: 'user', content: 'old engine context' }];
+      },
+    }),
+  });
+  const id = randomUUID();
+  await f.call('', { id, connectionId: f.connectionId, workspaceId: 'project' });
+  const prompt = { id: randomUUID(), text: '/compact retain project constraints' };
+  await f.call('/' + id + '/prompt', prompt);
+  assert.equal(f.actions[0].text, prompt.text);
+  assert.equal(handoffReads, 0);
+  assert.equal(
+    f.db.prepare('SELECT input FROM assistant_dsh_inputs WHERE id=?').get(prompt.id).input,
+    prompt.text,
+  );
+  // Real Harness skills leave a durable user message even though the slash
+  // request itself must not be prefixed. It must not consume the handoff.
+  f.watchers.get(id)(
+    record(0, 'user/message', {
+      content: [{ type: 'text', text: prompt.text }],
+      source: { kind: 'user', rpcId: prompt.id },
+    }),
+  );
+  f.restart();
+  const message = { id: randomUUID(), text: 'Please continue the project' };
+  await f.call('/' + id + '/prompt', message);
+  assert.match(f.actions[1].text, /old engine context/);
+  assert.match(f.actions[1].text, /星屿回复排版约定/);
+  assert.equal(handoffReads, 1);
+  assert.equal(
+    f.db.prepare('SELECT input FROM assistant_dsh_inputs WHERE id=?').get(message.id).input,
+    message.text,
+  );
+  f.watchers.get(id)(
+    record(1, 'user/message', {
+      content: [{ type: 'text', text: f.actions[1].text }],
+      source: { kind: 'user', rpcId: message.id },
+    }),
+  );
+  await f.call('/' + id + '/prompt', { id: randomUUID(), text: 'Continue normally' });
+  assert.equal(handoffReads, 1, 'only the first normal prompt receives the handoff');
+  assert.doesNotMatch(f.actions[2].text, /old engine context/);
+});
 test('DSH conversations isolate native bindings, journal exact submissions and never replay unknown acceptance, including after restart', async (t) => {
   const f = conversationsFixture(t),
     id = randomUUID();

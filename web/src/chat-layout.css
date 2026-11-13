@@ -60,3 +60,59 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
+
+/* Agent replies are ordinary page content, not social-chat bubbles. Keep this
+   scoped so contacts/mail/learning previews retain their own surfaces. */
+.assistant-workspace .message.assistant .pi-markdown,
+.temporary-messages .pi-markdown {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+}
+.assistant-reply {
+  min-width: 0;
+  max-width: 100%;
+}
+.assistant-artifact {
+  min-width: 0;
+  margin: 16px 0;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-deep);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.assistant-artifact-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+.assistant-artifact-heading > strong {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.assistant-artifact-heading > svg,
+.assistant-artifact-heading > button {
+  flex-shrink: 0;
+}
+.assistant-artifact .pi-markdown {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+@media (max-width: 700px) {
+  .assistant-artifact {
+    padding: 12px 14px;
+  }
+}

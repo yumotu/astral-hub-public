@@ -1,0 +1,96 @@
+.conversation-engine-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+.conversation-engine-setting > span {
+  flex: 1;
+  font-size: 12px;
+}
+.conversation-engine-setting > small {
+  width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+.conversation-targets {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.conversation-targets > button {
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conversation-targets small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.unified-location-group {
+  min-width: 0;
+}
+.unified-location-group > .assistant-device-label > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.unified-location-group .project-tree > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.unified-location-group .project-tree > summary > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.unified-location-group .project-tree > summary > small {
+  flex-shrink: 0;
+}
+.unified-engine-error {
+  flex-shrink: 0;
+  margin: 6px 14px;
+  color: var(--danger);
+  font-size: 12px;
+}
+.conversation-segment-history {
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 24px;
+  padding-bottom: 20px;
+}
+.conversation-segment-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 12px 0;
+}
+
+.unified-native-imports {
+  margin: 8px 0 12px 20px;
+  min-width: 0;
+}
+.unified-native-imports > summary {
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 8px 0;
+}
+.unified-native-imports .contact-choice {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+.unified-native-imports .contact-choice > span {
+  min-width: 0;
+}
+.unified-native-imports .contact-choice b {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.unified-native-imports .contact-choice small {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+}

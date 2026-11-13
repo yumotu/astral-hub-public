@@ -406,3 +406,35 @@
   --code-function: #9bbcff;
   --code-type: #7dd3fc;
 }
+.temporary-lifetime {
+  margin: 0 12px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.temporary-lifetime summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.temporary-lifetime > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.temporary-lifetime button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.temporary-lifetime button[aria-pressed='true'] {
+  background: var(--surface-active);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.temporary-lifetime p {
+  margin: 7px 0;
+  line-height: 1.5;
+}

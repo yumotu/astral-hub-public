@@ -102,7 +102,17 @@ import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
 import { insertPastedText } from './composer-paste';
 import { useBackLayer } from './back-navigation';
 import { DshRemoteWorkspace, RemoteConnectionManager } from './DshRemote';
-const MarkdownView = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
+import {
+  UnifiedConversationsProvider,
+  useUnifiedConversations,
+  UnifiedConversationNavigation,
+  ConversationEngineSettings,
+  ConversationTargetDialog,
+  ConversationSegmentHistory,
+} from './UnifiedConversations';
+const MarkdownView = lazy(() =>
+  import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })),
+);
 function PiMarkdown({ text }: { text: string }) {
   return (
     <Suspense fallback={<pre>{text}</pre>}>
@@ -128,27 +138,34 @@ type Status = {
     diagnostic?: import('./types').PiRuntimeDiagnostic;
   };
 };
-export function PiPage(props: {
+type PiPageProps = {
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
   shellActions: ReactNode;
   openNavigation: () => void;
-}) {
+};
+export function PiPage(props: PiPageProps) {
+  if (!props.session) return <PiWorkspace {...props} />;
+  return (
+    <UnifiedConversationsProvider
+      key={`${props.settings.url}:${props.session.user.id}`}
+      settings={props.settings}
+      owner={props.session.user.id}
+    >
+      <PiWorkspace {...props} />
+    </UnifiedConversationsProvider>
+  );
+}
+function PiWorkspace(props: PiPageProps) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  const driverKey = `astral.agent.last:${props.settings.url}:${props.session?.user.id || 'guest'}`;
-  const [driver, setDriver] = useState<'pi' | 'dsh'>(() => {
-    try {
-      return readAssistantSelection(localStorage, sessionStorage, driverKey, 'driver') === 'dsh'
-        ? 'dsh'
-        : 'pi';
-    } catch {
-      return 'pi';
-    }
-  });
-  useEffect(() => {
-    saveAssistantSelection(localStorage, driverKey, 'driver', driver);
-  }, [driverKey, driver]);
+  const [navigationControls, setNavigationControls] = useState<{
+    newProject: () => void;
+    defaultDirectory: ReactNode;
+  } | null>(null);
+  const unified = useUnifiedConversations();
+  const driver = unified?.selected?.origin === 'remote' ? 'dsh' : 'pi';
+  const defaultDriver = unified?.defaultBackend || 'pi';
   const [dshAvailable, setDshAvailable] = useState(false);
   const { setConversationsAvailable } = useMobilePanels();
   useEffect(() => {
@@ -195,33 +212,33 @@ export function PiPage(props: {
       >
         <summary aria-label="助手选项" title="助手选项">
           <Bot size={16} />
-          <span>{driver === 'dsh' ? 'DSH' : 'Pi'}</span>
+          <span>{defaultDriver === 'dsh' ? 'DPH' : 'Pi'}</span>
           <ChevronDown size={12} />
         </summary>
         <div className="assistant-options-menu">
-          <span className="assistant-options-label">执行引擎</span>
+          <span className="assistant-options-label">新对话默认引擎</span>
           <button
             className="assistant-engine-current"
             onClick={() => {
-              setDriver('pi');
+              void unified?.setDefault('pi').catch(() => {});
               if (options.current) options.current.open = false;
             }}
           >
             <Bot size={15} />
-            Pi<span>{driver === 'pi' ? '正在使用' : '已有对话保留'}</span>
+            Pi<span>{defaultDriver === 'pi' ? '默认' : '仅影响新对话'}</span>
           </button>
           {dshAvailable ? (
             <button
               onClick={() => {
-                setDriver('dsh');
+                void unified?.setDefault('dsh').catch(() => {});
                 if (options.current) options.current.open = false;
               }}
             >
-              DeepSeek Harness<span>{driver === 'dsh' ? '正在使用' : 'DSH Remote'}</span>
+              DeepSeek Harness<span>{defaultDriver === 'dsh' ? '默认' : '仅影响新对话'}</span>
             </button>
           ) : (
             <span className="assistant-engine-pending">
-              DeepSeek 原生后端<span>接入中</span>
+              DeepSeek Harness<span>当前不可用</span>
             </span>
           )}
           {props.session && (
@@ -267,6 +284,11 @@ export function PiPage(props: {
         </header>
       )}
       <>
+        {unified?.error && (
+          <p className="error unified-engine-error" role="alert">
+            {unified.error}
+          </p>
+        )}
         {driver === 'dsh' && props.session ? (
           <DshRemoteWorkspace
             key={`dsh:${props.settings.url}:${props.session.user.id}`}
@@ -275,6 +297,7 @@ export function PiPage(props: {
             actions={workspaceActions}
             openNavigation={props.openNavigation}
             manage={() => setConnectionsOpen(true)}
+            navigationControls={navigationControls || undefined}
           />
         ) : null}
         <div
@@ -287,6 +310,7 @@ export function PiPage(props: {
             workspaceActions={driver === 'pi' ? workspaceActions : null}
             openComputerConnections={() => setConnectionsOpen(true)}
             connectionsOpen={connectionsOpen}
+            navigationControls={setNavigationControls}
             {...props}
           />
         </div>
@@ -342,16 +366,20 @@ function ServerPiPage({
   openNavigation,
   openComputerConnections,
   connectionsOpen,
+  navigationControls,
 }: {
   workspaceActions: ReactNode;
   openNavigation: () => void;
   openComputerConnections: () => void;
   connectionsOpen: boolean;
+  navigationControls: (controls: { newProject: () => void; defaultDirectory: ReactNode }) => void;
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
   driver: 'pi' | 'dsh';
 }) {
+  const unified = useUnifiedConversations();
+  const [unifiedNew, setUnifiedNew] = useState(false);
   const viewKey = `astral.pi.last:${settings.url}:${session?.user.id || 'guest'}`;
   const operationKey = (id: string) =>
     operationPreferenceKey(serverIdentity(settings), session?.user.id || 'guest', 'server', id);
@@ -383,7 +411,12 @@ function ServerPiPage({
   const titleChanged = (id: string, title: string) =>
     setComputerTitle((old) => (old?.id === id && old.title === title ? old : { id, title }));
   const remoteTitle =
-    computerTarget && computerTitle?.id === computerTarget.conversationId
+    unified?.conversations.find((c) =>
+      c.segments.some(
+        (s) => s.origin === 'computer' && s.nativeId === computerTarget?.conversationId,
+      ),
+    )?.title ||
+    (computerTarget && computerTitle?.id === computerTarget.conversationId
       ? computerTitle.title
       : computerTarget
         ? peekAPI<{ conversations: { id: string; title: string }[] }>(
@@ -394,7 +427,7 @@ function ServerPiPage({
               computerTarget.projectId +
               '&archived=include',
           )?.conversations.find((c) => c.id === computerTarget.conversationId)?.title || '新对话'
-        : '';
+        : '');
   useEffect(() => {
     saveAssistantSelection(localStorage, computerKey, 'computer', computerTarget);
     try {
@@ -402,14 +435,19 @@ function ServerPiPage({
     } catch {}
   }, [computerTarget, computerKey]);
   useEffect(() => {
-    if (!computerTarget || !computers.ready || computers.error) return;
+    if (unified || !computerTarget || !computers.ready || computers.error) return;
     // An offline device keeps its project/history. Only a successful catalogue
     // proving removal or revoked access returns to the server view.
     if (!computerGroup || (!computerGroup.error && !computerProject)) setComputerTarget(null);
   }, [computers.ready, computers.error, computerGroup, computerProject, computerTarget]);
   useEffect(() => {
     const target = restoredComputer.current;
-    if (!target || !computerProject || computerTarget?.conversationId !== target.conversationId)
+    if (
+      unified ||
+      !target ||
+      !computerProject ||
+      computerTarget?.conversationId !== target.conversationId
+    )
       return;
     restoredComputer.current = null;
     let active = true;
@@ -436,6 +474,17 @@ function ServerPiPage({
     if (!connectionsOpen) computers.refresh();
   }, [connectionsOpen, computers.refresh]);
   function selectComputer(target: ComputerTarget) {
+    const managed = unified?.conversations.find((c) =>
+      c.segments.some((s) => s.origin === 'computer' && s.nativeId === target.conversationId),
+    );
+    if (
+      managed &&
+      (managed.active.origin !== 'computer' || managed.active.nativeId !== target.conversationId)
+    ) {
+      unified!.select(managed.active);
+      setMobilePanel(null);
+      return;
+    }
     if (!computerTarget) {
       drafts.current.set(conversation, { input, staged, pending: pending.current, access });
       if (input.trim() || staged.length)
@@ -451,11 +500,16 @@ function ServerPiPage({
         ]);
     }
     setComputerTarget(target);
+    unified?.select({ origin: 'computer', nativeId: target.conversationId });
     setMobilePanel(null);
     setConversationMenu(null);
     setError('');
   }
   function newCurrentConversation() {
+    if (unified) {
+      setUnifiedNew(true);
+      return;
+    }
     if (computerTarget) selectComputer({ ...computerTarget, conversationId: crypto.randomUUID() });
     else void fresh();
   }
@@ -546,6 +600,29 @@ function ServerPiPage({
     return () => window.removeEventListener('keydown', close);
   }, [navigationOpen]);
   const [newProject, setNewProject] = useState(false);
+  useEffect(() => {
+    navigationControls({
+      newProject: () => {
+        setMobilePanel(null);
+        setProjectPurpose('project');
+        setNewProject(true);
+      },
+      defaultDirectory: (
+        <button
+          className="pi-sidebar-control pi-default-directory"
+          disabled={!preferencesReady}
+          onClick={() => setDirectorySettings(true)}
+        >
+          <FolderOpen size={15} />
+          <span>
+            <small>默认工作目录</small>
+            <b>{projects.find((p) => p.id === defaultProjectId)?.name || '独立会话'}</b>
+          </span>
+          <ChevronDown size={13} />
+        </button>
+      ),
+    });
+  }, [navigationControls, projects, defaultProjectId, preferencesReady, setMobilePanel]);
   const [staged, setStaged] = useState<ChatFile[]>([]),
     [uploadError, setUploadError] = useState(''),
     [uploadLabel, setUploadLabel] = useState(''),
@@ -809,7 +886,21 @@ function ServerPiPage({
   useEffect(() => {
     if (project?.readOnly) setAccess('read');
   }, [project?.readOnly]);
-  const currentMetadata = allConversations.find((c) => c.id === conversation);
+  const nativeMetadata = allConversations.find((c) => c.id === conversation);
+  const displayMetadata = unified?.conversations.find((c) =>
+    c.segments.some((s) => s.origin === 'server' && s.nativeId === conversation),
+  );
+  const currentMetadata = displayMetadata
+    ? {
+        ...nativeMetadata,
+        id: conversation,
+        title: displayMetadata.title,
+        pinnedAt: displayMetadata.pinnedAt,
+        archivedAt: displayMetadata.archivedAt,
+        projectId: nativeMetadata?.projectId || displayMetadata.active.runtime.projectId,
+        updatedAt: displayMetadata.updatedAt,
+      }
+    : nativeMetadata;
   const conversationTitle = currentMetadata?.title || '新对话';
   useEffect(() => {
     alive.current = true;
@@ -1107,6 +1198,14 @@ function ServerPiPage({
     nextAccess: 'read' | 'edit' = 'read',
     discardCurrent = false,
   ) {
+    const managed = unified?.conversations.find((c) =>
+      c.segments.some((s) => s.origin === 'server' && s.nativeId === id),
+    );
+    if (managed && (managed.active.origin !== 'server' || managed.active.nativeId !== id)) {
+      unified!.select(managed.active);
+      setNavigationOpen(false);
+      return;
+    }
     setComputerTarget(null);
     if (discardCurrent) drafts.current.delete(conversation);
     else drafts.current.set(conversation, { input, staged, pending: pending.current, access });
@@ -1138,11 +1237,49 @@ function ServerPiPage({
       setLoadingHistory(!cached);
     }
     setConversation(id);
+    unified?.select({ origin: 'server', nativeId: id });
     setEmptyConversation(false);
     setNavigationOpen(false);
     setError('');
   }
+  const unifiedSelection = unified?.selected;
+  const unifiedRecord = unified?.conversations.find((c) =>
+    c.segments.some(
+      (s) => s.origin === unifiedSelection?.origin && s.nativeId === unifiedSelection.nativeId,
+    ),
+  );
+  const selectedRuntime = unifiedRecord?.active.runtime;
+  useEffect(() => {
+    if (!unifiedSelection || unifiedSelection.origin === 'remote') return;
+    const ref = unifiedRecord?.active;
+    if (unifiedSelection.origin === 'computer') {
+      if (!ref || !ref.runtime.deviceId || !ref.runtime.projectId) return;
+      if (computerTarget?.conversationId !== ref.nativeId)
+        selectComputer({
+          deviceId: ref.runtime.deviceId,
+          projectId: ref.runtime.projectId,
+          conversationId: ref.nativeId,
+        });
+    } else if (computerTarget || conversation !== unifiedSelection.nativeId) {
+      const meta = savedConversations.find((c) => c.id === unifiedSelection.nativeId);
+      switchConversation(
+        unifiedSelection.nativeId,
+        ref?.runtime.projectId || meta?.projectId || '',
+        meta?.access || 'read',
+      );
+    }
+  }, [
+    unifiedSelection?.origin,
+    unifiedSelection?.nativeId,
+    selectedRuntime?.projectId,
+    selectedRuntime?.deviceId,
+    unifiedRecord?.active.nativeId,
+  ]);
   async function fresh(nextProject?: string, discardCurrent = false) {
+    if (unified) {
+      setUnifiedNew(true);
+      return;
+    }
     await task(async () => {
       let directory = defaultProjectId || '';
       if (nextProject !== undefined) directory = nextProject;
@@ -1166,6 +1303,13 @@ function ServerPiPage({
     c: Conversation,
     patch: { title?: string; pinned?: boolean; archived?: boolean },
   ) {
+    const managed = unified?.conversations.find((v) =>
+      v.segments.some((s) => s.origin === 'server' && s.nativeId === c.id),
+    );
+    if (managed) {
+      await unified!.patch(managed, patch);
+      return;
+    }
     if (!savedConversations.some((saved) => saved.id === c.id))
       await api(settings, '/pi/conversations', {
         id: c.id,
@@ -1408,10 +1552,21 @@ function ServerPiPage({
       settings={settings}
       tasks={tasks}
       conversation={conversation}
+      source={{ origin: 'server', id: conversation }}
       projects={projects}
       projectId={projectId}
       suspended={!!computerTarget || driver !== 'pi'}
     >
+      {unifiedNew && (
+        <ConversationTargetDialog
+          title="新对话"
+          close={() => setUnifiedNew(false)}
+          submit={async (target) => {
+            await unified!.create(target);
+            setUnifiedNew(false);
+          }}
+        />
+      )}
       {error && (
         <div className="error" role="alert">
           {error}
@@ -1434,7 +1589,11 @@ function ServerPiPage({
             const c = conversationEditor.conversation;
             if (conversationEditor.kind === 'rename') await updateConversation(c, { title });
             else {
-              await api(settings, `/pi/conversations/${c.id}`, undefined, 'DELETE');
+              const managed = unified?.conversations.find((v) =>
+                v.segments.some((s) => s.origin === 'server' && s.nativeId === c.id),
+              );
+              if (managed) await unified!.remove(managed);
+              else await api(settings, `/pi/conversations/${c.id}`, undefined, 'DELETE');
               setDeletedConversations((old) => [...old, c.id]);
               setConversations((old) => old.filter((item) => item.id !== c.id));
               setDraftConversations((old) => old.filter((item) => item.id !== c.id));
@@ -1571,7 +1730,7 @@ function ServerPiPage({
         <button
           className="icon-btn mobile-project-navigation"
           aria-label={navigationOpen ? '收起项目与对话' : '打开项目与对话'}
-          aria-controls="pi-project-navigation"
+          aria-controls={unified ? 'unified-project-navigation' : 'pi-project-navigation'}
           aria-expanded={navigationOpen}
           onClick={() => setNavigationOpen(!navigationOpen)}
         >
@@ -1581,136 +1740,19 @@ function ServerPiPage({
       <div
         className={`chat-layout pi-layout assistant-layout ${appearance === 'dark' ? 'pi-terminal' : ''} ${computerTarget ? 'has-computer' : ''}`}
       >
-        <button
-          className={`project-navigation-scrim ${navigationOpen ? 'is-open' : ''}`}
-          tabIndex={navigationOpen ? 0 : -1}
-          aria-hidden={!navigationOpen}
-          aria-label="关闭项目与对话"
-          onClick={() => setNavigationOpen(false)}
-        />
-        <aside
-          id="pi-project-navigation"
-          aria-label="项目与对话"
-          className={`surface contact-list project-conversation-list ${navigationOpen ? 'is-open' : ''}`}
-        >
-          <div className="project-navigation-heading">
-            <strong>项目与对话</strong>
-            <button
-              className="icon-btn"
-              aria-label="收起项目与对话"
-              onClick={() => setNavigationOpen(false)}
-            >
-              <X size={19} />
-            </button>
-          </div>
-          <button
-            className="secondary new-conversation"
-            disabled={uploading || manualCompacting}
-            onClick={newCurrentConversation}
-          >
-            <Plus size={17} />
-            新对话
-          </button>
-          {showArchived && (
-            <div className="pi-archive-heading">
-              <button
-                className="icon-btn"
-                aria-label="返回对话列表"
-                onClick={() => setShowArchived(false)}
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <h2>已归档</h2>
-              <small>{archivedConversations.length}</small>
-            </div>
-          )}
-          {!showArchived && (
-            <>
-              <div className="project-tree-heading">
-                <h2>服务器项目</h2>
-                <button
-                  className="icon-btn"
-                  aria-label="新建项目"
-                  disabled={uploading || !projects.length}
-                  onClick={() => {
-                    setNavigationOpen(false);
-                    setProjectPurpose('project');
-                    setNewProject(true);
-                  }}
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
-              {projects
-                .filter((p) => !p.source || conversations.some((c) => c.projectId === p.id))
-                .map((p) => (
-                  <details
-                    className="project-tree"
-                    key={p.id}
-                    open={(!computerTarget && projectId === p.id) || undefined}
-                  >
-                    <ProjectSummary
-                      name={p.name}
-                      detail={conversations.filter((c) => c.projectId === p.id).length}
-                      newConversation={() => void fresh(p.id)}
-                      saveName={async (name) => {
-                        await api(
-                          settings,
-                          '/pi/projects/' + p.id + '/display-name',
-                          { name },
-                          'PUT',
-                        );
-                        await refreshProjects();
-                      }}
-                    />
-                    <ProjectConversationList>
-                      {conversations.filter((c) => c.projectId === p.id).map(conversationRow)}
-                    </ProjectConversationList>
-                  </details>
-                ))}
-              {!projects.some((p) => !p.source) && (
-                <p className="field-help">新建项目并选择文件夹，对话会归在项目下。</p>
-              )}
-            </>
-          )}
-          <AssistantComputerProjects
-            titleChanged={titleChanged}
-            settings={settings}
-            owner={session.user.id}
-            groups={computers.groups}
-            selected={computerTarget}
-            choose={selectComputer}
-            connect={openComputerConnections}
-            refresh={computers.refresh}
-            error={computers.error}
-            showArchived={showArchived}
-          />
-          {!showArchived && <h2>对话</h2>}
-          {(showArchived ? archivedConversations : conversations.filter((c) => !c.projectId)).map(
-            conversationRow,
-          )}
-          {!(showArchived ? archivedConversations : conversations).length && (
-            <p className="field-help">
-              {showArchived
-                ? '还没有归档的对话。归档会保留历史与上下文。'
-                : '你的第一段对话从这里开始。'}
-            </p>
-          )}
-          <div className="pi-navigation-footer">
-            <button
-              className={`pi-sidebar-control ${showArchived ? 'is-active' : ''}`}
-              onClick={() => setShowArchived(!showArchived)}
-            >
-              <Archive size={15} />
-              <span>{showArchived ? '返回对话' : '已归档'}</span>
-              <small>{archivedConversations.length || ''}</small>
-            </button>
-            {session && (
+        {driver !== 'pi' ? null : unified ? (
+          <UnifiedConversationNavigation
+            manage={openComputerConnections}
+            newProject={() => {
+              setNavigationOpen(false);
+              setProjectPurpose('project');
+              setNewProject(true);
+            }}
+            defaultDirectory={
               <button
                 className="pi-sidebar-control pi-default-directory"
                 disabled={!preferencesReady}
                 onClick={() => setDirectorySettings(true)}
-                title={projects.find((p) => p.id === defaultProjectId)?.serverPath}
               >
                 <FolderOpen size={15} />
                 <span>
@@ -1719,9 +1761,154 @@ function ServerPiPage({
                 </span>
                 <ChevronDown size={13} />
               </button>
-            )}
-          </div>
-        </aside>
+            }
+          />
+        ) : (
+          <>
+            <button
+              className={`project-navigation-scrim ${navigationOpen ? 'is-open' : ''}`}
+              tabIndex={navigationOpen ? 0 : -1}
+              aria-hidden={!navigationOpen}
+              aria-label="关闭项目与对话"
+              onClick={() => setNavigationOpen(false)}
+            />
+            <aside
+              id="pi-project-navigation"
+              aria-label="项目与对话"
+              className={`surface contact-list project-conversation-list ${navigationOpen ? 'is-open' : ''}`}
+            >
+              <div className="project-navigation-heading">
+                <strong>项目与对话</strong>
+                <button
+                  className="icon-btn"
+                  aria-label="收起项目与对话"
+                  onClick={() => setNavigationOpen(false)}
+                >
+                  <X size={19} />
+                </button>
+              </div>
+              <button
+                className="secondary new-conversation"
+                disabled={uploading || manualCompacting}
+                onClick={newCurrentConversation}
+              >
+                <Plus size={17} />
+                新对话
+              </button>
+              {showArchived && (
+                <div className="pi-archive-heading">
+                  <button
+                    className="icon-btn"
+                    aria-label="返回对话列表"
+                    onClick={() => setShowArchived(false)}
+                  >
+                    <ArrowLeft size={16} />
+                  </button>
+                  <h2>已归档</h2>
+                  <small>{archivedConversations.length}</small>
+                </div>
+              )}
+              {!showArchived && (
+                <>
+                  <div className="project-tree-heading">
+                    <h2>服务器项目</h2>
+                    <button
+                      className="icon-btn"
+                      aria-label="新建项目"
+                      disabled={uploading || !projects.length}
+                      onClick={() => {
+                        setNavigationOpen(false);
+                        setProjectPurpose('project');
+                        setNewProject(true);
+                      }}
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  {projects
+                    .filter((p) => !p.source || conversations.some((c) => c.projectId === p.id))
+                    .map((p) => (
+                      <details
+                        className="project-tree"
+                        key={p.id}
+                        open={(!computerTarget && projectId === p.id) || undefined}
+                      >
+                        <ProjectSummary
+                          name={p.name}
+                          detail={conversations.filter((c) => c.projectId === p.id).length}
+                          newConversation={() => void fresh(p.id)}
+                          saveName={async (name) => {
+                            await api(
+                              settings,
+                              '/pi/projects/' + p.id + '/display-name',
+                              { name },
+                              'PUT',
+                            );
+                            await refreshProjects();
+                          }}
+                        />
+                        <ProjectConversationList>
+                          {conversations.filter((c) => c.projectId === p.id).map(conversationRow)}
+                        </ProjectConversationList>
+                      </details>
+                    ))}
+                  {!projects.some((p) => !p.source) && (
+                    <p className="field-help">新建项目并选择文件夹，对话会归在项目下。</p>
+                  )}
+                </>
+              )}
+              <AssistantComputerProjects
+                titleChanged={titleChanged}
+                settings={settings}
+                owner={session.user.id}
+                groups={computers.groups}
+                selected={computerTarget}
+                choose={selectComputer}
+                connect={openComputerConnections}
+                refresh={computers.refresh}
+                error={computers.error}
+                showArchived={showArchived}
+              />
+              {!showArchived && <h2>对话</h2>}
+              {(showArchived
+                ? archivedConversations
+                : conversations.filter((c) => !c.projectId)
+              ).map(conversationRow)}
+              {!(showArchived ? archivedConversations : conversations).length && (
+                <p className="field-help">
+                  {showArchived
+                    ? '还没有归档的对话。归档会保留历史与上下文。'
+                    : '你的第一段对话从这里开始。'}
+                </p>
+              )}
+              <div className="pi-navigation-footer">
+                <button
+                  className={`pi-sidebar-control ${showArchived ? 'is-active' : ''}`}
+                  onClick={() => setShowArchived(!showArchived)}
+                >
+                  <Archive size={15} />
+                  <span>{showArchived ? '返回对话' : '已归档'}</span>
+                  <small>{archivedConversations.length || ''}</small>
+                </button>
+                {session && (
+                  <button
+                    className="pi-sidebar-control pi-default-directory"
+                    disabled={!preferencesReady}
+                    onClick={() => setDirectorySettings(true)}
+                    title={projects.find((p) => p.id === defaultProjectId)?.serverPath}
+                  >
+                    <FolderOpen size={15} />
+                    <span>
+                      <small>默认工作目录</small>
+                      <b>{projects.find((p) => p.id === defaultProjectId)?.name || '独立会话'}</b>
+                    </span>
+                    <ChevronDown size={13} />
+                  </button>
+                )}
+              </div>
+            </aside>
+          </>
+        )}
         <section
           className={`surface chat-panel server-chat-panel ${dragging ? 'file-drop-active' : ''}`}
           aria-hidden={!!computerTarget}
@@ -1815,6 +2002,7 @@ function ServerPiPage({
               </>
             )}
             <AssistantSettings>
+              <ConversationEngineSettings origin="server" nativeId={conversation} />
               <AssistantMode
                 key={`mode:${conversation}`}
                 value={access}
@@ -1854,6 +2042,7 @@ function ServerPiPage({
           </div>
           <div className="pi-message-area" data-conversation-swipe>
             <div
+              data-assistance-source={`server:${conversation}`}
               className="message-scroll pi-messages"
               role="region"
               aria-label="对话消息"
@@ -1871,6 +2060,11 @@ function ServerPiPage({
               }}
             >
               <div ref={messageContent} className="pi-message-content">
+                <ConversationSegmentHistory
+                  settings={settings}
+                  origin="server"
+                  nativeId={conversation}
+                />
                 {(visible < entries.length || (more && !!turns.length)) && (
                   <button
                     className="load-history text-link"
@@ -2053,7 +2247,7 @@ function ServerPiPage({
                         {!running && <RunMetrics metrics={t.execution?.metrics} />}
                         {!running && (
                           <div className="message-actions">
-                            <CopyButton text={t.output} label="复制 Agent 回复" />
+                            <CopyButton text={t.output} label="复制 Agent 回复" assistant />
                             {!running && !unfinished && (
                               <button
                                 type="button"
@@ -2370,9 +2564,7 @@ function ServerPiPage({
             groups={computers.groups}
             ready={computers.ready}
             connect={openComputerConnections}
-            newConversation={() =>
-              selectComputer({ ...computerTarget, conversationId: crypto.randomUUID() })
-            }
+            newConversation={newCurrentConversation}
           />
         )}
         <FileWorkbenchPanel

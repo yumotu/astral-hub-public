@@ -24,11 +24,14 @@
     display: block !important;
     position: fixed;
     z-index: 46;
-    top: 0;
-    bottom: 0;
+    top: var(--app-viewport-top, 0px);
+    bottom: auto;
     right: 0;
     width: min(310px, calc(100vw - 36px));
-    height: auto;
+    height: var(--app-viewport-height, 100dvh);
+    box-sizing: border-box;
+    overscroll-behavior-y: contain;
+    scroll-padding-bottom: calc(16px + env(safe-area-inset-bottom));
     padding: calc(16px + env(safe-area-inset-top)) 14px calc(16px + env(safe-area-inset-bottom));
     border-left: 1px solid var(--border);
     box-shadow: -8px 0 32px var(--shadow);

@@ -8,6 +8,7 @@ import { memoryFields, memoryWrite, memoryRevision } from './memories.mjs';
 import { questionEditSchema } from './learning.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
 import { dshExtensionChange } from '../shared/dsh-extensions.mjs';
+import { assistanceSourceSchema } from './assistance-context.mjs';
 
 const empty = z.object({}).strict(),
   uuid = z.string().uuid();
@@ -32,8 +33,51 @@ async function request(handle, ctx, path, input, method = input ? 'POST' : 'GET'
 }
 export function registerAppFeatures(
   engine,
-  { community, mail, learning, memories, body, relay, usage, dshRemote },
+  { community, mail, learning, memories, body, relay, usage, dshRemote, unified },
 ) {
+  engine.register({
+    name: 'assistant.temporary_preferences',
+    description:
+      '查看或调整当前账号指定主对话的侧边临时对话有效期（1/6/24/168小时）。仅设置闲置清理时长，不打开、提交或重放任务；显式保留到对话列表的记录不自动删除。来源必须是当前账号有权读取的主对话。',
+    schema: z
+      .object({
+        source: assistanceSourceSchema,
+        ttlHours: z.union([z.literal(1), z.literal(6), z.literal(24), z.literal(168)]).optional(),
+      })
+      .strict(),
+    execute: (ctx, p) =>
+      request(
+        (req, url, json, c) => community.after(req, url, json, c.actor),
+        ctx,
+        '/api/pi/assist/preferences',
+        p,
+        p.ttlHours === undefined ? 'POST' : 'PATCH',
+      ),
+  });
+  if (unified) {
+    engine.register({
+      name: 'assistant.conversations',
+      description:
+        '读取当前账号统一管理的Pi、电脑及DSH对话目录与实际引擎。只读缓存，不连接主机、不切换引擎、不继承权限。',
+      schema: empty,
+      execute: (ctx) => unified.cached(ctx.actor),
+    });
+    engine.register({
+      name: 'assistant.conversation_update',
+      description:
+        '重命名、置顶或归档当前账号统一对话。只修改展示元数据，不停止或执行任务，不切换引擎。',
+      schema: z
+        .object({
+          id: uuid,
+          title: z.string().trim().min(1).max(120).optional(),
+          pinned: z.boolean().optional(),
+          archived: z.boolean().optional(),
+        })
+        .strict()
+        .refine((v) => Object.keys(v).length > 1),
+      execute: (ctx, { id, ...patch }) => unified.patch(ctx.actor, id, patch),
+    });
+  }
   if (dshRemote) {
     engine.register({
       name: 'assistant.extensions',

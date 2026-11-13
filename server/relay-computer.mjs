@@ -121,7 +121,19 @@ const progress = z
   .strict();
 export function createRelayComputer(
   db,
-  { body, now, limit, ownedDevice, project, cancel, model, notifications, chatFiles, appFunctions },
+  {
+    body,
+    now,
+    limit,
+    ownedDevice,
+    project,
+    cancel,
+    model,
+    notifications,
+    chatFiles,
+    appFunctions,
+    unified,
+  },
 ) {
   const columns = new Set(
     db
@@ -141,6 +153,7 @@ export function createRelayComputer(
     ['thinking_level', "TEXT NOT NULL DEFAULT 'off'"],
     ['scheduled', 'TEXT'],
     ['resumed', 'TEXT'],
+    ['handoff', 'TEXT'],
   ])
     if (!columns.has(name)) db.exec(`ALTER TABLE relay_jobs ADD COLUMN ${name} ${type}`);
   db.exec(`CREATE TABLE IF NOT EXISTS relay_conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,manual INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -291,6 +304,70 @@ export function createRelayComputer(
     }
   }
   return {
+    unified: {
+      list(actor) {
+        return db
+          .prepare('SELECT * FROM relay_conversations WHERE owner=? ORDER BY updated_at DESC')
+          .all(actor.id)
+          .map((c) => ({
+            id: c.id,
+            title: c.title,
+            createdAt: c.created_at,
+            updatedAt: c.updated_at,
+            pinnedAt: c.pinned_at,
+            archivedAt: c.archived_at,
+            projectId: c.project_id,
+            deviceId: c.device_id,
+            runtime: runtimeFor(actor.id, c.device_id, c.project_id, c.id),
+            runState: (() => {
+              const rows = db
+                .prepare(
+                  'SELECT * FROM relay_jobs WHERE owner=? AND conversation_id=? ORDER BY rowid DESC',
+                )
+                .all(actor.id, c.id);
+              const job = rows.map(view).find((j) => j.runState.busy || j.status === 'interrupted');
+              return job ? { ...job.runState, busy: true } : { busy: false, label: '' };
+            })(),
+          }));
+      },
+      state(actor, id) {
+        const c = db
+          .prepare('SELECT * FROM relay_conversations WHERE owner=? AND id=?')
+          .get(actor.id, id);
+        if (!c) throw fail(404, '电脑对话不存在。');
+        const d = ownedDevice(c.device_id, actor.id);
+        project(c.device_id, c.project_id);
+        if (d.expires <= now()) throw fail(403, '电脑授权已过期。');
+        if (now() - d.last_seen >= 45000) throw fail(503, '电脑当前离线。');
+        const rows = db
+          .prepare('SELECT * FROM relay_jobs WHERE owner=? AND conversation_id=?')
+          .all(actor.id, id);
+        const j = rows.map(view).find((j) => j.runState.busy || j.status === 'interrupted');
+        return j ? { ...j.runState, busy: true } : { busy: false, label: '' };
+      },
+      create(actor, target, id) {
+        const d = ownedDevice(target.deviceId, actor.id);
+        project(d.id, target.projectId);
+        if (d.expires <= now() || now() - d.last_seen >= 45000)
+          throw fail(503, '电脑离线或授权已过期。');
+        if (!JSON.parse(d.capabilities || '[]').includes('conversation_handoff_v1'))
+          throw fail(409, '请先更新目标电脑客户端，以支持统一会话与上下文交接。');
+        if (db.prepare('SELECT 1 FROM relay_closed_conversations WHERE id=?').get(id))
+          throw fail(410, '对话已删除。');
+        const old = db.prepare('SELECT * FROM relay_conversations WHERE id=?').get(id);
+        if (
+          old &&
+          (old.owner !== actor.id || old.device_id !== d.id || old.project_id !== target.projectId)
+        )
+          throw fail(409, '对话编号已使用。');
+        const at = new Date(now()).toISOString();
+        bindings.bind(actor.id, 'computer', id, computerPiRuntime(d.id, target.projectId, id));
+        db.prepare(
+          'INSERT OR IGNORE INTO relay_conversations(id,owner,device_id,project_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+        ).run(id, actor.id, d.id, target.projectId, '新对话', at, at);
+        return this.list(actor).find((c) => c.id === id);
+      },
+    },
     async schedule(run) {
       if (run.target?.kind !== 'computer' || !run.projectId)
         throw fail(400, '电脑定时任务缺少固定执行位置。');
@@ -447,7 +524,13 @@ export function createRelayComputer(
         db.prepare(
           "UPDATE relay_jobs SET status='running',lease_until=?,updated_at=? WHERE id=?",
         ).run(now() + 45000, new Date(now()).toISOString(), next.id);
-        json(200, { job: { ...view(job(d.id, next.id)), model } });
+        json(200, {
+          job: {
+            ...view(job(d.id, next.id)),
+            ...(next.handoff ? { handoff: JSON.parse(next.handoff) } : {}),
+            model,
+          },
+        });
         return true;
       }
       const match = path.match(
@@ -739,6 +822,11 @@ export function createRelayComputer(
           json(200, { job: view(old) });
           return true;
         }
+        unified?.()?.assertWritable(
+          actor.id,
+          { origin: 'computer', nativeId: p.conversationId },
+          internal.schedule ? { switchingStatus: 503 } : undefined,
+        );
         const capabilities = JSON.parse(device.capabilities || '[]');
         if (internal.resumeQuestion && !capabilities.includes('question_resume'))
           throw fail(409, '请先更新目标电脑，以安全续接中断的问题。');
@@ -798,6 +886,18 @@ export function createRelayComputer(
             (parent.thinking_level || 'off') !== p.thinkingLevel)
         )
           throw fail(409, '执行中的补充必须沿用当前任务的文件和命令权限。');
+        const handoff =
+          (await unified?.()?.handoff(actor.id, {
+            origin: 'computer',
+            nativeId: p.conversationId,
+          })) || [];
+        if (handoff.length && !capabilities.includes('conversation_handoff_v1'))
+          throw fail(409, '请先更新目标电脑，以接收上下文交接。');
+        unified?.()?.assertWritable(
+          actor.id,
+          { origin: 'computer', nativeId: p.conversationId },
+          internal.schedule ? { switchingStatus: 503 } : undefined,
+        );
         const at = new Date(now()).toISOString();
         db.exec('BEGIN IMMEDIATE');
         try {
@@ -855,6 +955,11 @@ export function createRelayComputer(
             internal.schedule ? JSON.stringify(internal.schedule) : null,
             internal.resumeQuestion ? JSON.stringify(internal.resumeQuestion) : null,
           );
+          if (handoff.length)
+            db.prepare('UPDATE relay_jobs SET handoff=? WHERE id=?').run(
+              JSON.stringify(handoff),
+              p.id,
+            );
           db.prepare('UPDATE relay_conversations SET updated_at=? WHERE id=?').run(
             at,
             p.conversationId,
@@ -980,18 +1085,27 @@ export function createRelayComputer(
             c.id,
             actor.id,
           );
+          await unified?.()?.nativePatch(actor, { origin: 'computer', nativeId: c.id }, p);
           json(200, { ok: true });
           return true;
         }
         if (req.method === 'DELETE') {
+          const manager = unified?.(),
+            ref = { origin: 'computer', nativeId: c.id };
+          const managed = manager?.forNative(actor.id, ref);
+          if (managed && !manager.deleting(actor.id, ref)) {
+            json(200, await manager.remove(actor, managed.id));
+            return true;
+          }
+          manager?.assertNativeDelete(actor.id, ref);
           if (
             db
-              .prepare(
-                "SELECT 1 FROM relay_jobs WHERE owner=? AND conversation_id=? AND status IN ('running','queued','delivering','accepted','applied')",
-              )
-              .get(actor.id, c.id)
+              .prepare('SELECT * FROM relay_jobs WHERE owner=? AND conversation_id=?')
+              .all(actor.id, c.id)
+              .map(view)
+              .some((j) => j.runState.busy || j.runState.state === 'unknown')
           )
-            throw fail(409, '对话仍有执行中或排队任务，请先停止任务。');
+            throw fail(409, '对话仍有执行中、排队或结果待核对的任务，请先确认任务与停止结果。');
           if (
             db
               .prepare('SELECT 1 FROM pi_turns WHERE owner=? AND conversation_id=?')
@@ -1024,6 +1138,7 @@ export function createRelayComputer(
             db.exec('ROLLBACK');
             throw e;
           }
+          unified?.()?.nativeDeleted(actor.id, { origin: 'computer', nativeId: c.id });
           await chatFiles?.removeConversation(actor.id, c.id);
           json(200, { ok: true });
           return true;

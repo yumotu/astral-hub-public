@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createAccounts, equal, fail } from './accounts.mjs';
 import { createChatFiles, readUpload } from './files.mjs';
 import { createPiTasks } from './pi-tasks.mjs';
@@ -18,7 +18,12 @@ import { createProjectLabels, projectLabelSchema } from './project-labels.mjs';
 import { activityDeadline } from '../deploy/pi/activity-deadline.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 import { createAgentBindings, serverPiRuntime } from './agent-bindings.mjs';
-import { agentCapabilities } from '../shared/agent-runtime.mjs';
+import { agentRunState, agentCapabilities } from '../shared/agent-runtime.mjs';
+import {
+  createAssistanceContext,
+  assistanceSourceSchema,
+  assistancePrompt,
+} from './assistance-context.mjs';
 const username = z
   .string()
   .trim()
@@ -37,6 +42,11 @@ const diagnosticSchema = z
   })
   .strict();
 export function createCommunity(store, { token, body, options = {} }) {
+  const now = options.now || Date.now;
+  const cleaningHelpers = new Map();
+  const helperOperations = new Map();
+  let communityClosed = false;
+  let helperLifetimesReady = false;
   function withNotice(work) {
     store.db.exec('SAVEPOINT social_notice');
     try {
@@ -67,6 +77,10 @@ export function createCommunity(store, { token, body, options = {} }) {
     fetch,
   };
   const piReady = !!(pi.url && pi.token);
+  const assistanceContext = createAssistanceContext(store.db, {
+    now: options.now,
+    serverProject: (owner, id) => projectFor(accounts.profile(owner), id, 'read'),
+  });
   const windows = new Map();
   function limit(key, max, span = 60000) {
     const now = Date.now();
@@ -366,12 +380,27 @@ export function createCommunity(store, { token, body, options = {} }) {
     })
     .strict();
   const tasks = createPiTasks(store.db, {
-    onEvent: (owner, task, event) => options.notifications?.task(owner, task, event),
+    onEvent: (owner, task, event) => {
+      // A completed reply starts a fresh idle window, even when generation took
+      // longer than the configured lifetime. Polling never extends the window.
+      if (
+        helperLifetimesReady &&
+        task.assistance === 'selection' &&
+        ['done', 'cancelled'].includes(task.status)
+      )
+        store.db
+          .prepare('UPDATE pi_assistance_lifetimes SET last_active=? WHERE owner=? AND id=?')
+          .run(now(), owner, task.conversationId);
+      options.notifications?.task(owner, task, event);
+    },
     maxConcurrent: concurrency,
     maxConcurrentPerUser: limits.maxConcurrentPerUser,
     activeCount: activeFor,
     available: (owner, task) =>
-      piReady && activePi.size < concurrency && !activePi.has(`${owner}:${task.conversationId}`),
+      piReady &&
+      activePi.size < concurrency &&
+      !activePi.has(`${owner}:${task.conversationId}`) &&
+      !cleaningHelpers.has(`${owner}:${task.conversationId}`),
     completed: (owner, id) =>
       accounts.piTurn(owner, id) ||
       store.db
@@ -439,6 +468,8 @@ export function createCommunity(store, { token, body, options = {} }) {
       }
     },
     async run(owner, p, event) {
+      if (cleaningHelpers.has(`${owner}:${p.conversationId}`))
+        throw fail(409, '临时对话正在清理，请重新打开后发送。');
       activePi.add(`${owner}:${p.conversationId}`);
       const goalAccess = !p.assistance ? options.goals?.grant(owner, p) : null;
       const sandboxAccess = !p.assistance ? options.sandboxNetwork?.scope(owner, p) : null;
@@ -456,6 +487,9 @@ export function createCommunity(store, { token, body, options = {} }) {
         if (p.projectId) {
           await projectFor(actor, p.projectId, p.access);
         }
+        const parentContext = p.assistanceSource
+          ? await assistanceContext.read(owner, p.assistanceSource)
+          : null;
         const attachments = chatFiles.selected(owner, p.conversationId, p.attachments);
         const result = await streamBridge(
           {
@@ -472,9 +506,16 @@ export function createCommunity(store, { token, body, options = {} }) {
             ownerId: owner,
             conversationId: p.conversationId,
             requestId: p.id,
-            input: p.input,
+            input: assistancePrompt(p.input, parentContext),
             ...(p.resumeQuestion ? { resumeQuestion: p.resumeQuestion } : {}),
-            history: accounts.piTranscript(owner, p.conversationId),
+            history: [
+              ...(!p.assistance
+                ? (await options
+                    .unified?.()
+                    ?.handoff(owner, { origin: 'server', nativeId: p.conversationId })) || []
+                : []),
+              ...accounts.piTranscript(owner, p.conversationId),
+            ],
             thinkingLevel: p.thinkingLevel,
             files: chatFiles.modelFiles(owner, p.conversationId, p.attachments),
             attachmentIds: p.attachments,
@@ -547,29 +588,490 @@ export function createCommunity(store, { token, body, options = {} }) {
     },
   });
   store.db.exec(
-    `CREATE TABLE IF NOT EXISTS pi_assistance_conversations(owner TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(owner,id));`,
+    `CREATE TABLE IF NOT EXISTS pi_assistance_conversations(owner TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(owner,id));
+     CREATE TABLE IF NOT EXISTS pi_assistance_sources(owner TEXT NOT NULL,id TEXT NOT NULL,source TEXT NOT NULL,PRIMARY KEY(owner,id));
+     CREATE TABLE IF NOT EXISTS pi_assistance_parents(owner TEXT NOT NULL,parent_key TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(owner,parent_key));
+     CREATE TABLE IF NOT EXISTS pi_assistance_preferences(owner TEXT NOT NULL,parent_key TEXT NOT NULL,ttl_hours INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(owner,parent_key));
+     CREATE TABLE IF NOT EXISTS pi_assistance_lifetimes(owner TEXT NOT NULL,id TEXT NOT NULL,last_active INTEGER NOT NULL,retained INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner,id));
+     CREATE TABLE IF NOT EXISTS pi_assistance_expirations(owner TEXT NOT NULL,parent_key TEXT NOT NULL,id TEXT NOT NULL,expired_at INTEGER NOT NULL,PRIMARY KEY(owner,parent_key,id));`,
   );
-  function assist(owner, input) {
+  // Legacy temporary histories get an initial idle window. Records explicitly
+  // saved to the main list remain retained even if they are archived later.
+  store.db
+    .prepare(
+      `INSERT OR IGNORE INTO pi_assistance_lifetimes(owner,id,last_active,retained)
+      SELECT a.owner,a.id,?,CASE WHEN c.id IS NOT NULL AND c.archived_at IS NULL THEN 1 ELSE 0 END
+      FROM pi_assistance_conversations a LEFT JOIN pi_conversations c ON c.owner=a.owner AND c.id=a.id WHERE a.kind='selection'`,
+    )
+    .run(now());
+  helperLifetimesReady = true;
+  const parentIdentity = (owner, source) => {
+    const segment = store.db
+      .prepare(
+        'SELECT display_id FROM assistant_segments WHERE owner=? AND origin=? AND native_id=?',
+      )
+      .get(owner, source.origin, source.id);
+    if (!segment)
+      return { key: JSON.stringify(['native', source.origin, source.id]), aliases: [], source };
+    const first = store.db
+      .prepare(
+        'SELECT origin,native_id FROM assistant_segments WHERE owner=? AND display_id=? ORDER BY ordinal LIMIT 1',
+      )
+      .get(owner, segment.display_id);
+    const aliases = store.db
+      .prepare(
+        'SELECT origin,native_id FROM assistant_segments WHERE owner=? AND display_id=? ORDER BY ordinal',
+      )
+      .all(owner, segment.display_id)
+      .map((ref) => JSON.stringify(['native', ref.origin, ref.native_id]));
+    return {
+      key: JSON.stringify(['display', segment.display_id]),
+      aliases,
+      source: { origin: first.origin, id: first.native_id },
+    };
+  };
+  const lifetimeSchema = z
+    .object({
+      source: assistanceSourceSchema,
+      ttlHours: z.union([z.literal(1), z.literal(6), z.literal(24), z.literal(168)]),
+    })
+    .strict();
+  const helperSaved = (owner, id) => {
+    const lifetime = store.db
+      .prepare('SELECT retained FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+      .get(owner, id);
+    const metadata = conversationMetadata.get(owner, id);
+    return !!lifetime?.retained || !!(metadata && !metadata.archivedAt);
+  };
+  const helperBusy = (owner, id) =>
+    activePi.has(`${owner}:${id}`) ||
+    !!helperOperations.get(`${owner}:${id}`) ||
+    !!store.db
+      .prepare(
+        `SELECT 1 FROM pi_tasks WHERE owner=? AND conversation_id=? AND (
+        COALESCE(json_extract(state,'$.status'),'') NOT IN ('done','error','cancelled') OR
+        (json_extract(state,'$.status')='error' AND (
+          instr(COALESCE(json_extract(state,'$.error'),''),'未确认')>0 OR
+          instr(COALESCE(json_extract(state,'$.error'),''),'中断')>0 OR
+          instr(COALESCE(json_extract(state,'$.error'),''),'不完整')>0 OR
+          instr(COALESCE(json_extract(state,'$.error'),''),'超时')>0 OR
+          instr(COALESCE(json_extract(state,'$.error'),''),'未知')>0
+        ))
+      ) LIMIT 1`,
+      )
+      .get(owner, id) ||
+    !!store.db
+      .prepare(
+        `SELECT 1 FROM pi_jobs WHERE owner=? AND conversation_id=? AND status NOT IN ('done','error','cancelled') LIMIT 1`,
+      )
+      .get(owner, id);
+  async function helperOperation(owner, id, work) {
+    const key = `${owner}:${id}`;
+    if (
+      cleaningHelpers.has(key) ||
+      store.db
+        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+        .get(owner, id)
+    )
+      throw fail(409, '对话已关闭或正在清理，请重新打开后操作。');
+    helperOperations.set(key, (helperOperations.get(key) || 0) + 1);
+    try {
+      return await work();
+    } finally {
+      const remaining = helperOperations.get(key) - 1;
+      if (remaining) helperOperations.set(key, remaining);
+      else helperOperations.delete(key);
+    }
+  }
+  function helperLifetime(owner, id, parent) {
+    const preference = store.db
+      .prepare('SELECT ttl_hours FROM pi_assistance_preferences WHERE owner=? AND parent_key=?')
+      .get(owner, parent.key);
+    const prior = parent.aliases
+      .map((key) =>
+        store.db
+          .prepare('SELECT ttl_hours FROM pi_assistance_preferences WHERE owner=? AND parent_key=?')
+          .get(owner, key),
+      )
+      .find(Boolean);
+    const ttlHours = preference?.ttl_hours || prior?.ttl_hours || 1;
+    const row = store.db
+      .prepare('SELECT last_active FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+      .get(owner, id);
+    const saved = helperSaved(owner, id);
+    return {
+      ttlHours,
+      expiresAt:
+        saved || helperBusy(owner, id) ? null : (row?.last_active ?? now()) + ttlHours * 3600000,
+      saved,
+    };
+  }
+  function helperParent(owner, id) {
+    const source = store.db
+      .prepare('SELECT source FROM pi_assistance_sources WHERE owner=? AND id=?')
+      .get(owner, id);
+    if (source) return parentIdentity(owner, JSON.parse(source.source));
+    const binding = store.db
+      .prepare(
+        'SELECT parent_key FROM pi_assistance_parents WHERE owner=? AND id=? ORDER BY rowid DESC LIMIT 1',
+      )
+      .get(owner, id);
+    if (!binding) return { key: JSON.stringify(['legacy', id]), aliases: [] };
+    const key = JSON.parse(binding.parent_key);
+    if (key[0] === 'native') return parentIdentity(owner, { origin: key[1], id: key[2] });
+    return { key: binding.parent_key, aliases: [] };
+  }
+  function touchHelper(owner, id) {
+    store.db
+      .prepare(
+        `INSERT INTO pi_assistance_lifetimes(owner,id,last_active) VALUES(?,?,?)
+      ON CONFLICT(owner,id) DO UPDATE SET last_active=excluded.last_active`,
+      )
+      .run(owner, id, now());
+  }
+  function expireHelper(owner, id) {
+    const key = `${owner}:${id}`;
+    if (cleaningHelpers.has(key)) return cleaningHelpers.get(key);
+    const work = (async () => {
+      // Always recheck after asynchronous calls. Retaining a record while the
+      // bridge is being contacted must take precedence over automatic expiry.
+      const due = () => {
+        const row = store.db
+          .prepare('SELECT last_active FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+          .get(owner, id);
+        if (!row || helperSaved(owner, id) || helperBusy(owner, id)) return false;
+        return (
+          row.last_active + helperLifetime(owner, id, helperParent(owner, id)).ttlHours * 3600000 <=
+          now()
+        );
+      };
+      if (communityClosed || !due()) return false;
+      const health = await bridge('/health');
+      if (communityClosed || !due()) return false;
+      // A native deletion acknowledgement is required before any local history
+      // is removed; older or unavailable bridges keep the entire record.
+      if (health.nativeSessions !== true)
+        throw fail(503, '暂时无法清理临时对话的原生会话，请稍后重试。');
+      const result = await bridge('/sessions/delete', { sessionKey: keyFor(owner, id) });
+      if (result.ok !== true) throw fail(502, '临时对话的原生会话清理尚未确认。');
+      if (communityClosed || !due()) return false;
+      // No submit/open/retention endpoint can enter this helper while it is
+      // locked, so a successful native deletion cannot race a new prompt.
+      tasks.closeConversation(owner, id);
+      await chatFiles.removeConversation(owner, id);
+      if (communityClosed) return false;
+      store.db.exec('SAVEPOINT expire_helper');
+      try {
+        const parent = helperParent(owner, id);
+        const keys = new Set([
+          parent.key,
+          ...parent.aliases,
+          ...store.db
+            .prepare('SELECT parent_key FROM pi_assistance_parents WHERE owner=? AND id=?')
+            .all(owner, id)
+            .map((row) => row.parent_key),
+        ]);
+        for (const parentKey of keys)
+          store.db
+            .prepare('INSERT OR REPLACE INTO pi_assistance_expirations VALUES(?,?,?,?)')
+            .run(owner, parentKey, id, now());
+        store.db
+          .prepare(
+            'DELETE FROM pi_submission_receipts WHERE owner=? AND id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=? UNION SELECT id FROM pi_turns WHERE owner=? AND conversation_id=?)',
+          )
+          .run(owner, owner, id, owner, id);
+        accounts.deletePiConversation(owner, id);
+        conversationMetadata.remove(owner, id);
+        sessionContext.remove(owner, id);
+        store.db
+          .prepare(
+            'DELETE FROM pi_task_events WHERE owner=? AND task_id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=?)',
+          )
+          .run(owner, owner, id);
+        store.db.prepare('DELETE FROM pi_tasks WHERE owner=? AND conversation_id=?').run(owner, id);
+        store.db.prepare('DELETE FROM pi_jobs WHERE owner=? AND conversation_id=?').run(owner, id);
+        for (const table of [
+          'pi_assistance_sources',
+          'pi_assistance_conversations',
+          'pi_assistance_parents',
+          'pi_assistance_lifetimes',
+        ])
+          store.db.prepare(`DELETE FROM ${table} WHERE owner=? AND id=?`).run(owner, id);
+        store.db
+          .prepare(
+            "DELETE FROM agent_conversation_bindings WHERE owner=? AND origin='server' AND conversation_id=?",
+          )
+          .run(owner, id);
+        options.unified?.()?.nativeDeleted(owner, { origin: 'server', nativeId: id });
+        store.db.exec('RELEASE expire_helper');
+      } catch (error) {
+        store.db.exec('ROLLBACK TO expire_helper; RELEASE expire_helper');
+        throw error;
+      }
+      return true;
+    })();
+    cleaningHelpers.set(key, work);
+    void work
+      .finally(() => {
+        if (cleaningHelpers.get(key) === work) cleaningHelpers.delete(key);
+      })
+      .catch(() => {});
+    return work;
+  }
+  async function lifetimePreferences(owner, input) {
+    const p = lifetimeSchema.parse(input);
+    limit(`pi-assist-preferences:${owner}`, 60);
+    await assistanceContext.read(owner, p.source);
+    const parent = parentIdentity(owner, p.source);
+    // A helper may still be reserved by its original native key when its
+    // parent first enters unified navigation. Reuse that reservation exactly
+    // as the status/open paths do; changing a preference must renew it too.
+    const find = () =>
+      [parent.key, ...parent.aliases]
+        .map((key) =>
+          store.db
+            .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+            .get(owner, key),
+        )
+        .find(Boolean);
+    const bound = find();
+    if (bound && cleaningHelpers.has(`${owner}:${bound.id}`))
+      await cleaningHelpers.get(`${owner}:${bound.id}`);
+    store.db
+      .prepare(
+        `INSERT INTO pi_assistance_preferences VALUES(?,?,?) ON CONFLICT(owner,parent_key) DO UPDATE SET ttl_hours=excluded.ttl_hours`,
+      )
+      .run(owner, parent.key, p.ttlHours);
+    for (const alias of parent.aliases)
+      store.db
+        .prepare(
+          `INSERT INTO pi_assistance_preferences VALUES(?,?,?) ON CONFLICT(owner,parent_key) DO UPDATE SET ttl_hours=excluded.ttl_hours`,
+        )
+        .run(owner, alias, p.ttlHours);
+    const current = find();
+    if (current) touchHelper(owner, current.id);
+    return current
+      ? helperLifetime(owner, current.id, parent)
+      : { ttlHours: p.ttlHours, expiresAt: null, saved: false };
+  }
+  async function lifetimeStatus(owner, input) {
+    const p = z.object({ source: assistanceSourceSchema }).strict().parse(input);
+    limit(`pi-assist-status:${owner}`, 60);
+    await assistanceContext.read(owner, p.source);
+    const parent = parentIdentity(owner, p.source);
+    const keys = [parent.key, ...parent.aliases];
+    const find = () =>
+      keys
+        .map((key) =>
+          store.db
+            .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+            .get(owner, key),
+        )
+        .find(Boolean);
+    const before = find();
+    if (before) await expireHelper(owner, before.id);
+    const bound = find();
+    return {
+      conversationId: bound?.id || null,
+      ...helperLifetime(owner, bound?.id || '', parent),
+      expiredConversationIds: [
+        ...new Set(
+          keys.flatMap((key) =>
+            store.db
+              .prepare(
+                'SELECT id FROM pi_assistance_expirations WHERE owner=? AND parent_key=? ORDER BY expired_at DESC LIMIT 2000',
+              )
+              .all(owner, key)
+              .map((row) => row.id),
+          ),
+        ),
+      ],
+    };
+  }
+  async function selectionSession(owner, input) {
+    const p = z.object({ source: assistanceSourceSchema }).strict().parse(input);
+    limit(`pi-assist-session:${owner}`, 60);
+    // Opening/reopening is a read operation: validate every original location,
+    // but never submit a task or grant main-conversation tools to the helper.
+    await assistanceContext.read(owner, p.source);
+    const parent = parentIdentity(owner, p.source);
+    let bound = store.db
+      .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+      .get(owner, parent.key);
+    if (bound) {
+      await expireHelper(owner, bound.id);
+      bound = store.db
+        .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+        .get(owner, parent.key);
+    }
+    if (
+      bound &&
+      store.db
+        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+        .get(owner, bound.id)
+    ) {
+      store.db
+        .prepare('DELETE FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+        .run(owner, parent.key);
+      bound = null;
+    }
+    if (!bound) {
+      const old = store.db
+        .prepare(
+          `SELECT s.id,s.source FROM pi_assistance_sources s
+        JOIN pi_assistance_conversations c ON c.owner=s.owner AND c.id=s.id AND c.kind='selection'
+        WHERE s.owner=? AND NOT EXISTS(SELECT 1 FROM pi_closed_conversations x WHERE x.owner=s.owner AND x.conversation_id=s.id)
+        ORDER BY s.rowid DESC`,
+        )
+        .all(owner)
+        .find((row) => parentIdentity(owner, JSON.parse(row.source)).key === parent.key);
+      // A main chat may enter unified navigation after its helper was opened.
+      // Reuse its reserved native binding even before the first helper message.
+      const reserved = parent.aliases
+        .map((key) =>
+          store.db
+            .prepare(
+              'SELECT p.id FROM pi_assistance_parents p WHERE p.owner=? AND p.parent_key=? AND NOT EXISTS(SELECT 1 FROM pi_closed_conversations x WHERE x.owner=p.owner AND x.conversation_id=p.id)',
+            )
+            .get(owner, key),
+        )
+        .find(Boolean);
+      const id = reserved?.id || old?.id || randomUUID();
+      store.db
+        .prepare('INSERT INTO pi_assistance_parents(owner,parent_key,id) VALUES(?,?,?)')
+        .run(owner, parent.key, id);
+      bound = { id };
+    }
+    // Migration of a legacy or native-only reservation must apply the same
+    // expiry check as a binding that was already indexed by display ID.
+    await expireHelper(owner, bound.id);
+    if (
+      store.db
+        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+        .get(owner, bound.id)
+    ) {
+      const id = randomUUID();
+      store.db
+        .prepare('INSERT OR REPLACE INTO pi_assistance_parents VALUES(?,?,?)')
+        .run(owner, parent.key, id);
+      bound = { id };
+    }
+    touchHelper(owner, bound.id);
+    const source = store.db
+      .prepare('SELECT source FROM pi_assistance_sources WHERE owner=? AND id=?')
+      .get(owner, bound.id);
+    return {
+      conversationId: bound.id,
+      source: source ? JSON.parse(source.source) : parent.source,
+      turns: accounts.piHistory(owner, bound.id),
+      tasks: tasks.all(owner).filter((task) => task.conversationId === bound.id),
+      ...helperLifetime(owner, bound.id, parent),
+      expiredConversationIds: store.db
+        .prepare(
+          'SELECT id FROM pi_assistance_expirations WHERE owner=? AND parent_key=? ORDER BY expired_at DESC LIMIT 2000',
+        )
+        .all(owner, parent.key)
+        .map((row) => row.id),
+    };
+  }
+  async function assist(owner, input) {
     const p = z
       .object({
         id: uuid,
         conversationId: uuid,
         input: z.string().trim().min(1).max(8000),
         kind: z.enum(['selection', 'mail', 'mail-manage']),
+        source: assistanceSourceSchema.optional(),
       })
       .strict()
       .parse(input);
+    if (cleaningHelpers.has(`${owner}:${p.conversationId}`))
+      throw fail(409, '临时对话正在清理，请重新打开后发送。');
     if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
+    if (
+      p.source &&
+      (p.kind !== 'selection' || (p.source.origin === 'server' && p.source.id === p.conversationId))
+    )
+      throw fail(400, '临时对话来源无效。');
+    if (
+      p.kind === 'selection' &&
+      store.db
+        .prepare('SELECT 1 FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+        .get(owner, p.conversationId)
+    )
+      await expireHelper(owner, p.conversationId);
     if (
       store.db
         .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
         .get(owner, p.conversationId)
     )
       throw fail(409, '此临时对话已删除。');
-    const existing = store.db
+    let existing = store.db
       .prepare('SELECT kind FROM pi_assistance_conversations WHERE owner=? AND id=?')
       .get(owner, p.conversationId);
     if (existing && existing.kind !== p.kind) throw fail(409, '临时对话用途不匹配。');
+    const sourceRow = store.db
+      .prepare('SELECT source FROM pi_assistance_sources WHERE owner=? AND id=?')
+      .get(owner, p.conversationId);
+    const source = sourceRow ? JSON.parse(sourceRow.source) : p.source || null;
+    const assertReservation = () => {
+      const reservations = store.db
+        .prepare('SELECT parent_key FROM pi_assistance_parents WHERE owner=? AND id=?')
+        .all(owner, p.conversationId);
+      if (!reservations.length) return;
+      if (p.kind !== 'selection' || !source) throw fail(409, '临时对话不能更换所属主对话或用途。');
+      const parent = parentIdentity(owner, source),
+        keys = new Set([parent.key, ...parent.aliases]);
+      if (reservations.some((row) => !keys.has(row.parent_key)))
+        throw fail(409, '临时对话不能更换所属主对话。');
+    };
+    assertReservation();
+    if (sourceRow && p.source && JSON.stringify(source) !== JSON.stringify(p.source))
+      throw fail(409, '临时对话不能更换所属主对话。');
+    if (existing && !sourceRow && p.source) throw fail(409, '已有临时对话不能更换来源。');
+    const acceptedTask = () => {
+      const oldTask = tasks.get(owner, p.id);
+      if (!oldTask) return null;
+      if (
+        oldTask.conversationId !== p.conversationId ||
+        oldTask.input !== p.input ||
+        oldTask.assistance !== p.kind ||
+        JSON.stringify(oldTask.assistanceSource || null) !== JSON.stringify(source)
+      )
+        throw fail(409, '这条请求已存在不同内容。');
+      return oldTask;
+    };
+    const oldTask = acceptedTask();
+    if (oldTask) return oldTask;
+    const snapshot = source ? await assistanceContext.read(owner, source) : null;
+    assistancePrompt(p.input, snapshot);
+    // Parent-project verification can await a bridge request. Another first
+    // submission may have bound this helper meanwhile; recheck before creating
+    // anything, and return the accepted task for an identical concurrent retry.
+    existing = store.db
+      .prepare('SELECT kind FROM pi_assistance_conversations WHERE owner=? AND id=?')
+      .get(owner, p.conversationId);
+    const currentSource = store.db
+      .prepare('SELECT source FROM pi_assistance_sources WHERE owner=? AND id=?')
+      .get(owner, p.conversationId);
+    if (existing && existing.kind !== p.kind) throw fail(409, '临时对话用途不匹配。');
+    if (
+      (currentSource &&
+        JSON.stringify(JSON.parse(currentSource.source)) !== JSON.stringify(source)) ||
+      (existing && !currentSource && source)
+    )
+      throw fail(409, '临时对话不能更换所属主对话。');
+    if (
+      store.db
+        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+        .get(owner, p.conversationId)
+    )
+      throw fail(409, '此临时对话已删除。');
+    assertReservation();
+    const concurrentTask = acceptedTask();
+    if (concurrentTask) return concurrentTask;
+    if (cleaningHelpers.has(`${owner}:${p.conversationId}`))
+      throw fail(409, '临时对话正在清理，请重新打开后发送。');
     if (
       !existing &&
       (conversationMetadata.get(owner, p.conversationId) ||
@@ -590,24 +1092,112 @@ export function createCommunity(store, { token, body, options = {} }) {
       store.db
         .prepare('INSERT INTO pi_assistance_conversations VALUES(?,?,?)')
         .run(owner, p.conversationId, p.kind);
+      if (source)
+        store.db
+          .prepare('INSERT INTO pi_assistance_sources VALUES(?,?,?)')
+          .run(owner, p.conversationId, JSON.stringify(source));
     }
     limit(`pi-assist:${owner}`, 20);
-    return tasks.add(owner, {
+    const task = tasks.add(owner, {
       ...messageSchema.parse({ id: p.id, conversationId: p.conversationId, input: p.input }),
       assistance: p.kind,
+      ...(source ? { assistanceSource: source } : {}),
       toolAllowlist: p.kind === 'mail-manage' ? ['mail_manage'] : [],
     });
+    if (p.kind === 'selection') touchHelper(owner, p.conversationId);
+    return task;
   }
+  let sweeping = false;
+  const helperTimer = setInterval(async () => {
+    if (communityClosed || sweeping) return;
+    sweeping = true;
+    try {
+      const rows = store.db
+        .prepare('SELECT owner,id FROM pi_assistance_lifetimes WHERE retained=0 AND last_active<=?')
+        .all(now() - 3600000);
+      for (const row of rows) {
+        if (communityClosed) break;
+        try {
+          await expireHelper(row.owner, row.id);
+        } catch {
+          /* Retain records until native deletion is confirmed. */
+        }
+      }
+    } finally {
+      sweeping = false;
+    }
+  }, options.temporaryChatSweepMs ?? 60000);
+  helperTimer.unref();
   const scheduled = createPiSchedulePump({
     bridge,
     tasks,
     ownerAllowed: (owner) =>
       store.db.prepare('SELECT role FROM users WHERE id=?').get(owner)?.role === 'owner',
-    scope: (owner, id) => accounts.piScope(owner, id) || tasks.scope(owner, id),
+    scope: (owner, id) => {
+      options
+        .unified?.()
+        ?.assertWritable(owner, { origin: 'server', nativeId: id }, { switchingStatus: 503 });
+      return accounts.piScope(owner, id) || tasks.scope(owner, id);
+    },
     completed: (owner, id) => accounts.piTurn(owner, id),
     computer: (run) => options.scheduleComputer?.(run),
   });
+  const unifiedList = (owner) =>
+    conversationList({
+      history: accounts.piConversations(owner),
+      tasks: tasks.all(owner).filter((t) => !t.assistance),
+      metadata: conversationMetadata.list(owner),
+    })
+      .filter(
+        (c) =>
+          !store.db
+            .prepare('SELECT 1 FROM pi_assistance_conversations WHERE owner=? AND id=?')
+            .get(owner, c.id) || !c.archivedAt,
+      )
+      .map((c) => {
+        const live = tasks
+          .all(owner)
+          .find(
+            (t) =>
+              t.conversationId === c.id &&
+              ['queued', 'running', 'stopping', 'delivering', 'accepted', 'interrupted'].includes(
+                t.status,
+              ),
+          );
+        return {
+          ...c,
+          runtime: serverPiRuntime(owner, c.id, c.projectId),
+          runState: live
+            ? { ...agentRunState(live), busy: true }
+            : { busy: activePi.has(`${owner}:${c.id}`), label: '' },
+        };
+      });
   return {
+    unified: {
+      list: (actor) => unifiedList(actor.id),
+      projects: projectsFor,
+      visible: (owner, ref) =>
+        assistanceContext.read(owner, { origin: ref.origin, id: ref.nativeId }),
+      async state(actor, id) {
+        const c = unifiedList(actor.id).find((c) => c.id === id);
+        if (!c) throw fail(404, '对话不存在。');
+        if (c.projectId) await projectFor(actor, c.projectId);
+        if (!piReady) throw fail(503, 'Pi尚未配置。');
+        const pending = tasks
+          .all(actor.id)
+          .filter(
+            (t) =>
+              t.conversationId === id &&
+              ['queued', 'running', 'stopping', 'delivering', 'accepted', 'interrupted'].includes(
+                t.status,
+              ),
+          );
+        const t = pending[0];
+        return t
+          ? { ...agentRunState(t), busy: true }
+          : { busy: activePi.has(`${actor.id}:${id}`), label: '正在核对任务' };
+      },
+    },
     async manageSchedule(ctx, input, callId, computerJob) {
       if (store.db.prepare('SELECT role FROM users WHERE id=?').get(ctx.owner)?.role !== 'owner')
         throw fail(403, '当前仅管理员可使用定时任务。');
@@ -637,7 +1227,10 @@ export function createCommunity(store, { token, body, options = {} }) {
     accounts,
     piReady,
     assist,
+    assistancePreferences: lifetimePreferences,
     close: () => {
+      communityClosed = true;
+      clearInterval(helperTimer);
       titles.close();
       scheduled.close();
       tasks.close();
@@ -688,8 +1281,30 @@ export function createCommunity(store, { token, body, options = {} }) {
       if (!['/api/auth/', '/api/social/', '/api/pi/'].some((prefix) => path.startsWith(prefix)))
         return false;
       requireUser(actor);
+      if (path === '/api/pi/assist/session' && method === 'POST') {
+        json(200, await selectionSession(actor.id, await body(req)));
+        return true;
+      }
+      if (path === '/api/pi/assist/preferences' && method === 'PATCH') {
+        json(200, await lifetimePreferences(actor.id, await body(req)));
+        return true;
+      }
+      if (path === '/api/pi/assist/preferences' && method === 'POST') {
+        json(200, await lifetimeStatus(actor.id, await body(req)));
+        return true;
+      }
       if (path === '/api/pi/assist' && method === 'POST') {
-        json(202, { task: assist(actor.id, await body(req)) });
+        const task = await assist(actor.id, await body(req));
+        json(202, {
+          task,
+          ...(task.assistance === 'selection'
+            ? helperLifetime(
+                actor.id,
+                task.conversationId,
+                helperParent(actor.id, task.conversationId),
+              )
+            : {}),
+        });
         return true;
       }
       const sessionKey = (id) => createHash('sha256').update(`${actor.id}:${id}`).digest('hex');
@@ -745,6 +1360,9 @@ export function createCommunity(store, { token, body, options = {} }) {
             })
             .strict()
             .parse(await body(req));
+          const task = tasks.get(actor.id, id);
+          if (task && cleaningHelpers.has(`${actor.id}:${task.conversationId}`))
+            throw fail(409, '临时对话正在清理，请重新打开后操作。');
           json(200, { task: tasks.edit(actor.id, id, p) });
           return true;
         }
@@ -764,6 +1382,8 @@ export function createCommunity(store, { token, body, options = {} }) {
         ).parse(await body(req));
         const { deliveryPreference, ...clean } = raw;
         let p = clean;
+        if (cleaningHelpers.has(`${actor.id}:${p.conversationId}`))
+          throw fail(409, '临时对话正在清理，请重新打开后发送。');
         const signature = JSON.stringify(raw);
         if (auto) {
           const receipt = store.db
@@ -784,6 +1404,9 @@ export function createCommunity(store, { token, body, options = {} }) {
           json(200, { task: tasks.add(actor.id, p) });
           return true;
         }
+        options
+          .unified?.()
+          ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
         if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
         if (accounts.piTurn(actor.id, p.id) || accounts.piJob(actor.id, p.id))
           throw fail(409, '此请求已执行过，请查看历史。');
@@ -831,7 +1454,12 @@ export function createCommunity(store, { token, body, options = {} }) {
             throw fail(409, '当前任务已经结束，请排到下一条。');
           if (parent.access !== p.access) throw fail(409, '任务补充必须沿用当前任务的模式。');
         } else if (p.parentId) throw fail(400, '排队消息不应绑定补充任务。');
+        options
+          .unified?.()
+          ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
         limit(`pi-task:${actor.id}`, 30);
+        if (cleaningHelpers.has(`${actor.id}:${p.conversationId}`))
+          throw fail(409, '临时对话正在清理，请重新打开后发送。');
         if (auto) {
           let task;
           store.db.exec('BEGIN IMMEDIATE');
@@ -896,7 +1524,12 @@ export function createCommunity(store, { token, body, options = {} }) {
             : {};
         limit(`pi-context:${actor.id}`, 30);
         if (p.refresh) limit(`pi-context-refresh:${actor.id}`, 6);
-        json(200, await bridge('/sessions/context', { sessionKey: sessionKey(id), ...p }, 15000));
+        json(
+          200,
+          await helperOperation(actor.id, id, () =>
+            bridge('/sessions/context', { sessionKey: sessionKey(id), ...p }, 15000),
+          ),
+        );
         return true;
       }
       const nativeRoute = path.match(
@@ -925,20 +1558,22 @@ export function createCommunity(store, { token, body, options = {} }) {
         const observation =
           action === 'inspect' || action === 'compact' ? sessionContext.begin(actor.id, id) : null;
         if (action !== 'cancel' && !observation) throw fail(409, '此对话已删除，请建立新对话。');
-        const result = await bridge(
-          action === 'cancel' ? '/cancel' : `/sessions/${action}`,
-          {
-            sessionKey: sessionKey(id),
-            ownerId: actor.id,
-            conversationId: id,
-            canManageSkills: actor.role === 'owner',
-            projectPrincipal: principalFor(actor),
-            ...(p.projectId ? { projectId: p.projectId, access: p.access } : {}),
-          },
-          // Inspection starts a real Pi process and loads native packages.
-          // Leave room for cold starts within the web client's 100s timeout;
-          // cancellation keeps its shorter deadline and never retries work.
-          action === 'compact' ? 190000 : action === 'inspect' ? 90000 : 15000,
+        const result = await helperOperation(actor.id, id, () =>
+          bridge(
+            action === 'cancel' ? '/cancel' : `/sessions/${action}`,
+            {
+              sessionKey: sessionKey(id),
+              ownerId: actor.id,
+              conversationId: id,
+              canManageSkills: actor.role === 'owner',
+              projectPrincipal: principalFor(actor),
+              ...(p.projectId ? { projectId: p.projectId, access: p.access } : {}),
+            },
+            // Inspection starts a real Pi process and loads native packages.
+            // Leave room for cold starts within the web client's 100s timeout;
+            // cancellation keeps its shorter deadline and never retries work.
+            action === 'compact' ? 190000 : action === 'inspect' ? 90000 : 15000,
+          ),
         );
         if (observation) sessionContext.commit(actor.id, id, observation, result.context, action);
         json(
@@ -1394,7 +2029,9 @@ export function createCommunity(store, { token, body, options = {} }) {
             original?.access || live?.access || 'read',
           );
         limit(`pi-fork:${actor.id}`, 15);
-        const result = await branches.create(actor.id, source, p, live);
+        const result = await helperOperation(actor.id, source, () =>
+          branches.create(actor.id, source, p, live),
+        );
         json(201, { ...result, conversation: listConversations().find((c) => c.id === p.id) });
         return true;
       }
@@ -1487,9 +2124,12 @@ export function createCommunity(store, { token, body, options = {} }) {
         if (!fileRoute[2] && method === 'POST') {
           limit(`upload:${actor.id}`, 20);
           const name = z.string().min(1).max(160).parse(url.searchParams.get('name'));
-          json(201, {
-            file: await chatFiles.save(actor.id, conversationId, name, await readUpload(req)),
-          });
+          json(
+            201,
+            await helperOperation(actor.id, conversationId, async () => ({
+              file: await chatFiles.save(actor.id, conversationId, name, await readUpload(req)),
+            })),
+          );
           return true;
         }
       }
@@ -1508,6 +2148,8 @@ export function createCommunity(store, { token, body, options = {} }) {
           return true;
         }
         if (method === 'PATCH') {
+          if (cleaningHelpers.has(`${actor.id}:${id}`))
+            throw fail(409, '临时对话正在清理，请重新打开后操作。');
           const p = z
             .object({
               title: z.string().trim().min(1).max(120).optional(),
@@ -1519,13 +2161,30 @@ export function createCommunity(store, { token, body, options = {} }) {
             .parse(await body(req));
           const existing = listConversations().find((c) => c.id === id);
           if (!existing) throw fail(404, '对话不存在。');
+          if (cleaningHelpers.has(`${actor.id}:${id}`))
+            throw fail(409, '临时对话正在清理，请重新打开后操作。');
           limit(`pi-conversation-update:${actor.id}`, 60);
           conversationMetadata.create(actor.id, id, existing);
           conversationMetadata.patch(actor.id, id, p);
+          if (p.archived === false)
+            store.db
+              .prepare('UPDATE pi_assistance_lifetimes SET retained=1 WHERE owner=? AND id=?')
+              .run(actor.id, id);
+          await options.unified?.()?.nativePatch(actor, { origin: 'server', nativeId: id }, p);
           json(200, { conversation: listConversations().find((c) => c.id === id) });
           return true;
         }
         if (method === 'DELETE') {
+          if (cleaningHelpers.has(`${actor.id}:${id}`))
+            throw fail(409, '临时对话正在清理，请稍后再操作。');
+          const manager = options.unified?.(),
+            ref = { origin: 'server', nativeId: id };
+          const managed = manager?.forNative(actor.id, ref);
+          if (managed && !manager.deleting(actor.id, ref)) {
+            json(200, await manager.remove(actor, managed.id));
+            return true;
+          }
+          manager?.assertNativeDelete(actor.id, ref);
           if (
             store.db
               .prepare(
@@ -1563,6 +2222,7 @@ export function createCommunity(store, { token, body, options = {} }) {
             .prepare('DELETE FROM pi_tasks WHERE owner=? AND conversation_id=?')
             .run(actor.id, id);
           await chatFiles.removeConversation(actor.id, id);
+          options.unified?.()?.nativeDeleted(actor.id, { origin: 'server', nativeId: id });
           json(200, { ok: true });
           return true;
         }
@@ -1582,6 +2242,13 @@ export function createCommunity(store, { token, body, options = {} }) {
           })
           .strict()
           .parse(await body(req));
+        if (
+          cleaningHelpers.has(`${actor.id}:${p.conversationId}`) ||
+          store.db
+            .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+            .get(actor.id, p.conversationId)
+        )
+          throw fail(409, '临时对话已关闭或正在清理，请重新打开后发送。');
         const runtime = runtimeBindings.assert(
           actor.id,
           'server',
@@ -1611,6 +2278,9 @@ export function createCommunity(store, { token, body, options = {} }) {
           json(200, { turns: accounts.piHistory(actor.id, p.conversationId) });
           return true;
         }
+        options
+          .unified?.()
+          ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
         if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
         if (tasks.live(actor.id, p.conversationId).length)
           throw fail(409, '请等待当前任务和队列完成。');
@@ -1631,15 +2301,30 @@ export function createCommunity(store, { token, body, options = {} }) {
         }
         limit(`pi:${actor.id}`, 5);
         limit('pi:global', 10);
-        const history = accounts.piTranscript(actor.id, p.conversationId);
+        const history = [
+          ...((await options
+            .unified?.()
+            ?.handoff(actor.id, { origin: 'server', nativeId: p.conversationId })) || []),
+          ...accounts.piTranscript(actor.id, p.conversationId),
+        ];
         const attachments = chatFiles.selected(actor.id, p.conversationId, p.attachments);
         const availableFiles = chatFiles.modelFiles(actor.id, p.conversationId, p.attachments);
+        if (
+          cleaningHelpers.has(`${actor.id}:${p.conversationId}`) ||
+          store.db
+            .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+            .get(actor.id, p.conversationId)
+        )
+          throw fail(409, '临时对话已关闭或正在清理，请重新打开后发送。');
         if (
           activePi.has(`${actor.id}:${p.conversationId}`) ||
           activePi.size >= concurrency ||
           activeFor(actor.id) >= limits.maxConcurrentPerUser
         )
           throw fail(429, '此对话正在执行或并发名额已满，请使用任务队列。');
+        options
+          .unified?.()
+          ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
         runtimeBindings.bind(actor.id, 'server', p.conversationId, runtime);
         activePi.add(`${actor.id}:${p.conversationId}`);
         if (p.projectId) accounts.reservePiJob(actor.id, p);

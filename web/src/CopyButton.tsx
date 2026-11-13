@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { assistantCopyText } from '../../shared/assistant-artifacts.mjs';
 
-export function CopyButton({ text, label = '复制内容' }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label = '复制内容',
+  assistant = false,
+}: {
+  text: string;
+  label?: string;
+  assistant?: boolean;
+}) {
   const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -12,11 +21,12 @@ export function CopyButton({ text, label = '复制内容' }: { text: string; lab
   );
   async function copy() {
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      const content = assistant ? assistantCopyText(text) : text;
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(content);
       else {
         const focused = document.activeElement as HTMLElement | null;
         const area = document.createElement('textarea');
-        area.value = text;
+        area.value = content;
         area.style.cssText = 'position:fixed;opacity:0;left:-9999px';
         document.body.append(area);
         try {

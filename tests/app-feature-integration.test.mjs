@@ -198,6 +198,32 @@ test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate acc
     404,
   );
   assert.equal((await f.invoke('assistant.runtime', { backend: 'dsh' })).status, 400);
+  const unified = await f.invoke('assistant.conversations');
+  const current = unified.result.conversations.find((c) =>
+    c.segments.some((s) => s.nativeId === f.conversation),
+  );
+  assert.ok(current, 'unified conversation tools share the actual main-chat index');
+  assert.equal(current.active.runtime.backend, 'pi');
+  const renamed = await f.invoke('assistant.conversation_update', {
+    id: current.id,
+    title: '工具重命名',
+    pinned: true,
+  });
+  assert.equal(renamed.state, 'done');
+  assert.equal(renamed.result.title, '工具重命名');
+  assert.ok(renamed.result.pinnedAt);
+  assert.equal(
+    (await f.invoke('assistant.conversation_update', { id: current.id, backend: 'dsh' })).status,
+    400,
+  );
+  assert.equal(
+    (await f.invoke('assistant.conversation_update', { id: randomUUID(), title: '其他账号' }))
+      .status,
+    404,
+  );
+  const otherDirectory = await f.req('/assistant/conversations', undefined, f.other.token);
+  assert.ok(!otherDirectory.conversations.some((c) => c.id === current.id));
+
   assert.equal((await f.req('/app-functions/requests?taskId=' + f.task)).status, 401);
   assert.equal((await f.tool({ action: 'catalog' }, 'not-a-capability')).status, 403);
   assert.ok(
@@ -364,5 +390,44 @@ test('learning generation from ordinary chat persists real service results, enfo
       })
     ).result.attempt.score,
     100,
+  );
+});
+
+test('temporary side-chat retention tool reuses scoped preferences without opening or replaying a helper', async (t) => {
+  const f = await fixture(t);
+  const other = randomUUID(),
+    stamp = new Date().toISOString();
+  f.store.db
+    .prepare(
+      'INSERT INTO pi_conversations(owner,id,project_id,access,created_at,updated_at) VALUES(?,?,NULL,?,?,?)',
+    )
+    .run(f.other.user.id, other, 'read', stamp, stamp);
+  const source = { origin: 'server', id: f.conversation };
+  const before = f.store.db.prepare('SELECT count(*) n FROM pi_tasks').get().n;
+  const read = await f.invoke('assistant.temporary_preferences', { source });
+  assert.equal(read.state, 'done');
+  assert.equal(read.result.ttlHours, 1);
+  const changed = await f.invoke('assistant.temporary_preferences', { source, ttlHours: 24 });
+  assert.equal(changed.result.ttlHours, 24);
+  assert.equal(
+    (await f.invoke('assistant.temporary_preferences', { source, ttlHours: 2 })).status,
+    400,
+  );
+  assert.equal(
+    (
+      await f.invoke('assistant.temporary_preferences', {
+        source: { origin: 'server', id: other },
+        ttlHours: 6,
+      })
+    ).status,
+    404,
+  );
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM pi_tasks').get().n, before);
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM pi_assistance_parents').get().n, 0);
+  await f.req('/pi/tasks/' + f.task, undefined, f.owner.token, 'DELETE');
+  assert.ok(
+    [403, 409].includes(
+      (await f.invoke('assistant.temporary_preferences', { source, ttlHours: 6 })).status,
+    ),
   );
 });

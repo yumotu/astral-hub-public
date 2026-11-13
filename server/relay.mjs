@@ -114,6 +114,7 @@ export function createRelay(db, { body, config, options = {} }) {
     draftComputerPlugin: options.draftComputerPlugin,
     onlinePackages: options.onlinePackages,
     appFunctions: options.appFunctions,
+    unified: options.unified,
   });
   const leaseTimer = setInterval(() => {
     sweep();
@@ -128,6 +129,7 @@ export function createRelay(db, { body, config, options = {} }) {
     return j;
   }
   return {
+    unified: workspace.computer.unified,
     schedule: (run) => workspace.computer.schedule(run),
     async before(req, url, res, json) {
       const path = url.pathname;

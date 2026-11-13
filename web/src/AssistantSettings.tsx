@@ -40,7 +40,11 @@ export function AssistantSettings({
   useEffect(() => {
     if (!open) return;
     const dismiss = (e: PointerEvent) => {
-      if (e.target instanceof Element && e.target.closest('.assistant-modal-backdrop')) return;
+      if (
+        e.target instanceof Element &&
+        e.target.closest('.assistant-modal-backdrop,.pi-management-backdrop')
+      )
+        return;
       if (!root.current?.contains(e.target as Node) && !panel.current?.contains(e.target as Node))
         setOpen(false);
     };

@@ -13,6 +13,7 @@ COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/server ./server
 COPY --from=build --chown=node:node /app/shared ./shared
 COPY --from=build --chown=node:node /app/deploy/pi/concurrency.mjs ./deploy/pi/concurrency.mjs
+COPY --from=build --chown=node:node /app/deploy/pi/assistant-artifacts.mjs ./deploy/pi/assistant-artifacts.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/attachment-limits.mjs ./deploy/pi/attachment-limits.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/activity-deadline.mjs ./deploy/pi/activity-deadline.mjs
 COPY --from=build --chown=node:node /app/deploy/pi/long-goal-command.mjs ./deploy/pi/long-goal-command.mjs
