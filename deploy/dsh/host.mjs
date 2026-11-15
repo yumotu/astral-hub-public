@@ -200,7 +200,7 @@ try {
     .digest('hex')
     .toUpperCase();
   const proof = {
-    version: '0.8.14',
+    version: '0.8.15',
     revision: 'dsh4',
     fileBridgeVersion: 1,
     workbenchVersion: 1,

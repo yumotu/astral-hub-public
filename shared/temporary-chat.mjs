@@ -4,21 +4,29 @@ export const temporaryChatDraftKey = (server, owner, conversation) =>
 export const temporaryChatHours = [1, 6, 24, 168];
 export function saveTemporaryDraft(storage, key, input, expiresAt) {
   try {
-    if (!input || (expiresAt !== null && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())))
+    // The local deadline is only a hint. Native cleanup can fail or another
+    // device can renew the session; only confirmed expired IDs remove a draft.
+    if (
+      typeof input !== 'string' ||
+      !input ||
+      input.length > 1800 ||
+      (expiresAt !== null && !Number.isFinite(expiresAt))
+    )
       storage.removeItem(key);
     else storage.setItem(key, JSON.stringify({ input, expiresAt }));
   } catch {
     /* The composer remains usable when window storage is unavailable. */
   }
 }
-export function readTemporaryDraft(storage, key, now = Date.now()) {
+export function readTemporaryDraft(storage, key, _now = Date.now()) {
   try {
     const value = JSON.parse(storage.getItem(key) || 'null');
     if (
       !value ||
       typeof value.input !== 'string' ||
+      !value.input ||
       value.input.length > 1800 ||
-      (value.expiresAt !== null && (!Number.isFinite(value.expiresAt) || value.expiresAt <= now))
+      (value.expiresAt !== null && !Number.isFinite(value.expiresAt))
     ) {
       storage.removeItem(key);
       return '';

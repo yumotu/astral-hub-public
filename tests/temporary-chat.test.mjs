@@ -18,7 +18,7 @@ function disk() {
     removeItem: (k) => m.delete(k),
   };
 }
-test('side drafts expire without loading stale input and clear only the current server/account', () => {
+test('only server-confirmed expiry clears valid drafts in the current server/account', () => {
   const s = disk(),
     now = Date.now(),
     a = key('server', 'alice', 'a'),
@@ -33,8 +33,10 @@ test('side drafts expire without loading stale input and clear only the current 
   assert.equal(read(s, other, now), 'draft');
   assert.equal(read(s, remote, now), 'draft');
   clear(s, 'server', 'alice', [], now + 20000);
-  assert.equal(s.getItem(b), null);
+  assert.equal(read(s, b, now + 20000), 'draft');
   assert.notEqual(s.getItem(other), null);
+  clear(s, 'server', 'alice', ['b'], now + 20000);
+  assert.equal(s.getItem(b), null);
 });
 test('retained draft can persist, malformed legacy content is discarded, and blocked storage cannot block typing', () => {
   const s = disk(),
@@ -44,8 +46,21 @@ test('retained draft can persist, malformed legacy content is discarded, and blo
   s.setItem(k, 'legacy plaintext');
   assert.equal(read(s, k), '');
   assert.equal(s.getItem(k), null);
-  save(s, k, 'remove', Date.now() - 1);
-  assert.equal(s.getItem(k), null);
+  for (const [input, expiry] of [
+    ['', null],
+    [42, null],
+    ['x'.repeat(1801), null],
+    ['invalid deadline', Number.NaN],
+    ['invalid deadline', 'later'],
+  ]) {
+    save(s, k, input, expiry);
+    assert.equal(s.getItem(k), null);
+  }
+  for (const value of [{ input: '', expiresAt: null }, { input: 'bad', expiresAt: 'later' }]) {
+    s.setItem(k, JSON.stringify(value));
+    assert.equal(read(s, k), '');
+    assert.equal(s.getItem(k), null);
+  }
   const unavailable = {
     getItem() {
       throw Error('blocked');
@@ -59,6 +74,43 @@ test('retained draft can persist, malformed legacy content is discarded, and blo
   };
   assert.doesNotThrow(() => save(unavailable, k, 'a', null));
   assert.equal(read(unavailable, k), '');
+});
+test('editing after native expiry cleanup fails preserves the latest unsent draft for reopen', () => {
+  const s = disk(),
+    now = Date.now(),
+    k = key('server', 'alice', 'native-cleanup-503');
+  save(s, k, 'before native cleanup failed', now - 1000);
+  assert.equal(read(s, k, now), 'before native cleanup failed');
+  save(s, k, 'continued editing after 503', now - 1000);
+  assert.equal(read(s, k, now + 1000), 'continued editing after 503');
+  assert.equal(JSON.parse(s.getItem(k)).expiresAt, now - 1000);
+  clear(s, 'server', 'alice', [], now + 2000);
+  assert.equal(read(s, k, now + 2000), 'continued editing after 503');
+  clear(s, 'server', 'alice', ['native-cleanup-503'], now + 3000);
+  assert.equal(s.getItem(k), null);
+});
+test('opening another main chat cannot remove an overdue draft awaiting native acknowledgement', () => {
+  const s = disk(),
+    now = Date.now(),
+    a = key('server', 'alice', 'main-a-helper'),
+    b = key('server', 'alice', 'main-b-helper');
+  save(s, a, 'main A unsent', now - 1000);
+  save(s, b, 'main B unsent', now - 1000);
+  clear(s, 'server', 'alice', [], now, {
+    conversationId: 'main-b-helper',
+    expiresAt: now + 10000,
+  });
+  assert.equal(read(s, a, now), 'main A unsent');
+  assert.equal(read(s, b, now), 'main B unsent');
+  clear(s, 'server', 'alice', [], now + 20000, {
+    conversationId: 'main-a-helper',
+    expiresAt: now + 30000,
+  });
+  assert.equal(read(s, a, now + 20000), 'main A unsent');
+  assert.equal(read(s, b, now + 20000), 'main B unsent');
+  clear(s, 'server', 'alice', ['main-b-helper'], now + 20000);
+  assert.equal(read(s, a, now + 20000), 'main A unsent');
+  assert.equal(s.getItem(b), null);
 });
 test('server-confirmed live session renews a stale local draft before cleanup, but explicit expiry wins', () => {
   const s = disk(),
