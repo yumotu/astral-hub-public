@@ -129,10 +129,10 @@ public class MobileNavigationTest {
             await(scenario, "!!document.querySelector('.sidebar.open')");
             back(scenario); await(scenario, "!document.querySelector('.sidebar.open')");
             js(scenario, "window.__qaTouch('touchstart',160,180,'.pi-message-area');window.__qaTouch('touchmove',60,182,'.pi-message-area');window.__qaTouch('touchend',60,182,'.pi-message-area');true");
-            await(scenario, "!!document.querySelector('#pi-project-navigation.is-open')");
-            back(scenario); await(scenario, "!document.querySelector('#pi-project-navigation.is-open')");
+            await(scenario, "!!document.querySelector('.project-conversation-list.is-open')");
+            back(scenario); await(scenario, "!document.querySelector('.project-conversation-list.is-open')");
             js(scenario, "window.__qaTouch('touchstart',160,180,'.pi-message-area');window.__qaTouch('touchmove',165,300,'.pi-message-area');window.__qaTouch('touchend',165,300,'.pi-message-area');true");
-            assertTrue("Vertical content scroll opened a drawer", "true".equals(js(scenario,"!document.querySelector('.sidebar.open,#pi-project-navigation.is-open')")));
+            assertTrue("Vertical content scroll opened a drawer", "true".equals(js(scenario,"!document.querySelector('.sidebar.open,.project-conversation-list.is-open')")));
             System.out.println("Astral synthetic touch integration: follow, cancel, settle, reserved OS edge");
             } finally {
                 js(scenario, "sessionStorage.removeItem('astral.account');localStorage.removeItem('astral.settings');true");

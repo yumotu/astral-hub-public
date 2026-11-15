@@ -144,7 +144,7 @@ export function MobilePanelsProvider({ children }: { children: ReactNode }) {
         }
         start.locked = side as Panel;
         const element = document.querySelector(
-          side === 'workspace' ? '.sidebar' : '#pi-project-navigation',
+          side === 'workspace' ? '.sidebar' : '.project-conversation-list',
         );
         start.size =
           element?.getBoundingClientRect().width ||
