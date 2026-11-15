@@ -9,7 +9,7 @@ import { createRemoteIdentity, remoteFingerprint } from '../server/dsh-remote-cl
 
 // These tests exercise actual HTTP/auth/native admission routes. The Pi bridge
 // and Remote host are deterministic protocol fixtures, not real model runs.
-async function fixture(t) {
+async function fixture(t, { location = 'computer' } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'astral-unified-api-'));
   const admin = 'synthetic-unified-admin-token-1234567890';
   const peer = createRemoteIdentity();
@@ -224,7 +224,7 @@ async function fixture(t) {
         {
           deviceId: peer.deviceId,
           fingerprint: remoteFingerprint(peer.publicKey),
-          location: 'computer',
+          location,
         },
         owner.token,
       )
@@ -242,6 +242,7 @@ async function fixture(t) {
     prompts,
     creates,
     connectionId,
+    remoteDeviceId: peer.deviceId,
     piTarget: { origin: 'server', projectId: 'workspace' },
     dshTarget: { origin: 'remote', projectId: 'work', connectionId },
     holdPi() {
@@ -285,6 +286,85 @@ async function submitPi(f, conversation, input) {
   assert.equal(result.status, 202, JSON.stringify(result.body));
   return id;
 }
+
+for (const location of ['server', 'computer'])
+  test(`unified target directory preserves ${location} DSH location and distinct same-name computer identities without private metadata`, async (t) => {
+    const f = await fixture(t, { location });
+    const projectId = randomUUID(),
+      first = randomUUID(),
+      second = randomUUID(),
+      now = Date.now();
+    const insertDevice = f.app.store.db.prepare(
+      'INSERT INTO relay_devices(id,owner,name,platform,root_label,allow_write,token_hash,expires,last_seen,created_at,capabilities) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+    );
+    for (const [id, owner, lastSeen] of [
+      [first, f.owner.user.id, now],
+      [second, f.owner.user.id, now],
+      [randomUUID(), f.other.user.id, now],
+      [randomUUID(), f.owner.user.id, now - 60000],
+    ]) {
+      insertDevice.run(
+        id,
+        owner,
+        'Same computer name',
+        'linux',
+        '/private/relay-root',
+        1,
+        randomUUID(),
+        now + 600000,
+        lastSeen,
+        new Date(now).toISOString(),
+        '["conversation_handoff_v1"]',
+      );
+      f.app.store.db
+        .prepare('INSERT INTO relay_projects VALUES(?,?,?,?,?,?)')
+        .run(id, projectId, 'Same project name', 1, 1, 0);
+    }
+    const result = await f.own('/assistant/conversations');
+    assert.equal(result.status, 200);
+    const targets = result.body.targets;
+    assert.equal(targets.filter((target) => target.origin === 'server').length, 2);
+    assert.ok(
+      targets
+        .filter((target) => target.origin === 'server')
+        .every((target) => target.location === 'server'),
+    );
+    assert.deepEqual(
+      targets
+        .filter((target) => target.origin === 'computer')
+        .sort((a, b) => a.deviceId.localeCompare(b.deviceId)),
+      [first, second].sort().map((id) => ({
+        origin: 'computer',
+        deviceId: id,
+        location: 'computer',
+        hostId: id,
+        projectId,
+        locationName: 'Same computer name',
+        projectName: 'Same project name',
+      })),
+    );
+    assert.deepEqual(
+      targets.filter((target) => target.origin === 'remote'),
+      [
+        {
+          origin: 'remote',
+          connectionId: f.connectionId,
+          location,
+          hostId: f.remoteDeviceId,
+          projectId: 'work',
+          locationName: 'Synthetic DSH computer',
+          projectName: 'DSH project',
+        },
+      ],
+    );
+    assert.doesNotMatch(
+      JSON.stringify(targets),
+      /private|synthetic-access|synthetic-web|token_hash/,
+    );
+    assert.deepEqual(f.piRuns, []);
+    assert.deepEqual(f.prompts, []);
+    assert.deepEqual(f.creates, []);
+  });
 
 test('unified HTTP directory preserves ownership, defaults, immutable segments and Pi → DSH → Pi visible context without replay', async (t) => {
   const f = await fixture(t);

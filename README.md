@@ -1,6 +1,6 @@
-# Astral Hub 0.8.15
+# Astral Hub 0.8.15.r1
 
-Unified Pi/computer/DSH conversations, per-conversation engine selection, bounded visible context for temporary chats and unframed replies with explicit writing cards. [Release notes](docs/release-0.8.15.md); publication status is determined by the matching Release and successful signing workflow.
+Server/computer → project folders → conversations, with unified Pi/DPH navigation, full-title search and responsive layouts. Installer/update version **0.8.16** (Android code60) identifies this same revision for compatibility. [Release notes](docs/release-0.8.16.md); publication status is determined by the matching Release and successful signing workflow.
 
 # 星屿 Astral Hub
 

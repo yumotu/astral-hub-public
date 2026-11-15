@@ -6,14 +6,19 @@ import { execFileSync } from 'node:child_process';
 import { expectedReleaseAssets, checksumManifest } from '../shared/release-assets.mjs';
 import { macosVerification, requiresMacVerification } from '../shared/macos-verification.mjs';
 import { newerVersion } from '../shared/app-updates.mjs';
-import { androidVerification, requiresAndroidVerification } from '../shared/android-release-verification.mjs';
+import {
+  androidVerification,
+  requiresAndroidVerification,
+} from '../shared/android-release-verification.mjs';
 
 export async function prepareRelease({
   root = process.cwd(),
   commit,
   run = process.env.GITHUB_RUN_ID || null,
 } = {}) {
-  const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const { version, releaseName = version } = JSON.parse(
+    await readFile(join(root, 'package.json'), 'utf8'),
+  );
   commit ||= execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const output = join(root, 'release/publish');
   await rm(output, { recursive: true, force: true });
@@ -56,7 +61,8 @@ export async function prepareRelease({
   const macos =
     modern || macReport ? macosVerification(macReport, { version, commit, files: hashes }) : null;
   const android = requiresAndroidVerification(version)
-    ? androidVerification(androidReport, { version, commit, files: hashes }) : null;
+    ? androidVerification(androidReport, { version, commit, files: hashes })
+    : null;
   await writeFile(join(output, 'SHA256SUMS.txt'), checksumManifest(hashes));
   const lf = String.fromCharCode(10);
   await writeFile(
@@ -64,6 +70,7 @@ export async function prepareRelease({
     JSON.stringify(
       {
         version,
+        releaseName,
         commit,
         run,
         platforms: ['mac-arm64', 'mac-x64', 'win-x64', 'android-debug', 'web'],
@@ -88,7 +95,18 @@ export async function prepareRelease({
   await writeFile(
     join(root, 'release/release-notes.md'),
     [
-      ...(['0.8.7', '0.8.8', '0.8.9', '0.8.10', '0.8.11', '0.8.12', '0.8.13', '0.8.14', '0.8.15'].includes(version)
+      ...([
+        '0.8.7',
+        '0.8.8',
+        '0.8.9',
+        '0.8.10',
+        '0.8.11',
+        '0.8.12',
+        '0.8.13',
+        '0.8.14',
+        '0.8.15',
+        '0.8.16',
+      ].includes(version)
         ? [await readFile(join(root, `docs/release-${version}.md`), 'utf8')]
         : version === '0.8.5'
           ? [
@@ -113,9 +131,15 @@ export async function prepareRelease({
         : 'macOS 使用临时签名；仅验证资源签名完整性，Gatekeeper仍可能拒绝，Apple Developer ID／公证延期。') +
         'Windows 未签名，Android 使用保留的调试签名。实际设备验收以交接记录为准。',
       '源码提交：`' + commit + '`；标签：`v' + version + '`。',
-      (process.env.GITHUB_REPOSITORY
-        ? '[发行说明](https://github.com/' + process.env.GITHUB_REPOSITORY + '/blob/v' + version + '/docs/release-' + version + '.md)'
-        : '发行说明位于当前公开仓库 docs/release-' + version + '.md。'),
+      process.env.GITHUB_REPOSITORY
+        ? '[发行说明](https://github.com/' +
+          process.env.GITHUB_REPOSITORY +
+          '/blob/v' +
+          version +
+          '/docs/release-' +
+          version +
+          '.md)'
+        : '发行说明位于当前公开仓库 docs/release-' + version + '.md。',
     ].join(lf + lf) + lf,
   );
   console.log({ version, commit, assets: collected.map((file) => basename(file)) });

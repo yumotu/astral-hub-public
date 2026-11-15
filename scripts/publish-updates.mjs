@@ -4,7 +4,10 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { updateManifestSchema, newerVersion } from '../shared/app-updates.mjs';
 import { trustedMacDistribution } from '../shared/macos-verification.mjs';
-import { androidVerification, requiresAndroidVerification } from '../shared/android-release-verification.mjs';
+import {
+  androidVerification,
+  requiresAndroidVerification,
+} from '../shared/android-release-verification.mjs';
 export async function publishUpdates(from, to) {
   const info = JSON.parse(await readFile(join(from, 'build-info.json'), 'utf8'));
   const modern = info.version === '0.8.0' || newerVersion(info.version, '0.8.0');
@@ -48,18 +51,26 @@ export async function publishUpdates(from, to) {
     assets.push({ name, platform, bytes, sha256 });
   }
   if (requiresAndroidVerification(info.version))
-    androidVerification(info.androidVerification, { version: info.version, commit: info.commit, files: assets });
+    androidVerification(info.androidVerification, {
+      version: info.version,
+      commit: info.commit,
+      files: assets,
+    });
   const manifest = updateManifestSchema.parse({
     version: info.version,
     commit: info.commit,
     generatedAt: new Date().toISOString(),
-    notes: modern
-      ? '已通过网页、macOS、Windows、Android 原生构建和 Pi 容器检查；' +
-        (signedMac
-          ? 'macOS 已验证 Developer ID、公证票据和 Gatekeeper，'
-          : 'macOS 未确认 Apple 正式签名／公证，') +
-        'Android 使用调试签名。'
-      : '已通过网页、macOS、Windows、Android 原生构建；桌面未签名，Android 使用调试签名。',
+    notes:
+      (info.releaseName && info.releaseName !== info.version
+        ? `${info.releaseName}（安装版本 ${info.version}）。`
+        : '') +
+      (modern
+        ? '已通过网页、macOS、Windows、Android 原生构建和 Pi 容器检查；' +
+          (signedMac
+            ? 'macOS 已验证 Developer ID、公证票据和 Gatekeeper，'
+            : 'macOS 未确认 Apple 正式签名／公证，') +
+          'Android 使用调试签名。'
+        : '已通过网页、macOS、Windows、Android 原生构建；桌面未签名，Android 使用调试签名。'),
     assets,
   });
   const dir = join(to, manifest.version);

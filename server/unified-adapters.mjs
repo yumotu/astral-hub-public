@@ -68,10 +68,17 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
       try {
         const { projects } = await community.unified.projects(actor);
         items.push(
-          { origin: 'server', projectId: null, locationName: '服务器', projectName: '独立对话' },
+          {
+            origin: 'server',
+            projectId: null,
+            location: 'server',
+            locationName: '服务器',
+            projectName: '独立对话',
+          },
           ...projects.map((p) => ({
             origin: 'server',
             projectId: p.id,
+            location: 'server',
             locationName: '服务器',
             projectName: p.displayName || p.name || p.id,
           })),
@@ -94,6 +101,8 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
         items.push({
           origin: 'computer',
           deviceId: d.id,
+          location: 'computer',
+          hostId: d.id,
           projectId: p.id,
           locationName: d.name,
           projectName: p.name,
@@ -106,6 +115,8 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
           return catalogue.workspaces.map((w) => ({
             origin: 'remote',
             connectionId: c.id,
+            location: catalogue.host.location,
+            hostId: catalogue.host.deviceId,
             projectId: w.id,
             locationName: catalogue.host.name,
             projectName: w.name,

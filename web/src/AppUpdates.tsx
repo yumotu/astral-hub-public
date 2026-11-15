@@ -68,16 +68,18 @@ export function AppUpdates({ settings }: { settings: Settings }) {
     try {
       const [result, health] = await Promise.all([
         api<{ release: Release | null }>(settings, '/updates'),
-        api<{ version: string }>(settings, '/health'),
+        api<{ version: string; releaseName?: string }>(settings, '/health'),
       ]);
       if (!mounted.current) return;
       setRelease(result.release ? updateManifestSchema.parse(result.release) : null);
-      setWebVersion(health.version);
+      setWebVersion(health.releaseName || health.version);
       setMessage(
         result.release
           ? newerVersion(result.release.version, appPackage.version)
             ? `发现新版本 ${result.release.version}`
-            : native ? '当前已是最新版本。' : `可下载 ${result.release.version} 的各平台客户端。`
+            : native
+              ? '当前已是最新版本。'
+              : `可下载 ${result.release.version} 的各平台客户端。`
           : '服务器正在准备原生安装包，网页可直接刷新加载服务器版本。',
       );
     } catch (e) {
@@ -143,7 +145,9 @@ export function AppUpdates({ settings }: { settings: Settings }) {
       <div className="section-title">
         <PackageCheck size={21} />
         <h2>软件更新</h2>
-        <span className="tag">当前 {appPackage.version}</span>
+        <span className="tag">
+          当前 {appPackage.releaseName || appPackage.version}（安装版本 {appPackage.version}）
+        </span>
       </div>
       <p className="field-help">
         在软件中检查、下载更新。安装包通过完整平台编译后提供，并核对 SHA-256；安装仍由你确认。

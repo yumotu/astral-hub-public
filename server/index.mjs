@@ -548,7 +548,12 @@ export async function createApp(options = {}) {
       }
       try {
         if (url.pathname === '/api/health' && req.method === 'GET') {
-          json(200, { ok: true, service: 'astral-hub', version: appPackage.version });
+          json(200, {
+            ok: true,
+            service: 'astral-hub',
+            version: appPackage.version,
+            releaseName: appPackage.releaseName || appPackage.version,
+          });
           return;
         }
         if (url.pathname.startsWith('/api/')) {

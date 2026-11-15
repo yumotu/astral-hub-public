@@ -111,10 +111,15 @@ test('private update service requires login, issues limited download tickets and
   );
   await assert.rejects(publishUpdates(from, root), /全部原生 CI/);
   const verified = JSON.parse(await readFile(join(from, 'build-info.json'), 'utf8'));
+  verified.releaseName = '1.0.0.r1';
   verified.verifiedJobs.push('pi-runtime');
   await writeFile(join(from, 'build-info.json'), JSON.stringify(verified));
   await assert.rejects(publishUpdates(from, root), /全部原生 CI/);
-  verified.verifiedJobs.push('computer-runtime-linux','computer-runtime-macOS','computer-runtime-Windows');
+  verified.verifiedJobs.push(
+    'computer-runtime-linux',
+    'computer-runtime-macOS',
+    'computer-runtime-Windows',
+  );
   await writeFile(join(from, 'build-info.json'), JSON.stringify(verified));
   await assert.rejects(publishUpdates(from, root), /全部原生 CI/);
   verified.verifiedJobs.push('source-audit', 'android-sign');
@@ -126,10 +131,17 @@ test('private update service requires login, issues limited download tickets and
     integrity: true,
     certificateSha256: 'b'.repeat(64),
     schemes: ['v2', 'v3'],
-    apkSha256: createHash('sha256').update(await readFile(join(from, 'Astral-Hub-1.0.0-android-debug.apk'))).digest('hex'),
+    apkSha256: createHash('sha256')
+      .update(await readFile(join(from, 'Astral-Hub-1.0.0-android-debug.apk')))
+      .digest('hex'),
   };
   await writeFile(join(from, 'build-info.json'), JSON.stringify(verified));
   await publishUpdates(from, root);
+  const published = updateManifestSchema.parse(
+    JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')),
+  );
+  assert.equal(published.version, '1.0.0');
+  assert.match(published.notes, /^1\.0\.0\.r1（安装版本 1\.0\.0）。/);
   const app = await createApp({
     dataDir: join(dir, 'data'),
     updatesDir: root,
@@ -181,9 +193,9 @@ test('private update service requires login, issues limited download tickets and
 test('web can download the current client release while installed clients offer only newer updates', async () => {
   const { downloadableRelease } = await import('../shared/app-downloads.mjs');
   assert.equal(downloadableRelease(null, '0.8.9', false), false);
-  assert.equal(downloadableRelease({version:'0.8.9'}, '0.8.9', false), true);
-  assert.equal(downloadableRelease({version:'0.8.8'}, '0.8.9', false), true);
-  assert.equal(downloadableRelease({version:'0.8.9'}, '0.8.9', true), false);
-  assert.equal(downloadableRelease({version:'0.8.8'}, '0.8.9', true), false);
-  assert.equal(downloadableRelease({version:'0.8.10'}, '0.8.9', true), true);
+  assert.equal(downloadableRelease({ version: '0.8.9' }, '0.8.9', false), true);
+  assert.equal(downloadableRelease({ version: '0.8.8' }, '0.8.9', false), true);
+  assert.equal(downloadableRelease({ version: '0.8.9' }, '0.8.9', true), false);
+  assert.equal(downloadableRelease({ version: '0.8.8' }, '0.8.9', true), false);
+  assert.equal(downloadableRelease({ version: '0.8.10' }, '0.8.9', true), true);
 });

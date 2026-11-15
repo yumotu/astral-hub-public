@@ -5,9 +5,23 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
-import { Archive, ChevronDown, Monitor, Plus, RefreshCw, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Archive,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  Monitor,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Search,
+  Server,
+  X,
+} from 'lucide-react';
 import { api, dateLabel } from './data';
 import { useMobilePanels } from './MobilePanels';
 import {
@@ -58,6 +72,8 @@ export type ConversationTarget = {
   connectionId?: string;
   label?: string;
   locationName?: string;
+  location?: 'server' | 'computer';
+  hostId?: string;
   projectName?: string;
 };
 type Selection = { origin: NativeConversationRef['origin']; nativeId: string };
@@ -104,6 +120,18 @@ const targetBody = ({ origin, projectId, deviceId, connectionId }: ConversationT
   ...(deviceId ? { deviceId } : {}),
   ...(connectionId ? { connectionId } : {}),
 });
+
+function toggleNavigationBranch(
+  event: MouseEvent<HTMLDetailsElement>,
+  update: (expanded: boolean) => void,
+) {
+  // Keep React as the owner of `open`. Native toggles are asynchronous and can
+  // otherwise leave a just-collapsed branch closed when search forces it open.
+  const summary = (event.target as Element).closest('summary');
+  if (event.defaultPrevented || summary?.parentElement !== event.currentTarget) return;
+  event.preventDefault();
+  update(!event.currentTarget.open);
+}
 
 export function UnifiedConversationsProvider({
   settings,
@@ -516,8 +544,15 @@ export function UnifiedConversationNavigation({
   const [deleting, setDeleting] = useState<UnifiedConversation | null>(null);
   const [error, setError] = useState('');
   const [newTarget, setNewTarget] = useState<ConversationTarget | undefined>();
+  const [query, setQuery] = useState('');
+  const [projectExpansion, setProjectExpansion] = useState<Record<string, boolean>>({});
+  const [locationExpansion, setLocationExpansion] = useState<Record<string, boolean>>({});
+  const more = useRef<HTMLDetailsElement>(null);
   const open = displayPanel === 'conversations';
   const visible = visibleConversations(model.conversations, archived);
+  const search = query.trim().toLocaleLowerCase();
+  const selected = (c: UnifiedConversation) =>
+    model.selected?.origin === c.active.origin && model.selected.nativeId === c.active.nativeId;
   type Group = {
     title: string;
     target: ConversationTarget;
@@ -539,6 +574,8 @@ export function UnifiedConversationNavigation({
     const target = model.targets.find((t) => matchesRuntime(t, first)) || {
       origin: first.origin,
       projectId: runtime.projectId,
+      location: runtime.location,
+      ...(runtime.deviceId ? { hostId: runtime.deviceId } : {}),
       ...(runtime.deviceId && first.origin === 'computer' ? { deviceId: runtime.deviceId } : {}),
       ...(runtime.connectionId ? { connectionId: runtime.connectionId } : {}),
     };
@@ -551,6 +588,73 @@ export function UnifiedConversationNavigation({
         available: model.targets.some((t) => projectKey(t) === key),
       });
     groups.get(key)!.items.push(c);
+  }
+  const matches = (group: Group, c?: UnifiedConversation) =>
+    !search ||
+    [c?.title, group.title, model.projectName(group.target)]
+      .filter(Boolean)
+      .some((value) => value!.toLocaleLowerCase().includes(search));
+  const filteredGroups = [...groups]
+    .map(([key, group]) => ({
+      key,
+      ...group,
+      items: group.items.filter((c) => matches(group, c)),
+    }))
+    .filter((group) => group.items.length || (group.target.projectId && matches(group)));
+  const locations = new Map<
+    string,
+    { title: string; server: boolean; groups: typeof filteredGroups }
+  >();
+  if (
+    !archived &&
+    !search &&
+    model.targets.some((target) => target.origin === 'server' || target.location === 'server')
+  ) {
+    locations.set('server', { title: '服务器', server: true, groups: [] });
+  }
+  for (const group of filteredGroups) {
+    if (!group.target.projectId && !group.items.length) continue;
+    const home = group.items[0]?.segments[0] || group.items[0]?.active;
+    const server =
+      (group.target.location ||
+        home?.runtime.location ||
+        (group.target.origin === 'server' ? 'server' : 'computer')) === 'server';
+    const key = server
+      ? 'server'
+      : JSON.stringify([
+          'computer',
+          group.target.hostId || group.target.deviceId || group.target.connectionId,
+        ]);
+    if (!locations.has(key))
+      locations.set(key, { title: server ? '服务器' : group.title, server, groups: [] });
+    locations.get(key)!.groups.push(group);
+  }
+  function row(c: UnifiedConversation) {
+    return (
+      <ConversationRow
+        key={c.id}
+        conversation={c}
+        selected={selected(c)}
+        disabled={model.busy}
+        choose={() => {
+          model.select(c.active);
+          setPanel(null);
+        }}
+        openMenu={setMenu}
+        detail={
+          <>
+            {c.active.runtime.backend === 'dsh' ? 'DPH' : 'Pi'}
+            {' · '}
+            {c.runState?.busy ? c.runState.label : dateLabel(c.updatedAt)}
+          </>
+        }
+      />
+    );
+  }
+  function showArchive(value: boolean) {
+    setArchived(value);
+    setQuery('');
+    if (more.current) more.current.open = false;
   }
   function sameDirectory(c: UnifiedConversation) {
     const first = c.segments[0] || c.active;
@@ -587,116 +691,192 @@ export function UnifiedConversationNavigation({
             <X size={18} />
           </button>
         </div>
-        <button
-          className="secondary new-conversation"
-          disabled={model.busy}
-          onClick={() => {
-            if (!model.ready && fallbackNew) fallbackNew();
-            else {
-              setNewTarget(undefined);
-              setNewOpen(true);
-            }
-          }}
-        >
-          <Plus size={17} />
-          新对话
-        </button>
-        <div className="project-tree-heading">
-          <h2>{archived ? '已归档' : '全部项目与对话'}</h2>
-          {newProject && (
-            <button className="icon-btn" aria-label="新建服务器项目" onClick={newProject}>
-              <Plus size={16} />
-            </button>
-          )}
+        <div className="unified-navigation-controls">
           <button
-            className="icon-btn"
-            aria-label="刷新项目与对话"
-            onClick={() => void model.refresh().catch((e) => setError(e.message))}
+            className="secondary new-conversation"
+            disabled={model.busy}
+            onClick={() => {
+              if (!model.ready && fallbackNew) fallbackNew();
+              else {
+                setNewTarget(undefined);
+                setNewOpen(true);
+              }
+            }}
           >
-            <RefreshCw size={14} />
+            <Plus size={17} />
+            新对话
           </button>
+          <label className="unified-navigation-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="搜索项目与对话"
+              placeholder="搜索对话或项目"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+              }}
+            />
+          </label>
+          {archived && (
+            <div className="unified-archive-heading">
+              <button className="icon-btn" aria-label="返回对话" onClick={() => showArchive(false)}>
+                <ArrowLeft size={16} />
+              </button>
+              <strong>已归档</strong>
+              <small>{visible.length}</small>
+            </div>
+          )}
         </div>
-        {(error || model.error) && (
-          <p className="error" role="status">
-            {error || model.error}
-          </p>
-        )}
-        {[...groups].map(([key, group]) => (
-          <section key={key} className="unified-location-group">
-            <p className="assistant-device-label">
-              <Monitor size={13} />
-              <span>{group.title}</span>
+        <div className="unified-navigation-content">
+          {(error || model.error) && (
+            <p className="error" role="status">
+              {error || model.error}
             </p>
-            <details className="project-tree" open>
-              {group.target.projectId ? (
-                <ProjectSummary
-                  name={model.projectName(group.target)}
-                  detail={group.items.length || ''}
-                  saveName={(name) => model.renameProject(group.target, name)}
-                  newConversation={() => {
-                    setNewTarget(group.target);
-                    setNewOpen(true);
-                  }}
-                />
-              ) : (
-                <summary>
-                  <span>独立对话</span>
-                  <small>{group.items.length}</small>
-                </summary>
-              )}
-              {!group.available && (
-                <p className="field-help">主机或项目暂不可用，已有记录仍保留。</p>
-              )}
-              <ProjectConversationList>
-                {group.items.map((c) => (
-                  <ConversationRow
-                    key={c.id}
-                    conversation={c}
-                    selected={
-                      model.selected?.origin === c.active.origin &&
-                      model.selected.nativeId === c.active.nativeId
-                    }
-                    disabled={model.busy}
-                    choose={() => {
-                      model.select(c.active);
-                      setPanel(null);
+          )}
+          {[...locations].map(([locationKey, location]) => (
+            <details
+              key={locationKey}
+              className="unified-location-tree"
+              open={
+                !!search ||
+                (locationExpansion[locationKey] ??
+                  (location.server || location.groups.some((group) => group.items.some(selected))))
+              }
+              onClick={(event) =>
+                toggleNavigationBranch(event, (expanded) => {
+                  if (!search) setLocationExpansion((old) => ({ ...old, [locationKey]: expanded }));
+                })
+              }
+            >
+              <summary className="unified-location-heading" title={location.title}>
+                <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
+                {location.server ? <Server size={16} /> : <Monitor size={16} />}
+                <span>{location.title}</span>
+                <small>
+                  {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
+                </small>
+                {location.server && !archived && newProject && (
+                  <button
+                    className="icon-btn"
+                    aria-label="新建服务器项目"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      newProject();
                     }}
-                    openMenu={setMenu}
-                    detail={
-                      <>
-                        {c.active.runtime.backend === 'dsh' ? 'DPH' : 'Pi'} ·{' '}
-                        {c.runState?.busy ? c.runState.label : dateLabel(c.updatedAt)}
-                      </>
+                  >
+                    <Plus size={15} />
+                  </button>
+                )}
+              </summary>
+              <div className="unified-location-projects">
+                {!location.groups.length && <p className="field-help">点击加号创建项目文件夹。</p>}
+                {location.groups.map((group) => (
+                  <details
+                    key={group.key}
+                    className="project-tree"
+                    open={!!search || (projectExpansion[group.key] ?? group.items.some(selected))}
+                    onClick={(event) =>
+                      toggleNavigationBranch(event, (expanded) => {
+                        if (!search)
+                          setProjectExpansion((old) => ({ ...old, [group.key]: expanded }));
+                      })
                     }
-                  />
+                  >
+                    {group.target.projectId ? (
+                      <ProjectSummary
+                        name={model.projectName(group.target)}
+                        detail={group.items.length || ''}
+                        saveName={(name) => model.renameProject(group.target, name)}
+                        newConversation={() => {
+                          setNewTarget(group.target);
+                          setNewOpen(true);
+                        }}
+                      />
+                    ) : (
+                      <summary>
+                        <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
+                        <FolderOpen size={15} />
+                        <span>未分组</span>
+                        <small>{group.items.length}</small>
+                      </summary>
+                    )}
+                    <div className="unified-project-chats">
+                      {!group.available && (
+                        <p className="field-help">主机或项目暂不可用，已有记录仍保留。</p>
+                      )}
+                      {search ? (
+                        group.items.map((c) => row(c))
+                      ) : (
+                        <ProjectConversationList>
+                          {group.items.map((c) => row(c))}
+                        </ProjectConversationList>
+                      )}
+                      {!group.items.length && (
+                        <p className="field-help">长按或右键项目可新建对话。</p>
+                      )}
+                      {!archived && group.target.origin === 'remote' && group.available && (
+                        <RemoteSessionImports target={group.target} />
+                      )}
+                    </div>
+                  </details>
                 ))}
-              </ProjectConversationList>
-              {!archived && group.target.origin === 'remote' && group.available && (
-                <RemoteSessionImports target={group.target} />
-              )}
+              </div>
             </details>
-          </section>
-        ))}
-        {!visible.length && (
-          <p className="field-help">
-            {model.ready
-              ? archived
-                ? '还没有归档的对话。'
-                : '你的第一段对话从这里开始。'
-              : '正在读取项目与对话…'}
-          </p>
-        )}
-        <div className="pi-navigation-footer">
-          <button className="pi-sidebar-control" onClick={() => setArchived(!archived)}>
-            <Archive size={15} />
-            <span>{archived ? '返回对话' : '已归档'}</span>
-            <small>{model.conversations.filter((c) => c.archivedAt).length || ''}</small>
-          </button>
-          {defaultDirectory}
-          <button className="pi-sidebar-control" onClick={manage}>
-            <Monitor size={15} />
-            <span>管理电脑连接</span>
-          </button>
+          ))}
+          {!locations.size && (
+            <p className="field-help unified-navigation-empty">
+              {!model.ready
+                ? '正在读取项目与对话…'
+                : search
+                  ? '没有找到匹配的对话或项目。'
+                  : archived
+                    ? '还没有归档的对话。'
+                    : '你的第一段对话从这里开始。'}
+            </p>
+          )}
+        </div>
+        <div className="pi-navigation-footer unified-navigation-footer">
+          <details ref={more} className="unified-navigation-more">
+            <summary>
+              <MoreHorizontal size={17} />
+              <span>更多</span>
+              <ChevronDown size={13} />
+            </summary>
+            <button className="pi-sidebar-control" onClick={() => showArchive(!archived)}>
+              <Archive size={15} />
+              <span>{archived ? '返回对话' : '已归档'}</span>
+              <small>{model.conversations.filter((c) => c.archivedAt).length || ''}</small>
+            </button>
+            <div
+              onClick={() => {
+                if (more.current) more.current.open = false;
+              }}
+            >
+              {defaultDirectory}
+            </div>
+            <button
+              className="pi-sidebar-control"
+              onClick={() => {
+                if (more.current) more.current.open = false;
+                manage();
+              }}
+            >
+              <Monitor size={15} />
+              <span>管理电脑连接</span>
+            </button>
+            <button
+              className="pi-sidebar-control"
+              onClick={() => {
+                if (more.current) more.current.open = false;
+                void model.refresh().catch((e) => setError(e.message));
+              }}
+            >
+              <RefreshCw size={15} />
+              <span>刷新项目与对话</span>
+            </button>
+          </details>
         </div>
       </aside>
       {menu && (
