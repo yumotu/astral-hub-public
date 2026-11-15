@@ -242,6 +242,8 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
     [ttlHours, setTtlHours] = useState(1),
     [expiresAt, setExpiresAt] = useState<number | null>(null),
     [preferenceBusy, setPreferenceBusy] = useState(false),
+    [cleanupPending, setCleanupPending] = useState(false),
+    [cleanupBusy, setCleanupBusy] = useState(false),
     [expired, setExpired] = useState(false),
     [turns, setTurns] = useState<PiTurn[]>([]);
   const latestInput = useRef(input);
@@ -267,6 +269,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
       expiresAt: number | null;
       saved: boolean;
       expiredConversationIds: string[];
+      cleanupPending?: boolean;
     }>(wb.settings, '/pi/assist/session', {
       source: quote.source || { origin: 'server', id: quote.sourceConversation },
     })
@@ -287,6 +290,9 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
         setExpiresAt(result.expiresAt);
         setSaved(result.saved);
         setExpired(false);
+        setCleanupPending(!!result.cleanupPending);
+        if (result.cleanupPending)
+          setError('清理结果尚未确认，历史和草稿已保留。请重试清理后重新开始。');
         setBoundSource(result.source);
         setTurns(result.turns);
         setLocal(result.tasks);
@@ -365,7 +371,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
     };
   }, [ids.join(','), wb.settings]);
   useEffect(() => {
-    if (!conversation || opening || saved || active || busy || expired) return;
+    if (!conversation || opening || saved || active || busy || expired || cleanupPending) return;
     let live = true;
     const timer = window.setTimeout(
       () => {
@@ -377,12 +383,18 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
           saved: boolean;
           conversationId: string | null;
           expiredConversationIds: string[];
+          cleanupPending?: boolean;
         }>(wb.settings, '/pi/assist/preferences', { source: boundSource })
           .then((result) => {
             if (!live) return;
             setTtlHours(result.ttlHours);
             setExpiresAt(result.expiresAt);
             setSaved(result.saved);
+            if (result.cleanupPending) {
+              setCleanupPending(true);
+              setError('清理结果尚未确认，历史和草稿已保留。请重试清理后重新开始。');
+              return;
+            }
             if (result.expiredConversationIds.includes(conversation)) {
               if (draftKey) {
                 try {
@@ -411,9 +423,46 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
       live = false;
       window.clearTimeout(timer);
     };
-  }, [conversation, opening, expiresAt, saved, active?.id, busy, expired, draftKey, wb.settings]);
+  }, [
+    conversation,
+    opening,
+    expiresAt,
+    saved,
+    active?.id,
+    busy,
+    expired,
+    cleanupPending,
+    draftKey,
+    wb.settings,
+  ]);
+  async function retryCleanup() {
+    if (cleanupBusy || !cleanupPending) return;
+    setCleanupBusy(true);
+    setError('');
+    try {
+      const result = await api<{ expiredConversationIds: string[] }>(
+        wb.settings,
+        '/pi/assist/cleanup',
+        { source: boundSource },
+      );
+      if (!result.expiredConversationIds.includes(conversation))
+        throw new Error('清理尚未确认，历史和草稿继续保留。');
+      if (draftKey) sessionStorage.removeItem(draftKey);
+      setInput('');
+      setTurns([]);
+      setLocal([]);
+      setIds([]);
+      setCleanupPending(false);
+      setExpired(true);
+      attempt.current = null;
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
   async function changeLifetime(value: number) {
-    if (preferenceBusy || opening) return;
+    if (preferenceBusy || opening || cleanupPending) return;
     setPreferenceBusy(true);
     setError('');
     try {
@@ -435,7 +484,8 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
   }
   const attempt = useRef<{ id: string; prompt: string } | null>(null);
   async function submit() {
-    if (!conversation || opening || expired || !input.trim() || busy || active) return;
+    if (!conversation || opening || expired || cleanupPending || !input.trim() || busy || active)
+      return;
     setBusy(true);
     setError('');
     try {
@@ -487,7 +537,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
               type="button"
               key={hours}
               aria-pressed={hours === ttlHours}
-              disabled={opening || preferenceBusy || expired}
+              disabled={opening || preferenceBusy || expired || cleanupPending}
               onClick={() => void changeLifetime(hours)}
             >
               {hours === 168 ? '7 天' : hours + ' 小时'}
@@ -565,6 +615,19 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
           )}
         </p>
       )}
+      {cleanupPending && (
+        <p className="field-help">
+          清理确认前可查看历史和编辑草稿，暂不发送；确认清理会移除这段临时对话及草稿。
+          <button
+            type="button"
+            className="text-link"
+            disabled={cleanupBusy}
+            onClick={() => void retryCleanup()}
+          >
+            {cleanupBusy ? '正在重试清理…' : '重试清理'}
+          </button>
+        </p>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -587,7 +650,7 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
             <button
               type="button"
               className="text-link"
-              disabled={saved || busy}
+              disabled={saved || busy || opening || cleanupPending || expired}
               onClick={() =>
                 void api(
                   wb.settings,
@@ -625,7 +688,9 @@ function TemporaryChat({ quote, onClose }: { quote: Quote; onClose: () => void }
             <button
               className="primary"
               data-composer-submit
-              disabled={opening || !conversation || expired || busy || !input.trim()}
+              disabled={
+                opening || !conversation || expired || cleanupPending || busy || !input.trim()
+              }
               aria-label="发送临时对话"
             >
               {busy ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />}发送

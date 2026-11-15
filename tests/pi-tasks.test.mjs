@@ -84,6 +84,7 @@ async function fixture(t, options = {}) {
       forkCalls.push(p);
       return Response.json({ native: true });
     }
+    if (url.endsWith('/sessions/delete')) return Response.json({ ok: true });
     return Response.json({
       nativeSessions: options.nativeSessions === true,
       ...(options.health || {}),

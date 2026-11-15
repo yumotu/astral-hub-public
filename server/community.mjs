@@ -208,7 +208,7 @@ export function createCommunity(store, { token, body, options = {} }) {
         result.contextWindow > 0
       );
     if (path === '/sessions/fork') return result.native === true;
-    if (path === '/cancel') return result.ok === true;
+    if (path === '/cancel' || path === '/sessions/delete') return result.ok === true;
     return true;
   };
   async function bridge(path, data, timeout = 10000, principal) {
@@ -690,6 +690,14 @@ export function createCommunity(store, { token, body, options = {} }) {
     const metadata = conversationMetadata.get(owner, id);
     return !!lifetime?.retained || !!(metadata && !metadata.archivedAt);
   };
+  const helperClosed = (owner, id) =>
+    !!store.db
+      .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+      .get(owner, id);
+  const assertHelperOpen = (owner, id) => {
+    if (helperClosed(owner, id))
+      throw fail(409, '临时对话的删除结果尚未确认，原记录已保留；请明确重试删除后再打开。');
+  };
   const helperBusy = (owner, id) =>
     activePi.has(`${owner}:${id}`) ||
     !!helperOperations.get(`${owner}:${id}`) ||
@@ -814,6 +822,28 @@ export function createCommunity(store, { token, body, options = {} }) {
       )
       .run(owner, id, now());
   }
+  function removeHelperBindings(owner, id) {
+    const parent = helperParent(owner, id);
+    const keys = new Set([
+      parent.key,
+      ...parent.aliases,
+      ...store.db
+        .prepare('SELECT parent_key FROM pi_assistance_parents WHERE owner=? AND id=?')
+        .all(owner, id)
+        .map((row) => row.parent_key),
+    ]);
+    for (const parentKey of keys)
+      store.db
+        .prepare('INSERT OR REPLACE INTO pi_assistance_expirations VALUES(?,?,?,?)')
+        .run(owner, parentKey, id, now());
+    for (const table of [
+      'pi_assistance_sources',
+      'pi_assistance_conversations',
+      'pi_assistance_parents',
+      'pi_assistance_lifetimes',
+    ])
+      store.db.prepare(`DELETE FROM ${table} WHERE owner=? AND id=?`).run(owner, id);
+  }
   function expireHelper(owner, id) {
     const key = `${owner}:${id}`;
     if (cleaningHelpers.has(key)) return cleaningHelpers.get(key);
@@ -830,13 +860,20 @@ export function createCommunity(store, { token, body, options = {} }) {
           now()
         );
       };
-      if (communityClosed || !due()) return false;
+      if (communityClosed) return false;
+      // A previous deletion may already have reached the native bridge. Keep
+      // its binding and history, and require an explicit idempotent retry.
+      assertHelperOpen(owner, id);
+      if (!due()) return false;
       const health = await bridge('/health');
       if (communityClosed || !due()) return false;
       // A native deletion acknowledgement is required before any local history
       // is removed; older or unavailable bridges keep the entire record.
       if (health.nativeSessions !== true)
         throw fail(503, '暂时无法清理临时对话的原生会话，请稍后重试。');
+      // Persist dispatch protection before deletion: a dropped reply or process
+      // replacement must never let a new prompt recreate this native session.
+      tasks.closeConversation(owner, id);
       const result = await bridge('/sessions/delete', { sessionKey: keyFor(owner, id) });
       if (result.ok !== true) throw fail(502, '临时对话的原生会话清理尚未确认。');
       if (communityClosed || !due()) return false;
@@ -847,19 +884,6 @@ export function createCommunity(store, { token, body, options = {} }) {
       if (communityClosed) return false;
       store.db.exec('SAVEPOINT expire_helper');
       try {
-        const parent = helperParent(owner, id);
-        const keys = new Set([
-          parent.key,
-          ...parent.aliases,
-          ...store.db
-            .prepare('SELECT parent_key FROM pi_assistance_parents WHERE owner=? AND id=?')
-            .all(owner, id)
-            .map((row) => row.parent_key),
-        ]);
-        for (const parentKey of keys)
-          store.db
-            .prepare('INSERT OR REPLACE INTO pi_assistance_expirations VALUES(?,?,?,?)')
-            .run(owner, parentKey, id, now());
         store.db
           .prepare(
             'DELETE FROM pi_submission_receipts WHERE owner=? AND id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=? UNION SELECT id FROM pi_turns WHERE owner=? AND conversation_id=?)',
@@ -875,13 +899,7 @@ export function createCommunity(store, { token, body, options = {} }) {
           .run(owner, owner, id);
         store.db.prepare('DELETE FROM pi_tasks WHERE owner=? AND conversation_id=?').run(owner, id);
         store.db.prepare('DELETE FROM pi_jobs WHERE owner=? AND conversation_id=?').run(owner, id);
-        for (const table of [
-          'pi_assistance_sources',
-          'pi_assistance_conversations',
-          'pi_assistance_parents',
-          'pi_assistance_lifetimes',
-        ])
-          store.db.prepare(`DELETE FROM ${table} WHERE owner=? AND id=?`).run(owner, id);
+        removeHelperBindings(owner, id);
         store.db
           .prepare(
             "DELETE FROM agent_conversation_bindings WHERE owner=? AND origin='server' AND conversation_id=?",
@@ -903,6 +921,92 @@ export function createCommunity(store, { token, body, options = {} }) {
       .catch(() => {});
     return work;
   }
+  async function refreshHelper(owner, id) {
+    if (helperClosed(owner, id)) return;
+    try {
+      await expireHelper(owner, id);
+    } catch (error) {
+      // Deletion can complete natively while its response is lost. Preserve the
+      // original binding as readable history, never renew or resend into it.
+      if (!helperClosed(owner, id)) throw error;
+    }
+  }
+  async function deletePiHistory(owner, id) {
+    const manager = options.unified?.(),
+      ref = { origin: 'server', nativeId: id };
+    manager?.assertNativeDelete(owner, ref);
+    if (helperBusy(owner, id) || tasks.live(owner, id).length)
+      throw fail(409, '请先停止任务并撤回队列后再删除。');
+    const health = await bridge('/health');
+    manager?.assertNativeDelete(owner, ref);
+    if (helperBusy(owner, id) || tasks.live(owner, id).length)
+      throw fail(409, '请先停止任务并撤回队列后再删除。');
+    if (health.nativeSessions !== true)
+      throw fail(503, '暂时无法清理对话的原生会话，原记录已保留，请稍后重试。');
+    tasks.closeConversation(owner, id);
+    if (health.scheduledTasks)
+      await bridge('/schedules/conversation-delete', { ownerId: owner, conversationId: id });
+    await bridge('/sessions/delete', { sessionKey: keyFor(owner, id) });
+    await chatFiles.removeConversation(owner, id);
+    store.db.exec('SAVEPOINT delete_pi_history');
+    try {
+      store.db
+        .prepare(
+          'DELETE FROM pi_submission_receipts WHERE owner=? AND id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=? UNION SELECT id FROM pi_turns WHERE owner=? AND conversation_id=?)',
+        )
+        .run(owner, owner, id, owner, id);
+      accounts.deletePiConversation(owner, id);
+      conversationMetadata.remove(owner, id);
+      sessionContext.remove(owner, id);
+      store.db
+        .prepare(
+          'DELETE FROM pi_task_events WHERE owner=? AND task_id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=?)',
+        )
+        .run(owner, owner, id);
+      store.db.prepare('DELETE FROM pi_tasks WHERE owner=? AND conversation_id=?').run(owner, id);
+      store.db.prepare('DELETE FROM pi_jobs WHERE owner=? AND conversation_id=?').run(owner, id);
+      if (
+        store.db
+          .prepare('SELECT 1 FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+          .get(owner, id)
+      )
+        removeHelperBindings(owner, id);
+      manager?.nativeDeleted(owner, ref);
+      store.db.exec('RELEASE delete_pi_history');
+    } catch (error) {
+      store.db.exec('ROLLBACK TO delete_pi_history; RELEASE delete_pi_history');
+      throw error;
+    }
+    options.sandboxNetwork?.revokeConversation(owner, id);
+  }
+  async function cleanupHelper(owner, input) {
+    const p = z.object({ source: assistanceSourceSchema }).strict().parse(input);
+    limit(`pi-assist-cleanup:${owner}`, 30);
+    await assistanceContext.read(owner, p.source);
+    const parent = parentIdentity(owner, p.source);
+    const bound = [parent.key, ...parent.aliases]
+      .map((key) =>
+        store.db
+          .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+          .get(owner, key),
+      )
+      .find(Boolean);
+    if (bound) {
+      if (!helperClosed(owner, bound.id)) throw fail(409, '当前临时对话无需恢复清理。');
+      const key = `${owner}:${bound.id}`;
+      if (cleaningHelpers.has(key)) await cleaningHelpers.get(key);
+      else {
+        const work = deletePiHistory(owner, bound.id);
+        cleaningHelpers.set(key, work);
+        try {
+          await work;
+        } finally {
+          if (cleaningHelpers.get(key) === work) cleaningHelpers.delete(key);
+        }
+      }
+    }
+    return lifetimeStatus(owner, p);
+  }
   async function lifetimePreferences(owner, input) {
     const p = lifetimeSchema.parse(input);
     limit(`pi-assist-preferences:${owner}`, 60);
@@ -922,6 +1026,8 @@ export function createCommunity(store, { token, body, options = {} }) {
     const bound = find();
     if (bound && cleaningHelpers.has(`${owner}:${bound.id}`))
       await cleaningHelpers.get(`${owner}:${bound.id}`);
+    const stillBound = find();
+    if (stillBound) assertHelperOpen(owner, stillBound.id);
     store.db
       .prepare(
         `INSERT INTO pi_assistance_preferences VALUES(?,?,?) ON CONFLICT(owner,parent_key) DO UPDATE SET ttl_hours=excluded.ttl_hours`,
@@ -954,10 +1060,11 @@ export function createCommunity(store, { token, body, options = {} }) {
         )
         .find(Boolean);
     const before = find();
-    if (before) await expireHelper(owner, before.id);
+    if (before) await refreshHelper(owner, before.id);
     const bound = find();
     return {
       conversationId: bound?.id || null,
+      cleanupPending: !!bound && helperClosed(owner, bound.id),
       ...helperLifetime(owner, bound?.id || '', parent),
       expiredConversationIds: [
         ...new Set(
@@ -984,28 +1091,17 @@ export function createCommunity(store, { token, body, options = {} }) {
       .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
       .get(owner, parent.key);
     if (bound) {
-      await expireHelper(owner, bound.id);
+      await refreshHelper(owner, bound.id);
       bound = store.db
         .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
         .get(owner, parent.key);
-    }
-    if (
-      bound &&
-      store.db
-        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
-        .get(owner, bound.id)
-    ) {
-      store.db
-        .prepare('DELETE FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
-        .run(owner, parent.key);
-      bound = null;
     }
     if (!bound) {
       const old = store.db
         .prepare(
           `SELECT s.id,s.source FROM pi_assistance_sources s
         JOIN pi_assistance_conversations c ON c.owner=s.owner AND c.id=s.id AND c.kind='selection'
-        WHERE s.owner=? AND NOT EXISTS(SELECT 1 FROM pi_closed_conversations x WHERE x.owner=s.owner AND x.conversation_id=s.id)
+        WHERE s.owner=?
         ORDER BY s.rowid DESC`,
         )
         .all(owner)
@@ -1015,9 +1111,7 @@ export function createCommunity(store, { token, body, options = {} }) {
       const reserved = parent.aliases
         .map((key) =>
           store.db
-            .prepare(
-              'SELECT p.id FROM pi_assistance_parents p WHERE p.owner=? AND p.parent_key=? AND NOT EXISTS(SELECT 1 FROM pi_closed_conversations x WHERE x.owner=p.owner AND x.conversation_id=p.id)',
-            )
+            .prepare('SELECT p.id FROM pi_assistance_parents p WHERE p.owner=? AND p.parent_key=?')
             .get(owner, key),
         )
         .find(Boolean);
@@ -1029,24 +1123,25 @@ export function createCommunity(store, { token, body, options = {} }) {
     }
     // Migration of a legacy or native-only reservation must apply the same
     // expiry check as a binding that was already indexed by display ID.
-    await expireHelper(owner, bound.id);
-    if (
+    await refreshHelper(owner, bound.id);
+    // A confirmed expiry removes the binding. A tombstone alone never does.
+    bound = store.db
+      .prepare('SELECT id FROM pi_assistance_parents WHERE owner=? AND parent_key=?')
+      .get(owner, parent.key);
+    if (!bound) {
+      bound = { id: randomUUID() };
       store.db
-        .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
-        .get(owner, bound.id)
-    ) {
-      const id = randomUUID();
-      store.db
-        .prepare('INSERT OR REPLACE INTO pi_assistance_parents VALUES(?,?,?)')
-        .run(owner, parent.key, id);
-      bound = { id };
+        .prepare('INSERT INTO pi_assistance_parents VALUES(?,?,?)')
+        .run(owner, parent.key, bound.id);
     }
-    touchHelper(owner, bound.id);
+    const cleanupPending = helperClosed(owner, bound.id);
+    if (!cleanupPending) touchHelper(owner, bound.id);
     const source = store.db
       .prepare('SELECT source FROM pi_assistance_sources WHERE owner=? AND id=?')
       .get(owner, bound.id);
     return {
       conversationId: bound.id,
+      cleanupPending,
       source: source ? JSON.parse(source.source) : parent.source,
       turns: accounts.piHistory(owner, bound.id),
       tasks: tasks.all(owner).filter((task) => task.conversationId === bound.id),
@@ -1254,7 +1349,10 @@ export function createCommunity(store, { token, body, options = {} }) {
           runtime: serverPiRuntime(owner, c.id, c.projectId),
           runState: live
             ? { ...agentRunState(live), busy: true }
-            : { busy: helperBusy(owner, c.id), label: '操作结果待核对' },
+            : {
+                busy: helperBusy(owner, c.id) || helperClosed(owner, c.id),
+                label: '操作结果待核对',
+              },
         };
       });
   return {
@@ -1280,7 +1378,13 @@ export function createCommunity(store, { token, body, options = {} }) {
         const t = pending[0];
         return t
           ? { ...agentRunState(t), busy: true }
-          : { busy: helperBusy(actor.id, id), label: '正在核对任务或操作结果' };
+          : {
+              busy:
+                helperBusy(actor.id, id) ||
+                (helperClosed(actor.id, id) &&
+                  !options.unified?.()?.deleting(actor.id, { origin: 'server', nativeId: id })),
+              label: '正在核对任务或操作结果',
+            };
       },
     },
     async manageSchedule(ctx, input, callId, computerJob) {
@@ -1366,6 +1470,10 @@ export function createCommunity(store, { token, body, options = {} }) {
       if (!['/api/auth/', '/api/social/', '/api/pi/'].some((prefix) => path.startsWith(prefix)))
         return false;
       requireUser(actor);
+      if (path === '/api/pi/assist/cleanup' && method === 'POST') {
+        json(200, await cleanupHelper(actor.id, await body(req)));
+        return true;
+      }
       if (path === '/api/pi/assist/session' && method === 'POST') {
         json(200, await selectionSession(actor.id, await body(req)));
         return true;
@@ -2248,6 +2356,7 @@ export function createCommunity(store, { token, body, options = {} }) {
           return true;
         }
         if (method === 'PATCH') {
+          assertHelperOpen(actor.id, id);
           if (cleaningHelpers.has(`${actor.id}:${id}`))
             throw fail(409, '临时对话正在清理，请重新打开后操作。');
           const p = z
@@ -2296,33 +2405,7 @@ export function createCommunity(store, { token, body, options = {} }) {
               .get(id, actor.id)
           )
             throw fail(409, '请在电脑对话中管理这段历史。');
-          if (helperBusy(actor.id, id) || tasks.live(actor.id, id).length)
-            throw fail(409, '请先停止任务并撤回队列后再删除。');
-          const health = await bridge('/health');
-          if (helperBusy(actor.id, id) || tasks.live(actor.id, id).length)
-            throw fail(409, '请先停止任务并撤回队列后再删除。');
-          tasks.closeConversation(actor.id, id);
-          if (health.scheduledTasks)
-            await bridge('/schedules/conversation-delete', {
-              ownerId: actor.id,
-              conversationId: id,
-            });
-          if (health.nativeSessions)
-            await bridge('/sessions/delete', { sessionKey: sessionKey(id) });
-          accounts.deletePiConversation(actor.id, id);
-          options.sandboxNetwork?.revokeConversation(actor.id, id);
-          conversationMetadata.remove(actor.id, id);
-          sessionContext.remove(actor.id, id);
-          store.db
-            .prepare(
-              'DELETE FROM pi_task_events WHERE owner=? AND task_id IN (SELECT id FROM pi_tasks WHERE owner=? AND conversation_id=?)',
-            )
-            .run(actor.id, actor.id, id);
-          store.db
-            .prepare('DELETE FROM pi_tasks WHERE owner=? AND conversation_id=?')
-            .run(actor.id, id);
-          await chatFiles.removeConversation(actor.id, id);
-          options.unified?.()?.nativeDeleted(actor.id, { origin: 'server', nativeId: id });
+          await deletePiHistory(actor.id, id);
           json(200, { ok: true });
           return true;
         }

@@ -469,7 +469,7 @@ test('concurrent retries return the same accepted helper rather than rejecting o
 });
 
 test('unified navigation keeps explicitly saved helpers and removes deleted single Pi histories', async (t) => {
-  const f = await fixture(t),
+  const f = await fixture(t, { nativeSessions: true }),
     parent = f.parent(),
     helper = randomUUID(),
     task = randomUUID();
@@ -659,7 +659,7 @@ test('concurrent side-chat openings reserve one helper and unified indexing reta
 });
 
 test('older selection helpers migrate to their parent binding and deleted helpers are replaced without replay', async (t) => {
-  const f = await fixture(t),
+  const f = await fixture(t, { nativeSessions: true }),
     source = { origin: 'server', id: f.parent() },
     helper = randomUUID();
   const payload = {
@@ -967,7 +967,9 @@ test('expired histories remain intact until native session deletion is explicitl
   await sendHelper(f, session);
   time += hour + 1;
   const failed = await f.req('/pi/assist/session', { source }, f.owner.token);
-  assert.equal(failed.status, 503);
+  assert.equal(failed.status, 200);
+  assert.equal(failed.body.cleanupPending, true);
+  assert.equal(failed.body.conversationId, session.conversationId);
   assert.equal(
     f.app.store.db
       .prepare('SELECT count(*) n FROM pi_turns WHERE owner=? AND conversation_id=?')
@@ -978,9 +980,51 @@ test('expired histories remain intact until native session deletion is explicitl
     f.app.store.db
       .prepare('SELECT count(*) n FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
       .get(f.owner.user.id, session.conversationId).n,
-    0,
+    1,
+    'expiry must reserve a durable closed marker before requesting native deletion',
+  );
+  await f.restart();
+  {
+    const reopened = await f.req('/pi/assist/session', { source }, f.owner.token);
+    assert.equal(reopened.status, 200);
+    assert.equal(reopened.body.cleanupPending, true);
+    assert.equal(reopened.body.conversationId, session.conversationId);
+  }
+  assert.equal(
+    (await f.req('/pi/assist/preferences', { source, ttlHours: 6 }, f.owner.token, 'PATCH')).status,
+    409,
+  );
+  assert.equal(
+    (await f.req('/pi/assist/preferences', { source }, f.owner.token)).body.cleanupPending,
+    true,
+  );
+  assert.equal(
+    f.deletions.length,
+    1,
+    'reopen, polling and preferences must not retry uncertain deletion',
+  );
+  assert.equal(
+    (
+      await f.req(
+        '/pi/assist',
+        {
+          conversationId: session.conversationId,
+          source,
+          id: randomUUID(),
+          kind: 'selection',
+          input: 'Do not recreate an erased native context',
+        },
+        f.owner.token,
+      )
+    ).status,
+    409,
   );
   failDelete = false;
+  assert.equal(
+    (await f.req('/pi/conversations/' + session.conversationId, undefined, f.owner.token, 'DELETE'))
+      .status,
+    200,
+  );
   assert.notEqual((await openedHelper(f, source)).conversationId, session.conversationId);
   assert.equal(f.runs.length, 1);
 });
@@ -1381,6 +1425,263 @@ test('manual and unified deletion protect pending or unknown native helper work 
       });
 });
 
+test('manual and unified deletion require a positive native deletion acknowledgement before removing local history', async (t) => {
+  for (const indexed of [false, true])
+    for (const [outcome, receipt] of [
+      ['empty', {}],
+      ['ok-false', { ok: false }],
+      ['error', { error: 'Native deletion was not confirmed' }],
+      ['ok-true', { ok: true }],
+    ])
+      await t.test((indexed ? 'unified' : 'manual') + ':' + outcome, async (t) => {
+        let nativeReceipt = receipt;
+        const f = await fixture(t, {
+          nativeSessions: true,
+          deleteSession: async () => Response.json(nativeReceipt),
+        });
+        const source = { origin: 'server', id: f.parent() };
+        const session = await openedHelper(f, source);
+        const task = await sendHelper(f, session);
+        let display;
+        if (indexed) {
+          assert.equal(
+            (
+              await f.req(
+                '/pi/conversations/' + session.conversationId,
+                { archived: false },
+                f.owner.token,
+                'PATCH',
+              )
+            ).status,
+            200,
+          );
+          const list = await f.req('/assistant/conversations', undefined, f.owner.token);
+          display = list.body.conversations.find(
+            (c) => c.active.nativeId === session.conversationId,
+          );
+          assert(display);
+        }
+        const history = () =>
+          ['pi_turns', 'pi_tasks'].map((table) =>
+            f.app.store.db
+              .prepare(`SELECT * FROM ${table} WHERE owner=? AND conversation_id=? ORDER BY id`)
+              .all(f.owner.user.id, session.conversationId),
+          );
+        const before = history();
+        assert.deepEqual(
+          before.map((rows) => rows.length),
+          [1, 1],
+        );
+        const path = indexed
+          ? '/assistant/conversations/' + display.id
+          : '/pi/conversations/' + session.conversationId;
+        const response = await f.req(path, undefined, f.owner.token, 'DELETE');
+        assert.equal(
+          response.status,
+          receipt.ok === true ? 200 : 502,
+          JSON.stringify(response.body),
+        );
+        assert.equal(f.deletions.length, 1);
+        assert.equal(f.runs.length, 1, 'deletion must not replay the helper task');
+        if (receipt.ok === true) {
+          assert.deepEqual(history(), [[], []]);
+          assert.equal(response.body.ok, true);
+          if (indexed)
+            assert.equal(
+              (await f.req('/assistant/conversations/' + display.id, undefined, f.owner.token))
+                .status,
+              404,
+            );
+        } else {
+          assert.deepEqual(history(), before, 'unconfirmed deletion must preserve local history');
+          const originalBinding = () =>
+            f.app.store.db
+              .prepare('SELECT DISTINCT id FROM pi_assistance_parents WHERE owner=?')
+              .all(f.owner.user.id)
+              .map((row) => row.id);
+          assert.deepEqual(originalBinding(), [session.conversationId]);
+          const reopening = await f.req('/pi/assist/session', { source }, f.owner.token);
+          assert.equal(
+            reopening.status,
+            200,
+            'unconfirmed deletion must expose preserved read-only history',
+          );
+          assert.equal(reopening.body.cleanupPending, true);
+          assert.equal(reopening.body.conversationId, session.conversationId);
+          assert.deepEqual(originalBinding(), [session.conversationId]);
+          assert.deepEqual(history(), before);
+          await f.restart();
+          {
+            const reopened = await f.req('/pi/assist/session', { source }, f.owner.token);
+            assert.equal(reopened.status, 200);
+            assert.equal(reopened.body.cleanupPending, true);
+            assert.equal(reopened.body.conversationId, session.conversationId);
+          }
+          assert.deepEqual(originalBinding(), [session.conversationId]);
+          assert.deepEqual(
+            history(),
+            before,
+            'unconfirmed history must survive application restart',
+          );
+          if (indexed) {
+            const list = await f.req('/assistant/conversations', undefined, f.owner.token);
+            assert(list.body.conversations.some((c) => c.id === display.id));
+          }
+          assert.equal(f.deletions.length, 1, 'restart must not retry deletion automatically');
+          assert.equal(f.runs.length, 1, 'restart must not replay the helper task');
+          assert.equal(
+            (
+              await f.req(
+                '/pi/assist',
+                { ...task, id: randomUUID(), input: 'Do not send into a possibly deleted session' },
+                f.owner.token,
+              )
+            ).status,
+            409,
+            'the durable closed marker must prevent new work after an unconfirmed deletion',
+          );
+          nativeReceipt = { ok: true };
+          assert.equal((await f.req(path, undefined, f.owner.token, 'DELETE')).status, 200);
+          assert.deepEqual(history(), [[], []]);
+          assert.equal(
+            f.deletions.length,
+            2,
+            'only an explicit retry may repeat idempotent deletion',
+          );
+          assert.equal(f.runs.length, 1, 'the deletion retry must not replay model work');
+          const replacement = await openedHelper(f, source);
+          assert.notEqual(replacement.conversationId, session.conversationId);
+          assert.deepEqual(replacement.turns, []);
+        }
+      });
+});
+
+test('expiry deletion reserves protection before dispatch and keeps the same helper after response loss and restart', async (t) => {
+  let time = Date.now(),
+    receipt = {};
+  const f = await fixture(t, {
+    now: () => time,
+    nativeSessions: true,
+    deleteSession: () => {
+      assert(
+        f.app.store.db
+          .prepare('SELECT 1 FROM pi_closed_conversations WHERE owner=? AND conversation_id=?')
+          .get(f.owner.user.id, session.conversationId),
+        'the durable dispatch barrier must precede native deletion',
+      );
+      return Response.json(receipt);
+    },
+  });
+  const source = { origin: 'server', id: f.parent() },
+    session = await openedHelper(f, source);
+  await sendHelper(f, session);
+  time += hour + 1;
+  {
+    const pending = await f.req('/pi/assist/session', { source }, f.owner.token);
+    assert.equal(pending.status, 200);
+    assert.equal(pending.body.cleanupPending, true);
+    assert.equal(pending.body.conversationId, session.conversationId);
+  }
+  await f.restart();
+  {
+    const reopened = await f.req('/pi/assist/session', { source }, f.owner.token);
+    assert.equal(reopened.status, 200);
+    assert.equal(reopened.body.cleanupPending, true);
+    assert.equal(reopened.body.conversationId, session.conversationId);
+  }
+  assert.equal(
+    (await f.req('/pi/assist/preferences', { source, ttlHours: 24 }, f.owner.token, 'PATCH'))
+      .status,
+    409,
+  );
+  assert.equal(
+    (
+      await f.req(
+        '/pi/conversations/' + session.conversationId,
+        { archived: false },
+        f.owner.token,
+        'PATCH',
+      )
+    ).status,
+    409,
+  );
+  const preserved = await f.req(
+    '/pi/conversations/' + session.conversationId,
+    undefined,
+    f.owner.token,
+  );
+  assert.equal(preserved.status, 200);
+  assert.equal(preserved.body.turns.length, 1);
+  assert.equal(f.deletions.length, 1);
+  assert.equal(f.runs.length, 1);
+  receipt = { ok: true };
+  assert.equal(
+    (await f.req('/pi/conversations/' + session.conversationId, undefined, f.owner.token, 'DELETE'))
+      .status,
+    200,
+  );
+  const next = await openedHelper(f, source);
+  assert.notEqual(next.conversationId, session.conversationId);
+  assert(next.expiredConversationIds.includes(session.conversationId));
+  assert.equal(f.deletions.length, 2);
+  assert.equal(f.runs.length, 1);
+});
+
+test('unconfirmed deletion keeps an unused native reservation across unified parent migration', async (t) => {
+  let receipt = {};
+  const f = await fixture(t, {
+    nativeSessions: true,
+    deleteSession: () => Response.json(receipt),
+  });
+  const first = f.parent(),
+    next = f.parent(),
+    display = randomUUID();
+  const source = { origin: 'server', id: first };
+  const session = await openedHelper(f, source);
+  assert.equal(
+    (await f.req('/pi/conversations/' + session.conversationId, undefined, f.owner.token, 'DELETE'))
+      .status,
+    502,
+  );
+  for (const [ordinal, nativeId] of [first, next].entries())
+    f.app.store.db
+      .prepare(
+        'INSERT INTO assistant_segments(owner,display_id,ordinal,origin,native_id,runtime) VALUES(?,?,?,?,?,?)',
+      )
+      .run(f.owner.user.id, display, ordinal, 'server', nativeId, '{}');
+  await f.restart();
+  for (const id of [first, next]) {
+    const pending = await f.req(
+      '/pi/assist/session',
+      { source: { origin: 'server', id } },
+      f.owner.token,
+    );
+    assert.equal(pending.status, 200);
+    assert.equal(pending.body.cleanupPending, true);
+    assert.equal(pending.body.conversationId, session.conversationId);
+  }
+  assert.deepEqual(
+    f.app.store.db
+      .prepare('SELECT DISTINCT id FROM pi_assistance_parents WHERE owner=?')
+      .all(f.owner.user.id)
+      .map((row) => row.id),
+    [session.conversationId],
+  );
+  assert.equal(f.deletions.length, 1);
+  assert.equal(f.runs.length, 0);
+  receipt = { ok: true };
+  assert.equal(
+    (await f.req('/pi/conversations/' + session.conversationId, undefined, f.owner.token, 'DELETE'))
+      .status,
+    200,
+  );
+  const reopened = await openedHelper(f, { origin: 'server', id: next });
+  assert.notEqual(reopened.conversationId, session.conversationId);
+  assert.deepEqual(reopened.turns, []);
+  assert.equal(f.deletions.length, 2);
+  assert.equal(f.runs.length, 0);
+});
+
 test('manual helper deletion rechecks native work started during its health request', async (t) => {
   let holdHealth = false,
     healthArrived,
@@ -1734,4 +2035,98 @@ test('lifetime status reads never renew or reserve helpers and confirm expiry be
   assert(expired.body.expiredConversationIds.includes(session.conversationId));
   assert.equal(f.runs.length, 0);
   assert.equal(f.deletions.length, 1);
+});
+
+test('manual deletion without native deletion capability preserves helper history and its binding', async (t) => {
+  const f = await fixture(t, { nativeSessions: false });
+  const source = { origin: 'server', id: f.parent() };
+  const session = await openedHelper(f, source);
+  await sendHelper(f, session);
+  const result = await f.req(
+    '/pi/conversations/' + session.conversationId,
+    undefined,
+    f.owner.token,
+    'DELETE',
+  );
+  assert.equal(result.status, 503);
+  assert.equal(f.deletions.length, 0);
+  const reopened = await openedHelper(f, source);
+  assert.equal(reopened.conversationId, session.conversationId);
+  assert.equal(reopened.turns.length, 1);
+  assert.equal(f.runs.length, 1);
+});
+
+test('source-based explicit cleanup exposes preserved pending history and only retries acknowledged deletion', async (t) => {
+  let time = Date.now(),
+    receipt = {};
+  const f = await fixture(t, {
+    now: () => time,
+    nativeSessions: true,
+    deleteSession: () => Response.json(receipt),
+  });
+  const source = { origin: 'server', id: f.parent() };
+  const session = await openedHelper(f, source);
+  const sent = await sendHelper(f, session);
+  assert.equal(
+    (await f.req('/pi/assist/cleanup', { source }, f.owner.token)).status,
+    409,
+    'live helpers cannot be silently cleared by the recovery endpoint',
+  );
+  time += hour + 1;
+  const pending = await f.req('/pi/assist/session', { source }, f.owner.token);
+  assert.equal(pending.status, 200);
+  assert.equal(pending.body.cleanupPending, true);
+  assert.equal(pending.body.conversationId, session.conversationId);
+  assert.equal(pending.body.turns.length, 1);
+  assert.equal(pending.body.tasks[0].id, sent.id);
+  const originalDeadline = pending.body.expiresAt;
+  await f.restart();
+  const reopened = await f.req('/pi/assist/session', { source }, f.owner.token);
+  assert.equal(reopened.status, 200);
+  assert.equal(reopened.body.cleanupPending, true);
+  assert.equal(reopened.body.conversationId, session.conversationId);
+  assert.equal(
+    reopened.body.expiresAt,
+    originalDeadline,
+    'opening pending history must not renew it',
+  );
+  const status = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+  assert.equal(status.status, 200);
+  assert.equal(status.body.cleanupPending, true);
+  assert.equal(status.body.conversationId, session.conversationId);
+  assert.equal(f.deletions.length, 1, 'read-only recovery must not retry deletion');
+  assert.equal(
+    (await f.req('/pi/assist/preferences', { source, ttlHours: 6 }, f.owner.token, 'PATCH')).status,
+    409,
+  );
+  assert.equal(
+    (
+      await f.req(
+        '/pi/assist',
+        { ...sent, id: randomUUID(), input: 'Do not recreate native context' },
+        f.owner.token,
+      )
+    ).status,
+    409,
+  );
+  assert.equal((await f.req('/pi/assist/cleanup', { source }, f.other.token)).status, 404);
+  const retryFailed = await f.req('/pi/assist/cleanup', { source }, f.owner.token);
+  assert.equal(retryFailed.status, 502);
+  assert.equal((await f.req('/pi/assist/session', { source }, f.owner.token)).body.turns.length, 1);
+  assert.equal(f.deletions.length, 2);
+  receipt = { ok: true };
+  const cleared = await f.req('/pi/assist/cleanup', { source }, f.owner.token);
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.cleanupPending, false);
+  assert.equal(cleared.body.conversationId, null);
+  assert(cleared.body.expiredConversationIds.includes(session.conversationId));
+  assert.equal(f.deletions.length, 3);
+  assert.equal(f.runs.length, 1, 'cleanup never replays a prompt');
+  const repeated = await f.req('/pi/assist/cleanup', { source }, f.owner.token);
+  assert.equal(repeated.status, 200);
+  assert(repeated.body.expiredConversationIds.includes(session.conversationId));
+  assert.equal(f.deletions.length, 3, 'confirmed cleanup is idempotent');
+  const fresh = await openedHelper(f, source);
+  assert.notEqual(fresh.conversationId, session.conversationId);
+  assert.deepEqual(fresh.turns, []);
 });

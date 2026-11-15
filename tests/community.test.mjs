@@ -74,7 +74,8 @@ test('conversation controls persist account metadata, default directory and proj
   const calls = [];
   const f = await fixture(t, { piConfig: { url: 'http://pi', token: 'conversation-test-bridge', fetch: async (url, options) => {
     if (url.endsWith('/projects')) return Response.json({ projects: [{ id: 'workspace', readOnly: false }, { id: 'other', readOnly: false }] });
-    if (url.endsWith('/health')) return Response.json({ ready: true, nativeSessions: false });
+    if (url.endsWith('/health')) return Response.json({ ready: true, nativeSessions: true });
+    if (url.endsWith('/sessions/delete')) return Response.json({ ok: true });
     calls.push(JSON.parse(options.body));
     return Response.json({ output: '真实接口桩回复' });
   } } });
@@ -497,7 +498,8 @@ test('Pi bridge is account-authenticated, carries only its secret and isolates h
     fetch: async (url, options) => {
       assert.equal(options.headers.Authorization, `Bearer ${piConfig.token}`);
       if (url.endsWith('/health'))
-        return Response.json({ ready: true, version: '1.4.0', model: 'deepseek-flash' });
+        return Response.json({ ready: true, version: '1.4.0', model: 'deepseek-flash', nativeSessions: true });
+      if (url.endsWith('/sessions/delete')) return Response.json({ ok: true });
       const p = JSON.parse(options.body);
       calls.push(p);
       assert.match(p.sessionKey, /^[a-f0-9]{64}$/);
@@ -1063,11 +1065,12 @@ test('current session inspection survives history reload without rewriting past 
   const f = await fixture(t, { piConfig: {
     url: 'http://pi', token: 'session-snapshot-test',
     fetch: async (url, options) => {
+      if (url.endsWith('/sessions/delete')) return Response.json({ ok: true });
       if (url.endsWith('/sessions/inspect')) {
         inspected.push(JSON.parse(options.body));
         return Response.json({ commands: [], context: current });
       }
-      return Response.json({ ready: true, nativeSessions: false });
+      return Response.json({ ready: true, nativeSessions: true });
     },
   } });
   const owner = (await f.bootstrap()).body, friend = await f.member(owner.token, 'snapshotfriend');
