@@ -12,7 +12,7 @@ async function fixture(t, controls = {}) {
   const runs = [];
   const deletions = [];
   let projectAllowed = true;
-  const app = await createApp({
+  const appOptions = {
     token: admin,
     dataDir: dir,
     piConcurrency: 1,
@@ -22,17 +22,30 @@ async function fixture(t, controls = {}) {
       url: 'http://synthetic-pi',
       token: 'synthetic-only',
       fetch: async (url, options) => {
-        if (url.endsWith('/health'))
+        if (url.endsWith('/health')) {
+          await controls.health?.();
           return Response.json({ ready: true, nativeSessions: controls.nativeSessions ?? false });
+        }
         if (url.endsWith('/sessions/delete')) {
           const payload = JSON.parse(options.body);
           deletions.push(payload);
           const result = await controls.deleteSession?.(payload);
           return result || Response.json({ ok: true });
         }
-        if (/\/sessions\/(inspect|compact|context)$/.test(url)) {
+        if (/\/sessions\/(inspect|compact|context|fork)$/.test(url) || url.endsWith('/cancel')) {
           const result = await controls.nativeOperation?.(url, JSON.parse(options.body));
-          return result || Response.json({ context: { messageCount: 0 } });
+          if (result) return result;
+          if (url.endsWith('/inspect'))
+            return Response.json({ type: 'done', commands: [], context: { messageCount: 0 } });
+          if (url.endsWith('/compact'))
+            return Response.json({
+              type: 'done',
+              compaction: { summary: 'Preserved helper context', tokensBefore: 100 },
+            });
+          if (url.endsWith('/context'))
+            return Response.json({ model: 'synthetic', contextWindow: 64000 });
+          if (url.endsWith('/fork')) return Response.json({ native: true });
+          return Response.json({ ok: true });
         }
         if (url.endsWith('/projects')) {
           await controls.projects?.();
@@ -52,7 +65,8 @@ async function fixture(t, controls = {}) {
         return Response.json({});
       },
     },
-  });
+  };
+  let app = await createApp(appOptions);
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   let closed = false;
   const close = async () => {
@@ -114,8 +128,16 @@ async function fixture(t, controls = {}) {
     return id;
   }
   return {
-    app,
+    get app() {
+      return app;
+    },
     close,
+    restart: async () => {
+      await close();
+      app = await createApp(appOptions);
+      closed = false;
+      await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+    },
     req,
     owner,
     other,
@@ -1128,6 +1150,387 @@ test('expiry waits for in-flight native operations and blocks recreating a destr
         409,
       );
       assert.equal(f.runs.length, 0);
+    });
+});
+
+test('interrupted native helper operations retain expiry protection across restart and later successful observations', async (t) => {
+  for (const action of ['inspect', 'compact', 'context', 'fork', 'cancel'])
+    await t.test(action, async (t) => {
+      let time = Date.now(),
+        interrupt = true,
+        calls = 0;
+      const f = await fixture(t, {
+        now: () => time,
+        nativeSessions: true,
+        nativeOperation: async () => {
+          calls++;
+          if (interrupt) throw Error('Synthetic transport interrupted after dispatch');
+        },
+      });
+      const source = { origin: 'server', id: f.parent() };
+      const session = await openedHelper(f, source);
+      const task = await sendHelper(f, session);
+      const result = await f.req(
+        '/pi/conversations/' + session.conversationId + '/' + action,
+        action === 'fork' ? { id: randomUUID(), turnId: task.id, position: 'after' } : {},
+        f.owner.token,
+      );
+      assert.equal(result.status, 502, JSON.stringify(result.body));
+      const protection = async () => {
+        time += 2 * hour;
+        const status = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+        assert.equal(status.status, 200, JSON.stringify(status.body));
+        assert.equal(status.body.conversationId, session.conversationId);
+        assert.equal(status.body.expiresAt, null);
+        assert.equal(f.deletions.length, 0);
+      };
+      await protection();
+      await f.restart();
+      await protection();
+      assert.equal(calls, 1, 'restarting or checking expiry must not replay uncertain work');
+      interrupt = false;
+      assert.equal(
+        (await f.req('/pi/conversations/' + session.conversationId + '/context', {}, f.owner.token))
+          .status,
+        200,
+      );
+      await protection();
+      assert.equal(calls, 2, 'a later successful observation cannot settle an earlier operation');
+      assert.equal(f.runs.length, 1);
+    });
+});
+
+test('confirmed native helper rejections do not leave permanent expiry uncertainty', async (t) => {
+  for (const status of [400, 403, 404, 409, 413, 429])
+    await t.test(String(status), async (t) => {
+      let time = Date.now();
+      const f = await fixture(t, {
+        now: () => time,
+        nativeSessions: true,
+        nativeOperation: async () => Response.json({ error: 'Synthetic rejection' }, { status }),
+      });
+      const source = { origin: 'server', id: f.parent() };
+      const session = await openedHelper(f, source);
+      assert.equal(
+        (await f.req('/pi/conversations/' + session.conversationId + '/compact', {}, f.owner.token))
+          .status,
+        status,
+      );
+      await f.restart();
+      time += 2 * hour;
+      const expired = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+      assert.equal(expired.status, 200, JSON.stringify(expired.body));
+      assert.equal(expired.body.conversationId, null);
+      assert.equal(f.deletions.length, 1);
+    });
+});
+
+test('HTTP 200 without the native endpoint acknowledgement leaves helper work unknown', async (t) => {
+  for (const action of ['inspect', 'compact', 'context', 'fork', 'cancel'])
+    for (const outcome of ['error', 'empty', 'null', 'array', 'wrong-shape', 'error-with-ack'])
+      await t.test(action + ':' + outcome, async (t) => {
+        let time = Date.now();
+        const good = {
+          inspect: { type: 'done', commands: [], context: { messageCount: 0 } },
+          compact: { type: 'done', compaction: { summary: 'Preserved context', tokensBefore: 10 } },
+          context: { model: 'synthetic', contextWindow: 64000 },
+          fork: { native: true },
+          cancel: { ok: true },
+        }[action];
+        const malformed = {
+          error: { error: 'Native outcome unconfirmed' },
+          empty: {},
+          null: null,
+          array: [],
+          'wrong-shape': {
+            inspect: { context: [] },
+            compact: { compaction: {} },
+            context: { model: 'synthetic', contextWindow: '64000' },
+            fork: { native: 'true' },
+            cancel: { ok: 'true' },
+          }[action],
+          'error-with-ack': { ...good, error: 'Native outcome unconfirmed' },
+        }[outcome];
+        const f = await fixture(t, {
+          now: () => time,
+          nativeSessions: true,
+          nativeOperation: async () => Response.json(malformed),
+        });
+        const source = { origin: 'server', id: f.parent() };
+        const session = await openedHelper(f, source);
+        const task = await sendHelper(f, session);
+        const target = randomUUID();
+        const result = await f.req(
+          '/pi/conversations/' + session.conversationId + '/' + action,
+          action === 'fork' ? { id: target, turnId: task.id, position: 'after' } : {},
+          f.owner.token,
+        );
+        assert.equal(result.status, 502, JSON.stringify(result.body));
+        assert.equal(
+          f.app.store.db
+            .prepare('SELECT state FROM pi_assistance_operations WHERE owner=? AND id=?')
+            .get(f.owner.user.id, session.conversationId)?.state,
+          'unknown',
+        );
+        if (action === 'fork')
+          assert.equal(
+            f.app.store.db
+              .prepare('SELECT 1 FROM pi_conversations WHERE owner=? AND id=?')
+              .get(f.owner.user.id, target),
+            undefined,
+            'an unacknowledged native fork must not publish a local branch',
+          );
+        await f.restart();
+        time += 2 * hour;
+        const status = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+        assert.equal(status.body.conversationId, session.conversationId);
+        assert.equal(status.body.expiresAt, null);
+        assert.equal(f.deletions.length, 0);
+        assert.equal(f.runs.length, 1);
+      });
+});
+
+test('manual and unified deletion protect pending or unknown native helper work across restart', async (t) => {
+  for (const state of ['pending', 'unknown'])
+    for (const indexed of [false, true])
+      await t.test(state + ':' + (indexed ? 'unified' : 'native'), async (t) => {
+        const f = await fixture(t, { nativeSessions: true });
+        const source = { origin: 'server', id: f.parent() };
+        const session = await openedHelper(f, source);
+        await sendHelper(f, session);
+        let display;
+        if (indexed) {
+          assert.equal(
+            (
+              await f.req(
+                '/pi/conversations/' + session.conversationId,
+                { archived: false },
+                f.owner.token,
+                'PATCH',
+              )
+            ).status,
+            200,
+          );
+          const list = await f.req('/assistant/conversations', undefined, f.owner.token);
+          display = list.body.conversations.find(
+            (c) => c.active.nativeId === session.conversationId,
+          );
+          assert(display);
+        }
+        const operationId = randomUUID();
+        f.app.store.db
+          .prepare('INSERT INTO pi_assistance_operations VALUES(?,?,?,?,?,?)')
+          .run(f.owner.user.id, session.conversationId, operationId, 'context', state, Date.now());
+        await f.restart();
+        if (indexed) {
+          const list = await f.req('/assistant/conversations', undefined, f.owner.token);
+          assert.equal(
+            list.body.conversations.find((c) => c.id === display.id).runState.busy,
+            true,
+          );
+          assert.equal(
+            (
+              await f.req(
+                '/assistant/conversations/' + display.id,
+                undefined,
+                f.owner.token,
+                'DELETE',
+              )
+            ).status,
+            409,
+          );
+          assert.equal(
+            (
+              await f.req(
+                '/assistant/conversations/' + display.id + '/switch',
+                {
+                  id: randomUUID(),
+                  target: { origin: 'remote', connectionId: randomUUID(), projectId: 'workspace' },
+                },
+                f.owner.token,
+              )
+            ).status,
+            409,
+            'unified state must reject an engine switch before target access or creation',
+          );
+        }
+        assert.equal(
+          (
+            await f.req(
+              '/pi/conversations/' + session.conversationId,
+              undefined,
+              f.owner.token,
+              'DELETE',
+            )
+          ).status,
+          409,
+        );
+        assert.equal(f.deletions.length, 0);
+        assert.equal(
+          f.app.store.db
+            .prepare('SELECT state FROM pi_assistance_operations WHERE operation_id=?')
+            .get(operationId).state,
+          state,
+        );
+        assert.equal(
+          f.app.store.db
+            .prepare('SELECT count(*) n FROM pi_turns WHERE owner=? AND conversation_id=?')
+            .get(f.owner.user.id, session.conversationId).n,
+          1,
+        );
+      });
+});
+
+test('manual helper deletion rechecks native work started during its health request', async (t) => {
+  let holdHealth = false,
+    healthArrived,
+    releaseHealth,
+    nativeArrived,
+    releaseNative;
+  const healthEntered = new Promise((resolve) => {
+    healthArrived = resolve;
+  });
+  const healthGate = new Promise((resolve) => {
+    releaseHealth = resolve;
+  });
+  const nativeEntered = new Promise((resolve) => {
+    nativeArrived = resolve;
+  });
+  const nativeGate = new Promise((resolve) => {
+    releaseNative = resolve;
+  });
+  t.after(() => {
+    releaseHealth();
+    releaseNative();
+  });
+  const f = await fixture(t, {
+    nativeSessions: true,
+    health: async () => {
+      if (holdHealth) {
+        healthArrived();
+        await healthGate;
+      }
+    },
+    nativeOperation: async () => {
+      nativeArrived();
+      await nativeGate;
+    },
+  });
+  const source = { origin: 'server', id: f.parent() };
+  const session = await openedHelper(f, source);
+  await sendHelper(f, session);
+  holdHealth = true;
+  const deletion = f.req(
+    '/pi/conversations/' + session.conversationId,
+    undefined,
+    f.owner.token,
+    'DELETE',
+  );
+  await Promise.race([
+    healthEntered,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error('Delete health check did not start')), 2000),
+    ),
+  ]);
+  const operation = f.req(
+    '/pi/conversations/' + session.conversationId + '/context',
+    {},
+    f.owner.token,
+  );
+  await Promise.race([
+    nativeEntered,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error('Native context request did not start')), 2000),
+    ),
+  ]);
+  releaseHealth();
+  assert.equal((await deletion).status, 409);
+  assert.equal(f.deletions.length, 0);
+  releaseNative();
+  assert.equal((await operation).status, 200);
+  assert.equal(f.runs.length, 1);
+});
+
+test('pending helper operation is recorded before dispatch and remains protected after application replacement', async (t) => {
+  let time = Date.now(),
+    release,
+    arrived;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  t.after(() => release());
+  const f = await fixture(t, {
+    now: () => time,
+    nativeSessions: true,
+    nativeOperation: async () => {
+      assert.deepEqual(
+        { ...f.app.store.db.prepare('SELECT operation,state FROM pi_assistance_operations').get() },
+        { operation: 'compact', state: 'pending' },
+        'the reservation must be committed before native dispatch',
+      );
+      arrived();
+      await gate;
+    },
+  });
+  const source = { origin: 'server', id: f.parent() };
+  const session = await openedHelper(f, source);
+  // The HTTP response is deliberately discarded by application shutdown.
+  const pending = f
+    .req('/pi/conversations/' + session.conversationId + '/compact', {}, f.owner.token)
+    .catch(() => null);
+  await Promise.race([
+    entered,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error('Native dispatch did not start')), 2000),
+    ),
+  ]);
+  await f.restart();
+  time += 2 * hour;
+  const status = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+  assert.equal(status.body.conversationId, session.conversationId);
+  assert.equal(status.body.expiresAt, null);
+  assert.equal(f.deletions.length, 0);
+  release();
+  await pending;
+  // An acknowledgement arriving in the closed application must not touch the
+  // replacement application's store or remove its conservative reservation.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const after = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+  assert.equal(after.body.conversationId, session.conversationId);
+  assert.equal(after.body.expiresAt, null);
+  assert.equal(f.deletions.length, 0);
+  assert.equal(f.runs.length, 0);
+});
+
+test('invalid native responses and server failures keep helper outcomes unknown', async (t) => {
+  for (const outcome of ['invalid-json', 500, 503])
+    await t.test(String(outcome), async (t) => {
+      let time = Date.now();
+      const f = await fixture(t, {
+        now: () => time,
+        nativeSessions: true,
+        nativeOperation: async () =>
+          outcome === 'invalid-json'
+            ? new Response('truncated json')
+            : Response.json({ error: 'Native outcome unconfirmed' }, { status: outcome }),
+      });
+      const source = { origin: 'server', id: f.parent() };
+      const session = await openedHelper(f, source);
+      const result = await f.req(
+        '/pi/conversations/' + session.conversationId + '/context',
+        {},
+        f.owner.token,
+      );
+      assert.equal(result.status, outcome === 503 ? 503 : 502);
+      await f.restart();
+      time += 2 * hour;
+      const status = await f.req('/pi/assist/preferences', { source }, f.owner.token);
+      assert.equal(status.body.conversationId, session.conversationId);
+      assert.equal(status.body.expiresAt, null);
+      assert.equal(f.deletions.length, 0);
     });
 });
 

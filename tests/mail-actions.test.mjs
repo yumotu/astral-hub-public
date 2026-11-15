@@ -462,6 +462,7 @@ for (const decision of ['approve', 'deny', 'cancel', 'change-account', 'organize
     t.after(() => release());
     const bridge = async (url, init = {}) => {
       if (url.endsWith('/health')) return Response.json({ ready: true });
+      if (url.endsWith('/cancel')) return Response.json({ ok: true });
       if (!url.endsWith('/run/stream')) return Response.json({});
       runPayload = JSON.parse(init.body);
       cap = (data) => f.request('/pi/mail-access', data, runPayload.mailAccess.token);

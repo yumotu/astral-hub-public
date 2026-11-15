@@ -176,8 +176,44 @@ export function createCommunity(store, { token, body, options = {} }) {
       throw fail(403, '此账号尚未获准修改这个项目。');
     return project;
   }
+  const record = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const nativeAcknowledged = (path, result) => {
+    if (!record(result) || Object.hasOwn(result, 'error') || result.type === 'error') return false;
+    // A successful HTTP exchange alone does not confirm native work. Check the
+    // endpoint's own result before settling its durable helper reservation.
+    if (path === '/sessions/inspect')
+      return (
+        record(result.context) &&
+        Number.isSafeInteger(result.context.messageCount) &&
+        result.context.messageCount >= 0 &&
+        Array.isArray(result.commands) &&
+        result.commands.every((command) => record(command) && typeof command.name === 'string')
+      );
+    if (path === '/sessions/compact')
+      return (
+        result.type === 'done' &&
+        record(result.compaction) &&
+        typeof result.compaction.summary === 'string' &&
+        Number.isFinite(result.compaction.tokensBefore) &&
+        result.compaction.tokensBefore >= 0 &&
+        (result.compaction.estimatedTokensAfter === undefined ||
+          (Number.isFinite(result.compaction.estimatedTokensAfter) &&
+            result.compaction.estimatedTokensAfter >= 0))
+      );
+    if (path === '/sessions/context')
+      return (
+        typeof result.model === 'string' &&
+        result.model.length > 0 &&
+        Number.isSafeInteger(result.contextWindow) &&
+        result.contextWindow > 0
+      );
+    if (path === '/sessions/fork') return result.native === true;
+    if (path === '/cancel') return result.ok === true;
+    return true;
+  };
   async function bridge(path, data, timeout = 10000, principal) {
-    if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
+    if (!piReady)
+      throw Object.assign(fail(503, '远程 Pi 尚未配置。'), { nativeOutcome: 'rejected' });
     let response;
     try {
       response = await (pi.fetch ?? fetch)(`${pi.url}${path}`, {
@@ -200,6 +236,7 @@ export function createCommunity(store, { token, body, options = {} }) {
     } catch {
       throw fail(502, 'Pi 返回了无效响应，请检查任务记录。');
     }
+    if (!record(result)) throw fail(502, 'Pi 返回了无效响应，请检查任务记录。');
     for (const event of result.usageEvents || [])
       options.usage?.pi(
         data?.ownerId,
@@ -213,10 +250,19 @@ export function createCommunity(store, { token, body, options = {} }) {
           typeof result.error === 'string' ? result.error.slice(0, 500) : 'Pi 请求失败。',
         ),
         {
+          // An acknowledged rejection differs from a dropped response or a
+          // server-side failure whose native execution may still be pending.
+          nativeOutcome: [400, 403, 404, 409, 413, 429].includes(response.status)
+            ? 'rejected'
+            : 'unknown',
           tools: toolsSchema.parse(result.tools || []),
           ...(result.diagnostic ? { diagnostic: diagnosticSchema.parse(result.diagnostic) } : {}),
         },
       );
+    if (!nativeAcknowledged(path, result))
+      throw Object.assign(fail(502, 'Pi 操作结果尚未确认，请检查任务记录。'), {
+        nativeOutcome: 'unknown',
+      });
     return result;
   }
   async function streamBridge(payload, res, onEvent) {
@@ -593,6 +639,7 @@ export function createCommunity(store, { token, body, options = {} }) {
      CREATE TABLE IF NOT EXISTS pi_assistance_parents(owner TEXT NOT NULL,parent_key TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(owner,parent_key));
      CREATE TABLE IF NOT EXISTS pi_assistance_preferences(owner TEXT NOT NULL,parent_key TEXT NOT NULL,ttl_hours INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(owner,parent_key));
      CREATE TABLE IF NOT EXISTS pi_assistance_lifetimes(owner TEXT NOT NULL,id TEXT NOT NULL,last_active INTEGER NOT NULL,retained INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner,id));
+     CREATE TABLE IF NOT EXISTS pi_assistance_operations(owner TEXT NOT NULL,id TEXT NOT NULL,operation_id TEXT NOT NULL,operation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','unknown')),started_at INTEGER NOT NULL,PRIMARY KEY(owner,id,operation_id));
      CREATE TABLE IF NOT EXISTS pi_assistance_expirations(owner TEXT NOT NULL,parent_key TEXT NOT NULL,id TEXT NOT NULL,expired_at INTEGER NOT NULL,PRIMARY KEY(owner,parent_key,id));`,
   );
   // Legacy temporary histories get an initial idle window. Records explicitly
@@ -647,6 +694,9 @@ export function createCommunity(store, { token, body, options = {} }) {
     activePi.has(`${owner}:${id}`) ||
     !!helperOperations.get(`${owner}:${id}`) ||
     !!store.db
+      .prepare('SELECT 1 FROM pi_assistance_operations WHERE owner=? AND id=? LIMIT 1')
+      .get(owner, id) ||
+    !!store.db
       .prepare(
         `SELECT 1 FROM pi_tasks WHERE owner=? AND conversation_id=? AND (
         COALESCE(json_extract(state,'$.status'),'') NOT IN ('done','error','cancelled') OR
@@ -665,7 +715,7 @@ export function createCommunity(store, { token, body, options = {} }) {
         `SELECT 1 FROM pi_jobs WHERE owner=? AND conversation_id=? AND status NOT IN ('done','error','cancelled') LIMIT 1`,
       )
       .get(owner, id);
-  async function helperOperation(owner, id, work) {
+  async function helperOperation(owner, id, work, { native = true, operation = 'native' } = {}) {
     const key = `${owner}:${id}`;
     if (
       cleaningHelpers.has(key) ||
@@ -674,9 +724,44 @@ export function createCommunity(store, { token, body, options = {} }) {
         .get(owner, id)
     )
       throw fail(409, '对话已关闭或正在清理，请重新打开后操作。');
+    // Reserve before dispatch, rather than after an error: a process death can
+    // lose both the response and the catch handler. Only this operation's own
+    // acknowledgement can settle its reservation; a later idle check cannot.
+    const operationId =
+      native &&
+      store.db
+        .prepare('SELECT 1 FROM pi_assistance_lifetimes WHERE owner=? AND id=?')
+        .get(owner, id)
+        ? randomUUID()
+        : null;
+    if (operationId)
+      store.db
+        .prepare('INSERT INTO pi_assistance_operations VALUES(?,?,?,?,?,?)')
+        .run(owner, id, operationId, operation, 'pending', now());
     helperOperations.set(key, (helperOperations.get(key) || 0) + 1);
+    const settle = () => {
+      if (operationId && !communityClosed)
+        store.db
+          .prepare('DELETE FROM pi_assistance_operations WHERE owner=? AND id=? AND operation_id=?')
+          .run(owner, id, operationId);
+    };
     try {
-      return await work();
+      const result = await work();
+      settle();
+      return result;
+    } catch (error) {
+      if (
+        error.nativeOutcome === 'rejected' ||
+        (!error.nativeOutcome && [400, 403, 404, 409, 413, 429].includes(error.status))
+      )
+        settle();
+      else if (operationId && !communityClosed)
+        store.db
+          .prepare(
+            "UPDATE pi_assistance_operations SET state='unknown' WHERE owner=? AND id=? AND operation_id=?",
+          )
+          .run(owner, id, operationId);
+      throw error;
     } finally {
       const remaining = helperOperations.get(key) - 1;
       if (remaining) helperOperations.set(key, remaining);
@@ -1169,7 +1254,7 @@ export function createCommunity(store, { token, body, options = {} }) {
           runtime: serverPiRuntime(owner, c.id, c.projectId),
           runState: live
             ? { ...agentRunState(live), busy: true }
-            : { busy: activePi.has(`${owner}:${c.id}`), label: '' },
+            : { busy: helperBusy(owner, c.id), label: '操作结果待核对' },
         };
       });
   return {
@@ -1195,7 +1280,7 @@ export function createCommunity(store, { token, body, options = {} }) {
         const t = pending[0];
         return t
           ? { ...agentRunState(t), busy: true }
-          : { busy: activePi.has(`${actor.id}:${id}`), label: '正在核对任务' };
+          : { busy: helperBusy(actor.id, id), label: '正在核对任务或操作结果' };
       },
     },
     async manageSchedule(ctx, input, callId, computerJob) {
@@ -1526,8 +1611,11 @@ export function createCommunity(store, { token, body, options = {} }) {
         if (p.refresh) limit(`pi-context-refresh:${actor.id}`, 6);
         json(
           200,
-          await helperOperation(actor.id, id, () =>
-            bridge('/sessions/context', { sessionKey: sessionKey(id), ...p }, 15000),
+          await helperOperation(
+            actor.id,
+            id,
+            () => bridge('/sessions/context', { sessionKey: sessionKey(id), ...p }, 15000),
+            { operation: 'context' },
           ),
         );
         return true;
@@ -1558,22 +1646,26 @@ export function createCommunity(store, { token, body, options = {} }) {
         const observation =
           action === 'inspect' || action === 'compact' ? sessionContext.begin(actor.id, id) : null;
         if (action !== 'cancel' && !observation) throw fail(409, '此对话已删除，请建立新对话。');
-        const result = await helperOperation(actor.id, id, () =>
-          bridge(
-            action === 'cancel' ? '/cancel' : `/sessions/${action}`,
-            {
-              sessionKey: sessionKey(id),
-              ownerId: actor.id,
-              conversationId: id,
-              canManageSkills: actor.role === 'owner',
-              projectPrincipal: principalFor(actor),
-              ...(p.projectId ? { projectId: p.projectId, access: p.access } : {}),
-            },
-            // Inspection starts a real Pi process and loads native packages.
-            // Leave room for cold starts within the web client's 100s timeout;
-            // cancellation keeps its shorter deadline and never retries work.
-            action === 'compact' ? 190000 : action === 'inspect' ? 90000 : 15000,
-          ),
+        const result = await helperOperation(
+          actor.id,
+          id,
+          () =>
+            bridge(
+              action === 'cancel' ? '/cancel' : `/sessions/${action}`,
+              {
+                sessionKey: sessionKey(id),
+                ownerId: actor.id,
+                conversationId: id,
+                canManageSkills: actor.role === 'owner',
+                projectPrincipal: principalFor(actor),
+                ...(p.projectId ? { projectId: p.projectId, access: p.access } : {}),
+              },
+              // Inspection starts a real Pi process and loads native packages.
+              // Leave room for cold starts within the web client's 100s timeout;
+              // cancellation keeps its shorter deadline and never retries work.
+              action === 'compact' ? 190000 : action === 'inspect' ? 90000 : 15000,
+            ),
+          { operation: action },
         );
         if (observation) sessionContext.commit(actor.id, id, observation, result.context, action);
         json(
@@ -2029,8 +2121,11 @@ export function createCommunity(store, { token, body, options = {} }) {
             original?.access || live?.access || 'read',
           );
         limit(`pi-fork:${actor.id}`, 15);
-        const result = await helperOperation(actor.id, source, () =>
-          branches.create(actor.id, source, p, live),
+        const result = await helperOperation(
+          actor.id,
+          source,
+          () => branches.create(actor.id, source, p, live),
+          { operation: 'fork' },
         );
         json(201, { ...result, conversation: listConversations().find((c) => c.id === p.id) });
         return true;
@@ -2126,9 +2221,14 @@ export function createCommunity(store, { token, body, options = {} }) {
           const name = z.string().min(1).max(160).parse(url.searchParams.get('name'));
           json(
             201,
-            await helperOperation(actor.id, conversationId, async () => ({
-              file: await chatFiles.save(actor.id, conversationId, name, await readUpload(req)),
-            })),
+            await helperOperation(
+              actor.id,
+              conversationId,
+              async () => ({
+                file: await chatFiles.save(actor.id, conversationId, name, await readUpload(req)),
+              }),
+              { native: false },
+            ),
           );
           return true;
         }
@@ -2196,10 +2296,10 @@ export function createCommunity(store, { token, body, options = {} }) {
               .get(id, actor.id)
           )
             throw fail(409, '请在电脑对话中管理这段历史。');
-          if (activePi.has(`${actor.id}:${id}`) || tasks.live(actor.id, id).length)
+          if (helperBusy(actor.id, id) || tasks.live(actor.id, id).length)
             throw fail(409, '请先停止任务并撤回队列后再删除。');
           const health = await bridge('/health');
-          if (activePi.has(`${actor.id}:${id}`) || tasks.live(actor.id, id).length)
+          if (helperBusy(actor.id, id) || tasks.live(actor.id, id).length)
             throw fail(409, '请先停止任务并撤回队列后再删除。');
           tasks.closeConversation(actor.id, id);
           if (health.scheduledTasks)
