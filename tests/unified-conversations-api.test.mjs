@@ -19,7 +19,9 @@ async function fixture(t, { location = 'computer' } = {}) {
     sessions = new Map(),
     watchers = new Map();
   let piHold,
-    unknown = false;
+    unknown = false,
+    directoryHold;
+  const directoryReads = [];
   const record = (seq, type, data) => ({
     type: 'event',
     event: { seq, type, time: 1000 + seq, data, surfaceOp: 'append' },
@@ -131,6 +133,8 @@ async function fixture(t, { location = 'computer' } = {}) {
       },
       connect: async () => ({
         async workspaces() {
+          directoryReads.push('workspaces');
+          await directoryHold;
           return {
             async *[Symbol.asyncIterator]() {
               yield {
@@ -258,6 +262,19 @@ async function fixture(t, { location = 'computer' } = {}) {
     loseReceipt() {
       unknown = true;
     },
+    directoryReads,
+    holdDirectory() {
+      let release;
+      directoryHold = new Promise((resolve) => {
+        release = resolve;
+      });
+      const clear = () => {
+        directoryHold = undefined;
+        release();
+      };
+      t.after(clear);
+      return clear;
+    },
   };
 }
 async function waitTask(f, id) {
@@ -286,6 +303,140 @@ async function submitPi(f, conversation, input) {
   assert.equal(result.status, 202, JSON.stringify(result.body));
   return id;
 }
+
+test('deferred history and selected Pi or paired computer creation do not wait for an unrelated DSH directory', async (t) => {
+  const f = await fixture(t),
+    now = Date.now(),
+    deviceId = randomUUID(),
+    projectId = randomUUID();
+  f.app.store.db
+    .prepare(
+      'INSERT INTO relay_devices(id,owner,name,platform,root_label,allow_write,token_hash,expires,last_seen,created_at,capabilities) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+    )
+    .run(
+      deviceId,
+      f.owner.user.id,
+      'Existing paired computer',
+      'linux',
+      'private-root',
+      1,
+      randomUUID(),
+      now + 600000,
+      now,
+      new Date(now).toISOString(),
+      '["conversation_handoff_v1"]',
+    );
+  f.app.store.db
+    .prepare('INSERT INTO relay_projects VALUES(?,?,?,?,?,?)')
+    .run(deviceId, projectId, 'Existing project', 1, 1, 0);
+  f.holdDirectory();
+  const prompt = async (promise) => {
+    let deadline;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          deadline = setTimeout(
+            () => reject(Error('unrelated DSH directory blocked local conversation')),
+            1000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+    }
+  };
+  const history = await prompt(f.own('/assistant/conversations?targets=deferred'));
+  assert.equal(history.status, 200);
+  assert.ok(history.body.targets.some((v) => v.origin === 'computer' && v.deviceId === deviceId));
+  assert.equal(f.directoryReads.length, 0, 'deferred history does not start a Remote call');
+  const piDirectory = await prompt(f.own('/assistant/targets?backend=pi'));
+  assert.equal(piDirectory.status, 200);
+  assert.ok(
+    piDirectory.body.targets.some((v) => v.origin === 'server' && v.projectId === 'workspace'),
+    'cold Pi directory includes authorized server folders',
+  );
+  assert.ok(
+    piDirectory.body.targets.some((v) => v.origin === 'computer' && v.deviceId === deviceId),
+  );
+  assert.ok(piDirectory.body.targets.every((v) => v.origin !== 'remote'));
+  assert.equal(f.directoryReads.length, 0, 'Pi directory does not start a Remote call');
+  const server = await prompt(
+    f.own('/assistant/conversations', { id: randomUUID(), target: f.piTarget }),
+  );
+  assert.equal(server.status, 201, JSON.stringify(server.body));
+  const target = { origin: 'computer', deviceId, projectId };
+  const computer = await prompt(f.own('/assistant/conversations', { id: randomUUID(), target }));
+  assert.equal(computer.status, 201, JSON.stringify(computer.body));
+  assert.equal(computer.body.conversation.active.runtime.deviceId, deviceId);
+  assert.equal(f.directoryReads.length, 0, 'neither Pi target reads any DSH directory');
+  for (const update of [
+    { sql: 'expires=?', value: now - 1 },
+    { sql: 'last_seen=?', value: now - 60000 },
+    { sql: 'capabilities=?', value: '[]' },
+  ]) {
+    f.app.store.db
+      .prepare('UPDATE relay_devices SET ' + update.sql + ' WHERE id=?')
+      .run(update.value, deviceId);
+    const denied = await prompt(f.own('/assistant/conversations', { id: randomUUID(), target }));
+    assert.equal(denied.status, 409, update.sql + ' must invalidate the formerly available target');
+    f.app.store.db
+      .prepare('UPDATE relay_devices SET expires=?,last_seen=?,capabilities=? WHERE id=?')
+      .run(now + 600000, now, '["conversation_handoff_v1"]', deviceId);
+  }
+  assert.equal(
+    f.app.store.db
+      .prepare('SELECT COUNT(*) AS n FROM relay_devices WHERE owner=?')
+      .get(f.owner.user.id).n,
+    1,
+    'conversation creation reuses the existing paired device',
+  );
+  f.app.store.db
+    .prepare('UPDATE relay_projects SET revoked=1 WHERE device_id=? AND id=?')
+    .run(deviceId, projectId);
+  const denied = await prompt(f.own('/assistant/conversations', { id: randomUUID(), target }));
+  assert.equal(denied.status, 409);
+  const other = await prompt(
+    f.req('/assistant/conversations', { id: randomUUID(), target }, f.other.token),
+  );
+  assert.equal(other.status, 409);
+  const after = await prompt(f.own('/assistant/conversations?targets=deferred'));
+  assert.equal(after.body.conversations.length, 2);
+  assert.ok(!after.body.targets.some((v) => v.origin === 'computer'));
+});
+
+test('independent target endpoint is authenticated, owner scoped and validates the selected DSH workspace', async (t) => {
+  const f = await fixture(t);
+  assert.equal((await f.req('/assistant/targets')).status, 401);
+  const targets = await f.own('/assistant/targets');
+  assert.equal(targets.status, 200, JSON.stringify(targets.body));
+  assert.ok(
+    targets.body.targets.some((v) => v.origin === 'remote' && v.connectionId === f.connectionId),
+  );
+  assert.ok(f.directoryReads.length > 0);
+  const piOnly = await f.own('/assistant/targets?backend=pi');
+  assert.equal(piOnly.status, 200);
+  assert.ok(piOnly.body.targets.every((v) => v.origin !== 'remote'));
+  const cached = await f.own('/assistant/targets');
+  assert.ok(
+    cached.body.targets.some((v) => v.origin === 'remote' && v.connectionId === f.connectionId),
+    'Pi-only reads must not replace the full cached directory',
+  );
+  const reads = f.directoryReads.length;
+  const rejected = await f.own('/assistant/conversations', {
+    id: randomUUID(),
+    target: { ...f.dshTarget, projectId: 'missing' },
+  });
+  assert.equal(rejected.status, 409);
+  assert.ok(
+    f.directoryReads.length > reads,
+    'selected DSH target is checked freshly despite a warm UI directory',
+  );
+  assert.equal(f.creates.length, 0);
+  const other = await f.req('/assistant/targets', undefined, f.other.token);
+  assert.equal(other.status, 200);
+  assert.ok(!other.body.targets.some((v) => v.origin === 'remote'));
+});
 
 for (const location of ['server', 'computer'])
   test(`unified target directory preserves ${location} DSH location and distinct same-name computer identities without private metadata`, async (t) => {

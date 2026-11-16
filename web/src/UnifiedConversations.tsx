@@ -83,6 +83,9 @@ type Model = {
   selected: Selection | null;
   defaultBackend: 'pi' | 'dsh';
   ready: boolean;
+  targetsLoading: boolean;
+  targetsError: string;
+  refreshTargets: () => Promise<void>;
   error: string;
   busy: boolean;
   select: (value: Selection) => void;
@@ -166,17 +169,26 @@ export function UnifiedConversationsProvider({
   const [ready, setReady] = useState(false),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
+  const [targetsLoading, setTargetsLoading] = useState(true),
+    [targetsError, setTargetsError] = useState('');
   const generation = useRef(0),
+    historyRead = useRef(0),
+    targetGeneration = useRef(0),
+    piDirectoryReady = useRef(false),
     mutationLock = useRef(false);
   const operationIds = useRef(createUnifiedOperationJournal(localStorage, storageKey));
   const refresh = useCallback(async () => {
-    const born = generation.current;
+    const born = generation.current,
+      read = ++historyRead.current;
     const result = await api<{
       conversations: UnifiedConversation[];
       targets?: ConversationTarget[];
       preferences?: { defaultBackend: 'pi' | 'dsh' };
-    }>(settings, endpoint, undefined, undefined, false, { fresh: true });
-    if (generation.current !== born) return;
+    }>(settings, endpoint + '?targets=deferred', undefined, undefined, false, {
+      fresh: true,
+      timeout: 12000,
+    });
+    if (generation.current !== born || historyRead.current !== read || mutationLock.current) return;
     setConversations(result.conversations);
     setSelected((old) => {
       const next = activeUnifiedSelection(result.conversations, old);
@@ -186,21 +198,95 @@ export function UnifiedConversationsProvider({
       }
       return old;
     });
-    if (result.targets) setTargets(result.targets);
+    // Deferred history contains only a partial server directory on a cold server.
+    // Once a directory read completes, polling must not erase those Pi projects.
+    if (result.targets)
+      setTargets((old) => [
+        ...(piDirectoryReady.current
+          ? old.filter((t) => t.origin === 'server')
+          : result.targets!.filter((t) => t.origin === 'server')),
+        ...result.targets!.filter((t) => t.origin === 'computer'),
+        ...old.filter((t) => t.origin === 'remote'),
+      ]);
     if (result.preferences) setDefaultBackend(result.preferences.defaultBackend);
     setReady(true);
     setError('');
   }, [settings, storageKey]);
+  const targetRead = useRef<Promise<void> | null>(null);
+  const refreshTargets = useCallback(() => {
+    if (targetRead.current) return targetRead.current;
+    const born = targetGeneration.current;
+    setTargetsLoading(true);
+    let piApplied = false;
+    const readDirectory = (pi: boolean) =>
+      api<{ targets: ConversationTarget[] }>(
+        settings,
+        '/assistant/targets' + (pi ? '?backend=pi' : ''),
+        undefined,
+        undefined,
+        false,
+        { fresh: true, timeout: pi ? 8000 : 25000 },
+      ).then((result) => {
+        if (targetGeneration.current !== born) return;
+        piDirectoryReady.current = true;
+        if (pi) {
+          piApplied = true;
+          setTargets((old) => [
+            ...result.targets.filter((t) => t.origin !== 'remote'),
+            ...old.filter((t) => t.origin === 'remote'),
+          ]);
+        } else {
+          setTargets((old) => [
+            ...(piApplied ? old : result.targets).filter((t) => t.origin !== 'remote'),
+            ...result.targets.filter((t) => t.origin === 'remote'),
+          ]);
+        }
+      });
+    // Pi projects become selectable as soon as their own read finishes, even
+    // when an unrelated DPH host is still loading or times out.
+    const read = Promise.allSettled([readDirectory(true), readDirectory(false)])
+      .then((outcomes) => {
+        if (targetGeneration.current !== born) return;
+        const failure = outcomes.find((r) => r.status === 'rejected');
+        setTargetsError(failure?.status === 'rejected' ? failure.reason.message : '');
+      })
+      .finally(() => {
+        if (targetRead.current === read) {
+          targetRead.current = null;
+          setTargetsLoading(false);
+        }
+      });
+    targetRead.current = read;
+    return read;
+  }, [settings]);
+  useEffect(() => {
+    void refreshTargets();
+    const reloadTargets = () => {
+      if (!document.hidden) void refreshTargets();
+    };
+    const timer = setInterval(reloadTargets, 15000);
+    window.addEventListener('focus', reloadTargets);
+    window.addEventListener('astral:computer-changed', reloadTargets);
+    return () => {
+      targetGeneration.current++;
+      piDirectoryReady.current = false;
+      targetRead.current = null;
+      clearInterval(timer);
+      window.removeEventListener('focus', reloadTargets);
+      window.removeEventListener('astral:computer-changed', reloadTargets);
+    };
+  }, [refreshTargets]);
   useEffect(() => {
     let live = true,
       loading = false;
     const load = async () => {
       if (loading || document.hidden) return;
       loading = true;
+      const born = generation.current;
       try {
         await refresh();
       } catch (e) {
-        if (live) setError((e as Error).message);
+        if (live && generation.current === born) setError((e as Error).message);
       } finally {
         loading = false;
       }
@@ -231,8 +317,17 @@ export function UnifiedConversationsProvider({
     setBusy(true);
     setError('');
     try {
+      // Ignore reads started before this mutation. A successful create/switch
+      // already returns the authoritative record; catalogue refresh is independent.
+      generation.current++;
       await work();
-      await refresh();
+      const completed = ++generation.current;
+      queueMicrotask(
+        () =>
+          void refresh().catch((e) => {
+            if (generation.current === completed) setError((e as Error).message);
+          }),
+      );
     } catch (e) {
       setError((e as Error).message);
       throw e;
@@ -249,6 +344,9 @@ export function UnifiedConversationsProvider({
         selected,
         defaultBackend,
         ready,
+        targetsLoading,
+        targetsError,
+        refreshTargets,
         error,
         busy,
         select,
@@ -270,6 +368,10 @@ export function UnifiedConversationsProvider({
               id,
               target: targetBody(target),
             });
+            setConversations((old) => [
+              r.conversation,
+              ...old.filter((c) => c.id !== r.conversation.id),
+            ]);
             select(r.conversation.active);
             operationIds.current.complete(key);
           }),
@@ -287,16 +389,30 @@ export function UnifiedConversationsProvider({
               `${endpoint}/${c.id}/switch`,
               { id, target: targetBody(target) },
             );
+            setConversations((old) => [
+              r.conversation,
+              ...old.filter((c) => c.id !== r.conversation.id),
+            ]);
             select(r.conversation.active);
             operationIds.current.complete(key);
           }),
         patch: async (c, patch) => {
-          await api(settings, `${endpoint}/${c.id}`, patch, 'PATCH');
-          await refresh();
+          await mutate(async () => {
+            const result = await api<{ conversation: UnifiedConversation }>(
+              settings,
+              `${endpoint}/${c.id}`,
+              patch,
+              'PATCH',
+            );
+            setConversations((old) =>
+              old.map((item) => (item.id === c.id ? result.conversation : item)),
+            );
+          });
         },
         remove: async (c) =>
           mutate(async () => {
             await api(settings, `${endpoint}/${c.id}`, undefined, 'DELETE');
+            setConversations((old) => old.filter((item) => item.id !== c.id));
             if (
               selected &&
               c.segments.some(
@@ -408,30 +524,34 @@ export function findUnifiedConversation(
 export function ConversationEngineSettings({ origin, nativeId }: Selection) {
   const model = useUnifiedConversations();
   const c = findUnifiedConversation(model, origin, nativeId);
-  const [open, setOpen] = useState(false);
+  const [choice, setChoice] = useState<'pi' | 'dsh' | null>(null);
   if (!model) return null;
+  const activeBackend = c?.active.runtime.backend || (origin === 'remote' ? 'dsh' : 'pi');
   return (
     <div className="conversation-engine-setting">
       <span>本对话引擎</span>
-      <button
-        type="button"
-        className="secondary"
-        disabled={model.busy || !!c?.runState?.busy}
-        onClick={() => setOpen(true)}
-      >
-        {(c?.active.runtime.backend || (origin === 'remote' ? 'dsh' : 'pi')) === 'dsh'
-          ? 'DeepSeek Harness'
-          : 'Pi'}{' '}
-        <ChevronDown size={13} />
-      </button>
+      <div className="conversation-backend-buttons" role="group" aria-label="本对话执行引擎">
+        {(['pi', 'dsh'] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            className="secondary"
+            aria-pressed={activeBackend === value}
+            disabled={model.busy || !!c?.runState?.busy || (activeBackend === value && !!c)}
+            onClick={() => setChoice(value)}
+          >
+            {value === 'pi' ? 'Pi' : 'DPH'}
+          </button>
+        ))}
+      </div>
       {c?.runState?.busy && <small>{c.runState.label}，结束并核定后可切换。</small>}
-      {!c && <small>尚未保存的对话可选择引擎和执行位置，当前草稿会保留。</small>}
-      {open && (
+      {!c && <small>选择本对话的引擎和实际执行位置，当前草稿会保留。</small>}
+      {choice && (
         <ConversationTargetDialog
-          title="切换本对话引擎"
-          close={() => setOpen(false)}
+          title="选择本对话引擎与位置"
+          close={() => setChoice(null)}
           current={c?.active}
-          backend={c ? undefined : origin === 'remote' ? 'pi' : 'dsh'}
+          backend={choice}
           submit={(target) => (c ? model.switchEngine(c, target) : model.create(target))}
         />
       )}
@@ -457,15 +577,20 @@ export function ConversationTargetDialog({
   const model = useUnifiedConversations()!;
   const [error, setError] = useState(''),
     [pending, setPending] = useState(false);
-  const targets = model.targets.filter(
-    (t) =>
-      (t.origin === 'remote' ? 'dsh' : 'pi') ===
-      (current
-        ? current.runtime.backend === 'pi'
+  const [engine, setEngine] = useState<'pi' | 'dsh'>(
+    () =>
+      backend ||
+      (preferred
+        ? preferred.origin === 'remote'
           ? 'dsh'
           : 'pi'
-        : backend || model.defaultBackend),
+        : current
+          ? current.runtime.backend === 'pi'
+            ? 'dsh'
+            : 'pi'
+          : model.defaultBackend),
   );
+  const targets = model.targets.filter((t) => (t.origin === 'remote' ? 'dsh' : 'pi') === engine);
   const orderedTargets = preferred
     ? [...targets].sort(
         (a, b) =>
@@ -483,15 +608,32 @@ export function ConversationTargetDialog({
       <p className="field-help">
         {current
           ? '原记录会保留；目标引擎使用可见交流内容续聊，权限需要按目标重新设置。请选择实际执行位置。'
-          : `使用 ${(backend || model.defaultBackend) === 'dsh' ? 'DeepSeek Harness' : 'Pi'}，请选择项目与执行位置。`}
+          : '为本对话选择引擎与实际执行位置，不会更改新对话的默认设置。'}
       </p>
+      <div className="conversation-backend-buttons" role="group" aria-label="选择执行引擎">
+        {(['pi', 'dsh'] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            className="secondary"
+            aria-pressed={engine === value}
+            disabled={pending || (!!current && current.runtime.backend === value)}
+            onClick={() => {
+              setEngine(value);
+              setError('');
+            }}
+          >
+            {value === 'pi' ? 'Pi' : 'DPH'}
+          </button>
+        ))}
+      </div>
       <div className="conversation-targets">
         {orderedTargets.map((target, index) => (
           <button
             type="button"
             className="secondary"
             key={JSON.stringify(targetBody(target))}
-            disabled={pending}
+            disabled={pending || model.busy}
             onClick={() => {
               setPending(true);
               setError('');
@@ -502,7 +644,7 @@ export function ConversationTargetDialog({
             }}
           >
             <b>
-              {target.origin === 'remote' ? 'DeepSeek Harness' : 'Pi'} ·{' '}
+              {target.origin === 'remote' ? 'DPH' : 'Pi'} ·{' '}
               {model.projectName(target) || `项目 ${index + 1}`}
             </b>
             <small>
@@ -513,7 +655,31 @@ export function ConversationTargetDialog({
         ))}
       </div>
       {!targets.length && (
-        <p className="field-help">没有可用的目标。请先在管理电脑连接中关联主机与授权工作区。</p>
+        <p className="field-help" role="status">
+          {engine === 'dsh' && model.targetsLoading
+            ? '正在读取 DPH 工作区，Pi 项目可直接选择。'
+            : engine === 'dsh'
+              ? '尚无可用的 DPH 工作区。已配对的 Pi 电脑不会自动变成 DPH；需在连接设置中关联该电脑的 DPH Remote。'
+              : '没有可用的 Pi 项目，请检查原电脑连接与项目授权。'}
+        </p>
+      )}
+      {model.targetsError && (
+        <p className="field-help" role="status">
+          部分工作区暂未读取完成。
+          <button
+            type="button"
+            className="text-link"
+            disabled={model.targetsLoading}
+            onClick={() => void model.refreshTargets()}
+          >
+            重新读取工作区
+          </button>
+        </p>
+      )}
+      {pending && (
+        <p className="field-help" role="status">
+          正在建立所选对话…
+        </p>
       )}
       {error && (
         <p className="error" role="alert">

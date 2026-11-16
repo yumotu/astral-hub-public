@@ -144,3 +144,23 @@
     display: none;
   }
 }
+
+.computer-recovery-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+.computer-recovery-banner > span {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+.computer-recovery-banner button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

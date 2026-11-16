@@ -12,7 +12,7 @@ import { attachmentSizeMessage } from '../../deploy/pi/attachment-limits.mjs';
 import { computerInputAvailability } from '../../shared/assistant-availability.mjs';
 import { JumpToLatest } from './JumpToLatest';
 import { api } from './data';
-import { peekAPI, invalidateAPI } from './resource-cache';
+import { peekAPI, invalidateAPI, warmResourceCache, setAPICache } from './resource-cache';
 import { serverIdentity } from './session';
 import {
   operationPreferenceKey,
@@ -94,6 +94,7 @@ export function ComputerChat({
   plugins,
   newConversation,
   capabilities,
+  executionBlocked = '',
   locationName = '电脑',
   titleChanged,
 }: {
@@ -103,6 +104,7 @@ export function ComputerChat({
   project: ComputerProject;
   conversationId: string;
   capabilities: string[];
+  executionBlocked?: string;
   locationName?: string;
   titleChanged: (id: string, title: string) => void;
   settingsContainer: HTMLElement | null;
@@ -211,73 +213,82 @@ export function ComputerChat({
     historyExtended.current = false;
     let live = true,
       busy = false,
+      warmed = false,
       lastPoll = 0,
       otherActive = false,
       checked = false;
+    const controller = new AbortController();
     const cached = peekAPI<{ jobs: Job[]; next: string | null; conversation: Conversation }>(
       settings,
       '/relay/conversations/' + id,
     );
     let lastVersion = cached?.conversation?.version;
-    checked = !!lastVersion;
     setJobs(cached?.jobs || []);
     setOlder(cached?.next || null);
     setError('');
+    const readConversation = async () => {
+      try {
+        const r = await api<{ jobs: Job[]; next: string | null; conversation: Conversation }>(
+          settings,
+          '/relay/conversations/' + id,
+          undefined,
+          undefined,
+          false,
+          { fresh: true, timeout: 8000, signal: controller.signal },
+        );
+        if (!live) return;
+        setAPICache(settings, '/relay/conversations/' + id, r);
+        titleCallback.current(id, r.conversation.title);
+        if (
+          r.jobs.some(
+            (j) =>
+              j.status === 'done' &&
+              jobsRef.current.find((old) => old.id === j.id)?.status !== 'done' &&
+              j.tools.some((t) =>
+                ['project_write', 'project_edit', 'computer_exec'].includes(t.name),
+              ),
+          )
+        )
+          invalidateAPI(settings, '/relay/files/' + deviceId + '/' + project.id + '/');
+        lastVersion = r.conversation.version;
+        checked = true;
+        setJobs((old) =>
+          [...new Map([...old, ...r.jobs].map((j) => [j.id, j])).values()].sort((a, b) =>
+            a.createdAt.localeCompare(b.createdAt),
+          ),
+        );
+        if (!historyExtended.current) setOlder(r.next);
+        setError('');
+      } catch (e) {
+        if ((e as Error & { status?: number }).status !== 404) throw e;
+        checked = true;
+      }
+    };
     async function load(force = false) {
-      if (busy || document.visibilityState !== 'visible') return;
+      if (!live || !warmed || busy || document.visibilityState !== 'visible') return;
       busy = true;
       try {
         const urgent = otherActive || jobsRef.current.some(pending);
         if (!force && !urgent && Date.now() - lastPoll < 10000) return;
         lastPoll = Date.now();
+        // Open the selected conversation directly, without waiting on every
+        // conversation's status or a live connection to the target computer.
+        const opening = !checked;
+        if (opening) await readConversation();
+        if (!live) return;
         const list = await api<{ conversations: Conversation[] }>(
           settings,
           base,
           undefined,
           undefined,
           false,
-          { fresh: true },
+          { fresh: true, timeout: 8000, signal: controller.signal },
         );
         if (!live) return;
         otherActive = list.conversations.some((c) => !!c.active);
         const selected = list.conversations.find((c) => c.id === id);
-        if ((selected && (!selected.version || selected.version !== lastVersion)) || !checked) {
-          checked = true;
-          try {
-            const r = await api<{ jobs: Job[]; next: string | null; conversation: Conversation }>(
-              settings,
-              '/relay/conversations/' + id,
-              undefined,
-              undefined,
-              false,
-              { fresh: true },
-            );
-            if (live) {
-              titleCallback.current(id, r.conversation.title);
-              if (
-                r.jobs.some(
-                  (j) =>
-                    j.status === 'done' &&
-                    jobsRef.current.find((old) => old.id === j.id)?.status !== 'done' &&
-                    j.tools.some((t) =>
-                      ['project_write', 'project_edit', 'computer_exec'].includes(t.name),
-                    ),
-                )
-              )
-                invalidateAPI(settings, '/relay/files/' + deviceId + '/' + project.id + '/');
-              lastVersion = r.conversation.version;
-              setJobs((old) =>
-                [...new Map([...old, ...r.jobs].map((j) => [j.id, j])).values()].sort((a, b) =>
-                  a.createdAt.localeCompare(b.createdAt),
-                ),
-              );
-              if (!historyExtended.current) setOlder(r.next);
-              setError('');
-            }
-          } catch (e) {
-            if ((e as Error & { status?: number }).status !== 404) throw e;
-          }
-        }
+        if (!opening && selected && (!selected.version || selected.version !== lastVersion))
+          await readConversation();
       } catch (e) {
         if (live) setError((e as Error).message);
       } finally {
@@ -286,11 +297,26 @@ export function ComputerChat({
     }
     reload.current = () => void load(true);
     const focus = () => void load(true);
-    void load(true);
+    void warmResourceCache(settings).then(() => {
+      if (!live) return;
+      const saved = peekAPI<{ jobs: Job[]; next: string | null; conversation: Conversation }>(
+        settings,
+        '/relay/conversations/' + id,
+      );
+      if (saved) {
+        setJobs(saved.jobs || []);
+        setOlder(saved.next || null);
+        lastVersion = saved.conversation?.version;
+        // Always revalidate the selected detail on open, even with a warm cache.
+      }
+      warmed = true;
+      void load(true);
+    });
     const timer = setInterval(() => void load(), 1000);
     window.addEventListener('focus', focus);
     return () => {
       live = false;
+      controller.abort();
       clearInterval(timer);
       window.removeEventListener('focus', focus);
     };
@@ -314,15 +340,16 @@ export function ComputerChat({
     outbox.confirm([...new Set([...jobs.map((j) => j.id), ...received.map((j) => j.id)])]);
   }, [rows, jobs, id, outbox]);
   useEffect(() => {
-    if (active) {
-      setAccess(active.access);
-      setExecute(active.execute);
-    }
-  }, [active?.id]);
-  useEffect(() => {
-    if (!project.allowExecute) setExecute(false);
-    if (project.readOnly) setAccess('read');
-  }, [project.allowExecute, project.readOnly]);
+    if (executionBlocked) return;
+    setExecute(
+      !!project.allowExecute && (active ? active.execute : preferences().execute === true),
+    );
+    setAccess(
+      !project.readOnly && (active ? active.access === 'edit' : preferences().access === 'edit')
+        ? 'edit'
+        : 'read',
+    );
+  }, [executionBlocked, project.allowExecute, project.readOnly, active?.id]);
   useLayoutEffect(() => {
     if (!scroll.current) return;
     if (prepend.current) {
@@ -364,6 +391,10 @@ export function ComputerChat({
   }
   async function uploadFiles(incoming: File[]) {
     if (!incoming.length) return;
+    if (executionBlocked) {
+      setUploadError(executionBlocked);
+      return;
+    }
     if (!capabilities.includes('chat_inputs')) {
       setUploadError(unavailable.attachment);
       return;
@@ -403,6 +434,10 @@ export function ComputerChat({
     }
   }
   function send() {
+    if (executionBlocked) {
+      setError(executionBlocked);
+      return;
+    }
     if ((!input.trim() && !staged.length) || uploadBusy.current) return;
     try {
       outbox.add(
@@ -412,8 +447,8 @@ export function ComputerChat({
           projectId: project.id,
           conversationId: id,
           input: input.trim(),
-          access,
-          execute,
+          access: project.readOnly ? 'read' : access,
+          execute: !!project.allowExecute && execute,
           thinkingLevel: capabilities.includes('thinking_levels') ? thinkingLevel : 'off',
           attachments: staged.map((f) => f.id),
           mode: active ? 'steer' : 'queue',
@@ -576,7 +611,13 @@ export function ComputerChat({
         </div>
         <MessageOutbox
           rows={rows.filter((r) => r.payload.conversationId === id)}
-          retry={outbox.retry}
+          retry={(...args) => {
+            if (executionBlocked) {
+              setError(executionBlocked);
+              return;
+            }
+            return outbox.retry(...args);
+          }}
           reconcile={outbox.reconcile}
           restore={(r) => {
             setStaged((old) =>
@@ -707,11 +748,13 @@ export function ComputerChat({
               )
             }
             terminal={terminal}
-            terminalDisabled={!project.allowExecute}
-            terminalDisabledReason="此项目尚未在目标电脑授权终端执行。请在目标电脑的本机设置中授权。"
+            terminalDisabled={!!executionBlocked || !project.allowExecute}
+            terminalDisabledReason={
+              executionBlocked || '此项目尚未在目标电脑授权终端执行。请在目标电脑的本机设置中授权。'
+            }
             attach={() => fileInput.current?.click()}
-            attachmentDisabled={!!unavailable.attachment}
-            attachmentDisabledReason={unavailable.attachment}
+            attachmentDisabled={!!executionBlocked || !!unavailable.attachment}
+            attachmentDisabledReason={executionBlocked || unavailable.attachment}
             attachmentTitle={
               capabilities.includes('chat_inputs')
                 ? `上传图片、PDF或文件。${attachmentSizeMessage}`
@@ -724,7 +767,8 @@ export function ComputerChat({
             working={working}
             hasContent={!!input.trim() || !!staged.length}
             stop={() => void stop()}
-            sendDisabled={uploading || (!input.trim() && !staged.length)}
+            sendDisabled={!!executionBlocked || uploading || (!input.trim() && !staged.length)}
+            sendDisabledReason={executionBlocked || undefined}
             sendAria="发送给电脑Agent"
             sendLabel={active ? (mode === 'steer' && !staged.length ? '立即补充' : '排队') : '发送'}
           />
@@ -757,7 +801,9 @@ export function ComputerChat({
                 value={access}
                 projectName={project.name}
                 readOnly={project.readOnly}
-                locked={working ? '当前任务和队列结束后可切换模式' : undefined}
+                locked={
+                  executionBlocked || (working ? '当前任务和队列结束后可切换模式' : undefined)
+                }
                 onChange={(access) => {
                   saveOperationPreferences(localStorage, preferenceKey, { access });
                   setAccess(access);
@@ -767,7 +813,7 @@ export function ComputerChat({
                 <input
                   type="checkbox"
                   checked={execute}
-                  disabled={working || !project.allowExecute}
+                  disabled={!!executionBlocked || working || !project.allowExecute}
                   onChange={(e) => {
                     saveOperationPreferences(localStorage, preferenceKey, {
                       execute: e.target.checked,

@@ -1560,6 +1560,24 @@ function ServerPiPage({
       {unifiedNew && (
         <ConversationTargetDialog
           title="新对话"
+          preferred={
+            computerTarget
+              ? {
+                  origin: 'computer',
+                  deviceId: computerTarget.deviceId,
+                  projectId: computerTarget.projectId,
+                }
+              : unified?.targets.find(
+                  (t) =>
+                    t.origin === unifiedRecord?.active.origin &&
+                    t.projectId === selectedRuntime?.projectId &&
+                    (t.origin === 'remote'
+                      ? t.connectionId === selectedRuntime?.connectionId
+                      : t.origin === 'computer'
+                        ? t.deviceId === selectedRuntime?.deviceId
+                        : true),
+                )
+          }
           close={() => setUnifiedNew(false)}
           submit={async (target) => {
             await unified!.create(target);
@@ -2563,6 +2581,9 @@ function ServerPiPage({
             target={computerTarget}
             groups={computers.groups}
             ready={computers.ready}
+            refreshing={computers.refreshing}
+            error={computers.error}
+            retry={computers.refresh}
             connect={openComputerConnections}
             newConversation={newCurrentConversation}
           />

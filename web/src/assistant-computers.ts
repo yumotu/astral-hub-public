@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './data';
-import { peekAPI } from './resource-cache';
+import { peekAPI, resourceScope, setAPICache, warmResourceCache } from './resource-cache';
+import {
+  readComputerCatalogueCache,
+  refreshComputerCatalogue,
+} from '../../shared/computer-catalogue.mjs';
 import type { Settings } from './types';
 import type { ComputerProject } from './computer-api';
 
@@ -19,7 +23,13 @@ export type ComputerTarget = {
   conversationId: string;
   panel?: 'files' | 'terminal' | 'plugins';
 };
-export type ComputerGroup = { device: ComputerDevice; projects: ComputerProject[]; error?: string };
+export type ComputerGroup = {
+  device: ComputerDevice;
+  projects: ComputerProject[];
+  error?: string;
+  verified?: boolean;
+  loading?: boolean;
+};
 
 export function useAssistantComputers(settings: Settings, enabled: boolean, owner?: string) {
   const [localId, setLocalId] = useState('');
@@ -46,70 +56,83 @@ export function useAssistantComputers(settings: Settings, enabled: boolean, owne
       window.removeEventListener('astral:computer-changed', read);
     };
   }, [settings.url, enabled, owner]);
-  const [groups, setGroups] = useState<ComputerGroup[]>(() =>
-    (peekAPI<{ devices: ComputerDevice[] }>(settings, '/relay/devices')?.devices || []).map(
-      (device) => ({
-        device,
-        projects:
-          peekAPI<{ projects: ComputerProject[] }>(
-            settings,
-            '/relay/projects?deviceId=' + device.id,
-          )?.projects || [],
-      }),
-    ),
-  );
-  const [error, setError] = useState('');
-  const [ready, setReady] = useState(false);
+  const scope = JSON.stringify([resourceScope(settings), owner || '']);
+  type CatalogueState = {
+    scope: string;
+    groups: ComputerGroup[];
+    error: string;
+    ready: boolean;
+    refreshing: boolean;
+  };
+  const [state, setState] = useState<CatalogueState>(() => ({
+    scope,
+    groups: readComputerCatalogueCache((path) => peekAPI(settings, path)),
+    error: '',
+    ready: false,
+    refreshing: enabled,
+  }));
+  const latest = useRef(state);
+  latest.current = state;
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((n) => n + 1), []);
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setState({ scope, groups: [], error: '', ready: false, refreshing: false });
+      return;
+    }
+    const controller = new AbortController();
     let live = true,
       busy = false;
-    const load = async (fresh = false) => {
-      if (busy) return;
+    const update = (changes: Partial<CatalogueState>) => {
+      if (!live) return;
+      const current = latest.current;
+      const next = {
+        ...(current.scope === scope
+          ? current
+          : { scope, groups: [], error: '', ready: false, refreshing: true }),
+        ...changes,
+      };
+      latest.current = next;
+      setState(next);
+    };
+    const load = async () => {
+      if (!live || busy) return;
       busy = true;
+      update({ refreshing: true });
       try {
-        const { devices } = await api<{ devices: ComputerDevice[] }>(
-          settings,
-          '/relay/devices',
-          undefined,
-          undefined,
-          false,
-          { fresh },
-        );
-        const next = await Promise.all(
-          devices.map(async (device) => {
-            try {
-              const r = await api<{ projects: ComputerProject[] }>(
-                settings,
-                '/relay/projects?deviceId=' + device.id,
-                undefined,
-                undefined,
-                false,
-                { fresh },
-              );
-              return { device, projects: r.projects };
-            } catch (e) {
-              // Keep the device visible, but never substitute another device's grants.
-              return { device, projects: [], error: (e as Error).message };
-            }
-          }),
-        );
-        if (live) {
-          setGroups(next);
-          setError('');
-        }
+        await warmResourceCache(settings);
+        if (!live) return;
+        const current = latest.current;
+        const seed =
+          current.scope === scope && current.groups.length
+            ? current.groups
+            : readComputerCatalogueCache((path) => peekAPI(settings, path));
+        update({ groups: seed });
+        await refreshComputerCatalogue({
+          seed,
+          signal: controller.signal,
+          active: () => live,
+          read: async (path) => {
+            const value = await api(settings, path, undefined, undefined, false, {
+              fresh: true,
+              signal: controller.signal,
+              timeout: 8000,
+            });
+            if (live) setAPICache(settings, path, value);
+            return value;
+          },
+          onChange: (groups) => update({ groups, error: '', ready: true }),
+        });
       } catch (e) {
-        if (live) setError((e as Error).message);
+        update({ error: (e as Error).message });
       } finally {
         busy = false;
-        if (live) setReady(true);
+        update({ ready: true, refreshing: false });
       }
     };
-    void load(revision > 0);
+    void load();
     const focus = () => {
-      if (document.visibilityState === 'visible') void load(true);
+      if (document.visibilityState === 'visible') void load();
     };
     const timer = setInterval(focus, 15000);
     window.addEventListener('focus', focus);
@@ -117,16 +140,21 @@ export function useAssistantComputers(settings: Settings, enabled: boolean, owne
     window.addEventListener('astral:computer-changed', focus);
     return () => {
       live = false;
+      controller.abort();
       clearInterval(timer);
       window.removeEventListener('focus', focus);
       document.removeEventListener('visibilitychange', focus);
       window.removeEventListener('astral:computer-changed', focus);
     };
-  }, [settings, enabled, revision]);
+  }, [scope, enabled, revision]);
+  const visible = enabled && state.scope === scope;
   return {
-    groups: groups.map((g) => ({ ...g, device: { ...g.device, local: g.device.id === localId } })),
-    error,
-    ready,
+    groups: visible
+      ? state.groups.map((g) => ({ ...g, device: { ...g.device, local: g.device.id === localId } }))
+      : [],
+    error: visible ? state.error : '',
+    ready: visible && state.ready,
+    refreshing: enabled && (!visible || state.refreshing),
     refresh,
   };
 }

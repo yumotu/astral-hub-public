@@ -303,3 +303,17 @@
     max-height: 26dvh;
   }
 }
+
+.conversation-backend-buttons {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.conversation-backend-buttons > button {
+  min-width: 64px;
+}
+.conversation-backend-buttons > button[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface-soft);
+}

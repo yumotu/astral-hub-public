@@ -1,3 +1,7 @@
+# 星屿 Astral Hub
+
+0.8.17 将电脑连接复用、原对话快速恢复、新建加速及每对话 Pi／DPH 选择同步到所有原生安装包。保留服务器／电脑 → 项目 → 对话的统一管理方式；远程 DPH 需要单独可信的 DSH Remote 配置。详见 [0.8.17 发行说明](docs/release-0.8.17.md)。
+
 # Astral Hub 0.8.15.r1
 
 Server/computer → project folders → conversations, with unified Pi/DPH navigation, full-title search and responsive layouts. Installer/update version **0.8.16** (Android code60) identifies this same revision for compatibility. [Release notes](docs/release-0.8.16.md); publication status is determined by the matching Release and successful signing workflow.

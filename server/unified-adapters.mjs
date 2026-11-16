@@ -62,29 +62,9 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
   const cachedTargets = new Map(),
     targetReads = new Map(),
     pendingReads = new Map();
-  async function loadTargets(actor) {
+  const unavailable = () => fail(409, '目标引擎、项目或主机当前不可用，请检查连接及授权。');
+  function computerTargets(actor) {
     const items = [];
-    if (community.piReady) {
-      try {
-        const { projects } = await community.unified.projects(actor);
-        items.push(
-          {
-            origin: 'server',
-            projectId: null,
-            location: 'server',
-            locationName: '服务器',
-            projectName: '独立对话',
-          },
-          ...projects.map((p) => ({
-            origin: 'server',
-            projectId: p.id,
-            location: 'server',
-            locationName: '服务器',
-            projectName: p.displayName || p.name || p.id,
-          })),
-        );
-      } catch {}
-    }
     for (const d of db
       .prepare('SELECT * FROM relay_devices WHERE owner=? AND revoked=0 AND expires>?')
       .all(actor.id, now())) {
@@ -108,6 +88,50 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
           projectName: p.name,
         });
     }
+    return items;
+  }
+  const independentServerTarget = {
+    origin: 'server',
+    projectId: null,
+    location: 'server',
+    locationName: '服务器',
+    projectName: '独立对话',
+  };
+  function deferredTargets(actor) {
+    // This is a display directory, never evidence of authorization. The history
+    // route must not contact Pi or any Remote host; mutations revalidate the one
+    // selected target independently below.
+    const server = community.piReady
+      ? [
+          independentServerTarget,
+          ...(cachedTargets.get(actor.id) || []).filter(
+            (t) => t.origin === 'server' && t.projectId !== null,
+          ),
+        ]
+      : [];
+    return [...server, ...computerTargets(actor)];
+  }
+  async function piTargets(actor) {
+    const items = computerTargets(actor);
+    if (community.piReady) {
+      try {
+        const { projects } = await community.unified.projects(actor);
+        items.unshift(
+          independentServerTarget,
+          ...projects.map((p) => ({
+            origin: 'server',
+            projectId: p.id,
+            location: 'server',
+            locationName: '服务器',
+            projectName: p.displayName || p.name || p.id,
+          })),
+        );
+      } catch {}
+    }
+    return items;
+  }
+  async function loadTargets(actor) {
+    const items = await piTargets(actor);
     if (dshRemote.status(actor.id).chatAvailable) {
       const outcomes = await Promise.allSettled(
         dshRemote.status(actor.id).connections.map(async (c) => {
@@ -137,10 +161,49 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
     pendingReads.set(actor.id, read);
     return read;
   }
+  async function available(actor, target) {
+    if (target.origin === 'server') {
+      if (!community.piReady) throw unavailable();
+      if (target.projectId !== null) {
+        const { projects } = await community.unified.projects(actor);
+        if (!projects.some((p) => p.id === target.projectId)) throw unavailable();
+      }
+      return;
+    }
+    if (target.origin === 'computer') {
+      const device = db
+        .prepare('SELECT * FROM relay_devices WHERE owner=? AND id=? AND revoked=0 AND expires>?')
+        .get(actor.id, target.deviceId, now());
+      if (
+        !device ||
+        now() - device.last_seen >= 45000 ||
+        !JSON.parse(device.capabilities || '[]').includes('conversation_handoff_v1') ||
+        !db
+          .prepare('SELECT 1 FROM relay_projects WHERE device_id=? AND id=? AND revoked=0')
+          .get(device.id, target.projectId)
+      )
+        throw unavailable();
+      return;
+    }
+    const status = dshRemote.status(actor.id);
+    if (
+      !status.chatAvailable ||
+      !status.connections.some((c) => c.id === target.connectionId && c.state === 'ready')
+    )
+      throw unavailable();
+    const catalogue = await request(
+      actor,
+      `/api/agent/remote/connections/${target.connectionId}/catalogue`,
+    );
+    if (!catalogue.workspaces.some((w) => w.id === target.projectId)) throw unavailable();
+  }
   return {
     actor: (owner) => community.accounts.profile(owner),
     nativeList,
     targets,
+    piTargets,
+    deferredTargets,
+    available,
     async remove(actor, ref) {
       return request(
         actor,

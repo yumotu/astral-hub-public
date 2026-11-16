@@ -34,8 +34,6 @@ export const conversationPatchSchema = z
   .strict()
   .refine((p) => Object.keys(p).length);
 const refKey = (r) => JSON.stringify([r.origin, r.nativeId]);
-const targetKey = (t) =>
-  JSON.stringify([t.origin, t.projectId, t.deviceId || null, t.connectionId || null]);
 const bounded = (messages, omitted = false) => {
   const result = [];
   let chars = 0;
@@ -191,9 +189,7 @@ export function createUnifiedConversations(db, adapters) {
     };
   };
   async function available(actor, target) {
-    const list = await adapters.targets(actor, { fresh: true });
-    if (!list.some((t) => targetKey(t) === targetKey(target)))
-      throw fail(409, '目标引擎、项目或主机当前不可用，请检查连接及授权。');
+    await adapters.available(actor, target);
   }
   function validateCreated(target, n, nativeId) {
     const runtime = agentRuntimeSchema.parse(n?.runtime);
@@ -487,14 +483,15 @@ export function createUnifiedConversations(db, adapters) {
         locks.delete(key);
       }
     },
-    async list(actor) {
+    async list(actor, { targets = 'full' } = {}) {
       const native = sync(actor);
       return {
         conversations: db
           .prepare('SELECT id FROM assistant_conversations WHERE owner=? ORDER BY updated_at DESC')
           .all(actor.id)
           .map((r) => view(actor.id, r.id, native)),
-        targets: await adapters.targets(actor),
+        targets:
+          targets === 'deferred' ? adapters.deferredTargets(actor) : await adapters.targets(actor),
         preferences: preferences(actor.id),
       };
     },

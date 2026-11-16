@@ -23,6 +23,10 @@ function fixture(t) {
     actor: (id) => ({ id }),
     nativeList: (a) => native.filter((n) => n.owner === a.id),
     targets: async () => (allow ? [source, target] : []),
+    available: async (_a, t) => {
+      if (!allow || ![source, target].some((v) => JSON.stringify(v) === JSON.stringify(t)))
+        throw Object.assign(Error('目标当前不可用'), { status: 409 });
+    },
     state: async () => ({ busy, label: '正在执行' }),
     visible: async (a, r) => {
       if (!allow) throw Error('revoked');
@@ -117,6 +121,41 @@ test('Pi → DPH → Pi is one owned display conversation with immutable segment
   assert.equal(restored.cached(a).conversations[0].title, 'Keep this');
   f.setAllow(false);
   await assert.rejects(restored.handoff(a.id, third.active), /revoked/);
+});
+
+test('creation and switching validate only the selected target before and after native creation', async (t) => {
+  const f = fixture(t),
+    s = f.service(),
+    a = f.actors[0],
+    checks = [];
+  f.adapters.targets = async () => new Promise(() => {});
+  const validate = f.adapters.available;
+  f.adapters.available = async (actor, target) => {
+    checks.push(target);
+    return validate(actor, target);
+  };
+  const before = await Promise.race([
+    s.create(a, { id: randomUUID(), target: f.source }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error('creation waited for unrelated targets')), 500),
+    ),
+  ]);
+  assert.deepEqual(checks, [f.source, f.source]);
+  checks.length = 0;
+  await Promise.race([
+    s.switch(a, before.id, { id: randomUUID(), target: f.target }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error('switch waited for unrelated targets')), 500),
+    ),
+  ]);
+  assert.deepEqual(checks, [f.target, f.target]);
+  f.setAfterCreate(() => f.setAllow(false));
+  await assert.rejects(s.create(a, { id: randomUUID(), target: f.source }), /不可用/);
+  assert.equal(
+    s.cached(a).conversations.length,
+    1,
+    'revocation before commit cannot expose a new display row',
+  );
 });
 test('unknown creation is never replayed; same operation reconciles saved native result only', async (t) => {
   const f = fixture(t),

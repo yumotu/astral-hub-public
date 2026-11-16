@@ -269,9 +269,23 @@ export async function createApp(options = {}) {
       json(200, { preferences: unified.preferences(actor.id, await body(req)) });
       return true;
     }
+    if (url.pathname === '/api/assistant/targets' && req.method === 'GET') {
+      json(200, {
+        targets:
+          url.searchParams.get('backend') === 'pi'
+            ? await adapters.piTargets(actor)
+            : await adapters.targets(actor),
+      });
+      return true;
+    }
     if (url.pathname === '/api/assistant/conversations') {
       if (req.method === 'GET') {
-        json(200, await unified.list(actor));
+        json(
+          200,
+          await unified.list(actor, {
+            targets: url.searchParams.get('targets') === 'deferred' ? 'deferred' : 'full',
+          }),
+        );
         return true;
       }
       if (req.method === 'POST') {
