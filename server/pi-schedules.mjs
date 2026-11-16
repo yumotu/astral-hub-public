@@ -82,7 +82,7 @@ export function createPiSchedulePump({
               });
               continue;
             }
-            const bound = scope(run.ownerId, run.conversationId);
+            const bound = scope(run.ownerId, run.conversationId, run);
             if (bound && (bound.projectId !== run.projectId || bound.access !== run.access))
               throw new Error('目标对话的项目或权限模式已改变，请修改定时计划。');
             task = tasks.add(run.ownerId, {

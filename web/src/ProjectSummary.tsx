@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, FolderOpen, MoreHorizontal, Pencil, Plus } from 'lucide-react';
+import {
+  ChevronRight,
+  FolderOpen,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+  RotateCcw,
+} from 'lucide-react';
 import { ProjectNameDialog } from './ProjectDisplayName';
 import { useBackLayer } from './back-navigation';
 
@@ -9,14 +17,62 @@ export function ProjectSummary({
   detail,
   saveName,
   newConversation,
+  remove,
+  restore,
 }: {
   name: string;
   detail?: ReactNode;
   saveName: (name: string | null) => Promise<void>;
-  newConversation: () => void;
+  newConversation?: () => void;
+  remove?: () => void;
+  restore?: () => void;
+}) {
+  const [rename, setRename] = useState(false);
+  return (
+    <>
+      <ManagementSummary
+        name={name}
+        menuLabel={'项目“' + name + '”的操作'}
+        title="长按或右键管理项目"
+        actions={[
+          { label: '重命名', icon: <Pencil size={16} />, run: () => setRename(true) },
+          ...(newConversation
+            ? [{ label: '新建项目对话', icon: <Plus size={16} />, run: newConversation }]
+            : []),
+          ...(restore ? [{ label: '恢复项目', icon: <RotateCcw size={16} />, run: restore }] : []),
+          ...(remove
+            ? [{ label: '删除项目', icon: <Trash2 size={16} />, danger: true, run: remove }]
+            : []),
+        ]}
+      >
+        <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
+        <FolderOpen size={15} />
+        <span>{name}</span>
+        <small>{detail}</small>
+      </ManagementSummary>
+      {rename && <ProjectNameDialog name={name} save={saveName} close={() => setRename(false)} />}
+    </>
+  );
+}
+
+type ManagementAction = { label: string; icon: ReactNode; run: () => void; danger?: boolean };
+
+export function ManagementSummary({
+  name,
+  title,
+  className,
+  children,
+  actions,
+  menuLabel,
+}: {
+  name: string;
+  title: string;
+  className?: string;
+  children: ReactNode;
+  actions: ManagementAction[];
+  menuLabel?: string;
 }) {
   const [anchor, setAnchor] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
-  const [rename, setRename] = useState(false);
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null),
     suppress = useRef(false);
   const start = useRef({ x: 0, y: 0 });
@@ -27,13 +83,15 @@ export function ProjectSummary({
   useEffect(() => cancel, []);
   function open(origin: HTMLElement, x?: number, y?: number) {
     cancel();
+    if (!actions.length) return;
     const rect = origin.getBoundingClientRect();
     setAnchor({ x: x ?? rect.right, y: y ?? rect.bottom, origin });
   }
   return (
     <>
       <summary
-        title="长按或右键管理项目"
+        title={title}
+        className={className}
         onContextMenu={(e) => {
           e.preventDefault();
           open(e.currentTarget, e.clientX, e.clientY);
@@ -74,33 +132,25 @@ export function ProjectSummary({
           }
         }}
       >
-        <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
-        <FolderOpen size={15} />
-        <span>{name}</span>
-        <small>{detail}</small>
-        <button
-          className="icon-btn project-row-more"
-          aria-label={'项目“' + name + '”的操作'}
-          aria-haspopup="menu"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            open(e.currentTarget);
-          }}
-        >
-          <MoreHorizontal size={14} />
-        </button>
+        {children}
+        {!!actions.length && (
+          <button
+            className="icon-btn project-row-more"
+            aria-label={menuLabel || '电脑“' + name + '”的操作'}
+            aria-haspopup="menu"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              open(e.currentTarget);
+            }}
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        )}
       </summary>
       {anchor && (
-        <ProjectMenu
-          name={name}
-          anchor={anchor}
-          close={() => setAnchor(null)}
-          rename={() => setRename(true)}
-          newConversation={newConversation}
-        />
+        <ProjectMenu name={name} anchor={anchor} close={() => setAnchor(null)} actions={actions} />
       )}
-      {rename && <ProjectNameDialog name={name} save={saveName} close={() => setRename(false)} />}
     </>
   );
 }
@@ -109,14 +159,12 @@ function ProjectMenu({
   name,
   anchor,
   close,
-  rename,
-  newConversation,
+  actions,
 }: {
   name: string;
   anchor: { x: number; y: number; origin: HTMLElement };
   close: () => void;
-  rename: () => void;
-  newConversation: () => void;
+  actions: ManagementAction[];
 }) {
   const menu = useRef<HTMLDivElement>(null),
     [position, setPosition] = useState({ left: anchor.x, top: anchor.y });
@@ -144,7 +192,7 @@ function ProjectMenu({
       ref={menu}
       className="pi-conversation-menu"
       role="menu"
-      aria-label={name + '的项目操作'}
+      aria-label={name + '的操作'}
       style={position}
       onKeyDown={(e) => {
         if (e.key === 'Escape' || e.key === 'Tab') {
@@ -167,26 +215,20 @@ function ProjectMenu({
       }}
     >
       <p className="pi-conversation-menu-title">{name}</p>
-      <button
-        role="menuitem"
-        onClick={() => {
-          close();
-          rename();
-        }}
-      >
-        <Pencil size={16} />
-        <span>重命名</span>
-      </button>
-      <button
-        role="menuitem"
-        onClick={() => {
-          close();
-          newConversation();
-        }}
-      >
-        <Plus size={16} />
-        <span>新建项目对话</span>
-      </button>
+      {actions.map((action) => (
+        <button
+          key={action.label}
+          role="menuitem"
+          className={action.danger ? 'danger' : ''}
+          onClick={() => {
+            close();
+            action.run();
+          }}
+        >
+          {action.icon}
+          <span>{action.label}</span>
+        </button>
+      ))}
     </div>,
     document.body,
   );

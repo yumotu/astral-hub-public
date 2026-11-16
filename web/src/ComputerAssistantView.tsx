@@ -57,15 +57,42 @@ export function ComputerAssistantView({
   );
   const group = groups.find((g) => g.device.id === target.deviceId);
   const foundProject = group?.projects.find((p) => p.id === target.projectId);
-  const project = foundProject || {
+  const removedComputer = model?.management.computers.some(
+    (c) => c.target.origin === 'computer' && c.target.deviceId === target.deviceId && c.removedAt,
+  );
+  const removedProject = model?.management.projects.some(
+    (p) =>
+      p.target.origin === 'computer' &&
+      p.target.deviceId === target.deviceId &&
+      p.target.projectId === target.projectId &&
+      p.removedAt,
+  );
+  const removed = removedComputer || removedProject;
+  const originalProject = foundProject || {
     id: target.projectId,
     name: knownTarget?.projectName || '电脑项目',
     readOnly: true,
     allowExecute: false,
   };
+  const project = {
+    ...originalProject,
+    name:
+      model?.projectName({
+        origin: 'computer',
+        deviceId: target.deviceId,
+        projectId: target.projectId,
+        projectName: originalProject.name,
+      }) || originalProject.name,
+  };
   const deviceName = group?.device.name || knownTarget?.locationName || '原电脑';
-  const verified = !!foundProject && group?.verified === true;
-  const blocked = verified ? '' : '正在核验原电脑项目，草稿和记录会保留；核验完成后可发送。';
+  const verified = !removed && !!foundProject && group?.verified === true;
+  const blocked = removed
+    ? removedComputer
+      ? '电脑连接已撤销，历史记录可查看；重新配对后可继续执行。'
+      : '项目已移除，恢复项目后可继续执行。'
+    : verified
+      ? ''
+      : '正在核验原电脑项目，草稿和记录会保留；核验完成后可发送。';
   useEffect(() => {
     if (!verified) setPanel(null);
   }, [verified]);
@@ -84,7 +111,8 @@ export function ComputerAssistantView({
             </span>
             <span className="computer-location-label" title={deviceName}>
               {group?.device.local ? '本机 · ' : '远程 · '}
-              {deviceName} · {verified ? (group?.device.online ? '在线' : '离线') : '核验中'}
+              {deviceName} ·{' '}
+              {removed ? '已移除' : verified ? (group?.device.online ? '在线' : '离线') : '核验中'}
             </span>
             <button
               disabled={!verified}
@@ -123,11 +151,13 @@ export function ComputerAssistantView({
           {!verified && (
             <div className="computer-recovery-banner" role="status">
               <span>
-                {group?.error ||
-                  error ||
-                  (refreshing || !ready
-                    ? '正在恢复原电脑项目，已有配对会保留。'
-                    : '暂时无法核验原电脑项目，请重试或检查这台电脑的授权。')}
+                {removed
+                  ? blocked
+                  : group?.error ||
+                    error ||
+                    (refreshing || !ready
+                      ? '正在恢复原电脑项目，已有配对会保留。'
+                      : '暂时无法核验原电脑项目，请重试或检查这台电脑的授权。')}
               </span>
               <button className="text-link" type="button" disabled={refreshing} onClick={retry}>
                 <RefreshCw size={13} />

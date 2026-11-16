@@ -415,6 +415,30 @@ export function createDshRemote(
     conversations: (owner, id) => conversations.read(owner, id),
     extensions: conversations.extensions,
     extensionActor: (ctx, actor) => conversations.extensionActor(ctx, actor),
+    managementConnections(owner) {
+      return db
+        .prepare('SELECT * FROM dsh_remote_connections WHERE owner=?')
+        .all(owner)
+        .map((row) => {
+          let host = null;
+          if (!row.revoked && row.secret) {
+            try {
+              const peer = open(row).peer;
+              if (peer)
+                host = { deviceId: peer.deviceId, name: peer.name, location: peer.location };
+            } catch {
+              // A damaged unrelated credential cannot prevent local history management.
+            }
+          }
+          return {
+            id: row.id,
+            name: row.name,
+            revision: row.revision,
+            revoked: !!row.revoked,
+            host,
+          };
+        });
+    },
     status(owner) {
       return {
         enabled,

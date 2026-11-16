@@ -86,6 +86,7 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
           projectId: p.id,
           locationName: d.name,
           projectName: p.name,
+          ...(p.originalName ? { originalName: p.originalName } : {}),
         });
     }
     return items;
@@ -124,6 +125,7 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
             location: 'server',
             locationName: '服务器',
             projectName: p.displayName || p.name || p.id,
+            ...(p.originalName ? { originalName: p.originalName } : {}),
           })),
         );
       } catch {}
@@ -144,6 +146,7 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
             projectId: w.id,
             locationName: catalogue.host.name,
             projectName: w.name,
+            ...(w.originalName ? { originalName: w.originalName } : {}),
           }));
         }),
       );

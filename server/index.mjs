@@ -14,6 +14,7 @@ import { createStore } from './store.mjs';
 import { createUsage } from './usage.mjs';
 import { createUnifiedConversations, conversationCreateSchema } from './unified-conversations.mjs';
 import { unifiedAdapters } from './unified-adapters.mjs';
+import { createProjectManagement } from './project-management.mjs';
 import { createCommunity } from './community.mjs';
 import { createRelay } from './relay.mjs';
 import { createMail } from './mail.mjs';
@@ -252,7 +253,28 @@ export async function createApp(options = {}) {
     },
   });
   const adapters = unifiedAdapters(store.db, { community, relay, dshRemote, now: options.now });
-  unified = createUnifiedConversations(store.db, { ...adapters, now: options.now });
+  const projectManagement = createProjectManagement(store.db, {
+    adapters,
+    relay,
+    dshRemote,
+    now: options.now,
+  });
+  const managedTargets = async (actor, read) =>
+    projectManagement.filterTargets(actor, await read(actor));
+  unified = createUnifiedConversations(store.db, {
+    ...adapters,
+    targets: (actor) => managedTargets(actor, adapters.targets),
+    deferredTargets: (actor) =>
+      projectManagement.filterTargets(actor, adapters.deferredTargets(actor)),
+    available: async (actor, target) => {
+      projectManagement.assertSelectable(actor, target);
+      await adapters.available(actor, target);
+      projectManagement.assertSelectable(actor, target);
+    },
+    now: options.now,
+  });
+  unified.assertProjectSelectable = (actor, target) =>
+    projectManagement.assertSelectable(actor, target);
   const unifiedRate = new Map();
   async function unifiedHandle(req, url, json, actor) {
     if (!url.pathname.startsWith('/api/assistant/')) return false;
@@ -265,6 +287,30 @@ export async function createApp(options = {}) {
     } else unifiedRate.set(key, { until: time + 60000, n: 1 });
     if (unifiedRate.size > 2000)
       for (const [k, v] of unifiedRate) if (v.until <= time) unifiedRate.delete(k);
+    if (url.pathname === '/api/assistant/project-management' && req.method === 'GET') {
+      json(200, projectManagement.list(actor));
+      return true;
+    }
+    if (url.pathname === '/api/assistant/project-management/display-name' && req.method === 'PUT') {
+      json(200, await projectManagement.rename(actor, await body(req)));
+      return true;
+    }
+    if (
+      req.method === 'POST' &&
+      [
+        '/api/assistant/project-management/remove',
+        '/api/assistant/project-management/restore',
+        '/api/assistant/computer-management/remove',
+      ].includes(url.pathname)
+    ) {
+      const method = url.pathname.includes('/computer-management/')
+        ? 'removeComputer'
+        : url.pathname.endsWith('/restore')
+          ? 'restore'
+          : 'remove';
+      json(200, await projectManagement[method](actor, await body(req)));
+      return true;
+    }
     if (url.pathname === '/api/assistant/preferences' && req.method === 'PATCH') {
       json(200, { preferences: unified.preferences(actor.id, await body(req)) });
       return true;
@@ -273,8 +319,8 @@ export async function createApp(options = {}) {
       json(200, {
         targets:
           url.searchParams.get('backend') === 'pi'
-            ? await adapters.piTargets(actor)
-            : await adapters.targets(actor),
+            ? await managedTargets(actor, adapters.piTargets)
+            : await managedTargets(actor, adapters.targets),
       });
       return true;
     }
@@ -513,6 +559,7 @@ export async function createApp(options = {}) {
     relay,
     dshRemote,
     unified,
+    projectManagement,
   });
   const origins = new Set(
     (

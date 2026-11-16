@@ -444,6 +444,11 @@ export function createDshConversations(
           return true;
         }
         const catalog = await catalogue(owner, p.connectionId);
+        unified?.()?.assertProjectSelectable?.(actor, {
+          origin: 'remote',
+          connectionId: p.connectionId,
+          projectId: p.workspaceId,
+        });
         if (!catalog.workspaces.some((w) => w.id === p.workspaceId))
           throw fail(404, 'DSH工作区不可用。');
         if (
@@ -489,6 +494,11 @@ export function createDshConversations(
           });
         try {
           const { client, peer } = await connection(owner, p.connectionId);
+          unified?.()?.assertProjectSelectable?.(actor, {
+            origin: 'remote',
+            connectionId: p.connectionId,
+            projectId: p.workspaceId,
+          });
           let sessionId = native;
           if (!p.sessionId) {
             const result = await client.chat().create(p.workspaceId, native);
@@ -674,9 +684,19 @@ export function createDshConversations(
           recordAction(owner, p.id, id, op, p);
           return { id: p.id, state: old.state };
         }
-        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
+        const assertPromptSelectable = () => {
+          if (op !== 'prompt') return;
+          const current = row(owner, id);
+          unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
+          unified?.()?.assertProjectSelectable?.(actor, {
+            origin: 'remote',
+            connectionId: current.connection_id,
+            projectId: current.workspace_id,
+          });
+        };
+        assertPromptSelectable();
         const { r: current, chat } = await ensure(owner, id);
-        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
+        assertPromptSelectable();
         if (
           op === 'respond' &&
           db
@@ -704,7 +724,7 @@ export function createDshConversations(
           op === 'prompt' && !nativeCommand && !hasNormalInput
             ? (await unified?.()?.handoff(owner, { origin: 'remote', nativeId: id })) || []
             : [];
-        if (op === 'prompt') unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
+        assertPromptSelectable();
         return action(owner, id, p.id, op, p, async () => {
           if (op === 'prompt') {
             if (p.attachments.length && current.app_tools !== 1)
@@ -719,6 +739,12 @@ export function createDshConversations(
                 throw error;
               }
               if (current.app_tools === 1) await software.prepare(actor, current, p, chat);
+              try {
+                assertPromptSelectable();
+              } catch (error) {
+                error.localRejected = true;
+                throw error;
+              }
               if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
               target(owner, row(owner, id));
               const nativeText = handoff.length

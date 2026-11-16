@@ -346,6 +346,11 @@ export function createRelayComputer(
         return j ? { ...j.runState, busy: true } : { busy: false, label: '' };
       },
       create(actor, target, id) {
+        unified?.()?.assertProjectSelectable?.(actor, {
+          origin: 'computer',
+          deviceId: target.deviceId,
+          projectId: target.projectId,
+        });
         const d = ownedDevice(target.deviceId, actor.id);
         project(d.id, target.projectId);
         if (d.expires <= now() || now() - d.last_seen >= 45000)
@@ -827,6 +832,11 @@ export function createRelayComputer(
           { origin: 'computer', nativeId: p.conversationId },
           internal.schedule ? { switchingStatus: 503 } : undefined,
         );
+        unified?.()?.assertProjectSelectable?.(actor, {
+          origin: 'computer',
+          deviceId: p.deviceId,
+          projectId: p.projectId,
+        });
         const capabilities = JSON.parse(device.capabilities || '[]');
         if (internal.resumeQuestion && !capabilities.includes('question_resume'))
           throw fail(409, '请先更新目标电脑，以安全续接中断的问题。');
@@ -898,6 +908,13 @@ export function createRelayComputer(
           { origin: 'computer', nativeId: p.conversationId },
           internal.schedule ? { switchingStatus: 503 } : undefined,
         );
+        unified?.()?.assertProjectSelectable?.(actor, {
+          origin: 'computer',
+          deviceId: p.deviceId,
+          projectId: p.projectId,
+        });
+        ownedDevice(p.deviceId, actor.id);
+        project(p.deviceId, p.projectId);
         const at = new Date(now()).toISOString();
         db.exec('BEGIN IMMEDIATE');
         try {
@@ -975,8 +992,20 @@ export function createRelayComputer(
       if (path === '/api/relay/conversations' && req.method === 'GET') {
         const device = uuid.parse(url.searchParams.get('deviceId')),
           pid = uuid.parse(url.searchParams.get('projectId'));
-        ownedDevice(device, actor.id);
-        project(device, pid);
+        // This is a saved-history read, including after a connection is revoked.
+        // Device ownership and cached history scope still remain mandatory.
+        if (
+          !db.prepare('SELECT 1 FROM relay_devices WHERE id=? AND owner=?').get(device, actor.id) ||
+          (!db
+            .prepare('SELECT 1 FROM relay_projects WHERE id=? AND device_id=?')
+            .get(pid, device) &&
+            !db
+              .prepare(
+                'SELECT 1 FROM relay_conversations WHERE owner=? AND device_id=? AND project_id=?',
+              )
+              .get(actor.id, device, pid))
+        )
+          throw fail(404, '电脑项目不存在。');
         const before = url.searchParams.get('before');
         let cursor;
         if (before) {
@@ -1027,8 +1056,12 @@ export function createRelayComputer(
           .prepare('SELECT * FROM relay_conversations WHERE id=? AND owner=?')
           .get(uuid.parse(conversation[1]), actor.id);
         if (!c) throw fail(404, '电脑对话不存在。');
-        ownedDevice(c.device_id, actor.id);
-        project(c.device_id, c.project_id);
+        // Saved account history remains readable after the computer is revoked.
+        // Mutations still require the live device and project grants below.
+        if (req.method !== 'GET') {
+          ownedDevice(c.device_id, actor.id);
+          project(c.device_id, c.project_id);
+        }
         if (req.method === 'GET') {
           const before = url.searchParams.get('before');
           let cursor;
@@ -1150,8 +1183,6 @@ export function createRelayComputer(
           .prepare('SELECT * FROM relay_jobs WHERE id=? AND owner=? AND project_id IS NOT NULL')
           .get(uuid.parse(lookup[1]), actor.id);
         if (!j) throw fail(404, '电脑任务不存在。');
-        ownedDevice(j.device_id, actor.id);
-        project(j.device_id, j.project_id);
         json(200, { job: view(j) });
         return true;
       }

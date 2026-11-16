@@ -616,13 +616,30 @@ function ServerPiPage({
           <FolderOpen size={15} />
           <span>
             <small>默认工作目录</small>
-            <b>{projects.find((p) => p.id === defaultProjectId)?.name || '独立会话'}</b>
+            <b>
+              {defaultProjectId
+                ? unified?.projectName({
+                    origin: 'server',
+                    projectId: defaultProjectId,
+                    projectName: projects.find((p) => p.id === defaultProjectId)?.name,
+                  }) ||
+                  projects.find((p) => p.id === defaultProjectId)?.name ||
+                  '独立会话'
+                : '独立会话'}
+            </b>
           </span>
           <ChevronDown size={13} />
         </button>
       ),
     });
-  }, [navigationControls, projects, defaultProjectId, preferencesReady, setMobilePanel]);
+  }, [
+    navigationControls,
+    projects,
+    defaultProjectId,
+    preferencesReady,
+    setMobilePanel,
+    unified?.management.projects,
+  ]);
   const [staged, setStaged] = useState<ChatFile[]>([]),
     [uploadError, setUploadError] = useState(''),
     [uploadLabel, setUploadLabel] = useState(''),
@@ -795,6 +812,10 @@ function ServerPiPage({
   }
   async function uploadFiles(incoming: File[]) {
     if (!incoming.length) return;
+    if (removedProject) {
+      setUploadError('项目已移除，请先在“更多 → 已移除”恢复项目。');
+      return;
+    }
     if (uploadBusy.current) {
       setUploadError('请等待当前上传完成，或取消当前上传。');
       return;
@@ -882,7 +903,28 @@ function ServerPiPage({
   useEffect(() => {
     pending.current = null;
   }, [sendMode]);
-  const project = projects.find((p) => p.id === projectId);
+  const originalProject = projects.find((p) => p.id === projectId);
+  const project = originalProject && {
+    ...originalProject,
+    name:
+      unified?.projectName({ origin: 'server', projectId, projectName: originalProject.name }) ||
+      originalProject.name,
+  };
+  const removedProject =
+    !!projectId &&
+    !!unified?.management.projects.some(
+      (p) => p.target.origin === 'server' && p.target.projectId === projectId && p.removedAt,
+    );
+  useEffect(() => {
+    if (
+      defaultProjectId &&
+      unified?.management.projects.some(
+        (p) =>
+          p.target.origin === 'server' && p.target.projectId === defaultProjectId && p.removedAt,
+      )
+    )
+      setDefaultProjectId(null);
+  }, [defaultProjectId, unified?.management.projects]);
   useEffect(() => {
     if (project?.readOnly) setAccess('read');
   }, [project?.readOnly]);
@@ -1390,6 +1432,10 @@ function ServerPiPage({
   }, [savedConversations, conversation, input, staged, access]);
   async function send() {
     if ((!input.trim() && !staged.length) || uploading || loadingHistory) return;
+    if (removedProject) {
+      setError('项目已移除，历史和草稿仍保留；请先在“更多 → 已移除”恢复项目。');
+      return;
+    }
     const command = input.trim();
     if (menu.kind === 'skills') {
       setCommandDismissed(false);
@@ -1624,7 +1670,19 @@ function ServerPiPage({
       )}
       {directorySettings && (
         <DefaultDirectory
-          projects={projects}
+          projects={projects
+            .filter(
+              (p) =>
+                !unified?.management.projects.some(
+                  (m) => m.target.origin === 'server' && m.target.projectId === p.id && m.removedAt,
+                ),
+            )
+            .map((p) => ({
+              ...p,
+              name:
+                unified?.projectName({ origin: 'server', projectId: p.id, projectName: p.name }) ||
+                p.name,
+            }))}
           selected={defaultProjectId}
           close={() => setDirectorySettings(false)}
           save={saveDefaultDirectory}
@@ -2001,6 +2059,11 @@ function ServerPiPage({
                 恢复对话
               </button>
             </div>
+          )}
+          {removedProject && (
+            <p className="pi-archived-banner" role="status">
+              项目已移除，历史和草稿仍保留。请在“更多 → 已移除”恢复项目后继续发送。
+            </p>
           )}
           <div className="assistant-toolbar">
             {project && (
@@ -2521,11 +2584,13 @@ function ServerPiPage({
               terminalDisabled={session.user.role !== 'owner'}
               terminalDisabledReason="服务器终端仅向独立管理员账号开放。项目内的已授权文件操作仍可正常使用。"
               attach={() => fileInput.current?.click()}
-              attachmentDisabled={uploading || staged.length >= 8}
+              attachmentDisabled={removedProject || uploading || staged.length >= 8}
               attachmentDisabledReason={
-                uploading
-                  ? '正在上传附件，请等待完成或取消当前上传。'
-                  : '每条消息最多附加 8 个文件，请先移除附件或发送当前消息。'
+                removedProject
+                  ? '请先恢复已移除的项目。'
+                  : uploading
+                    ? '正在上传附件，请等待完成或取消当前上传。'
+                    : '每条消息最多附加 8 个文件，请先移除附件或发送当前消息。'
               }
               attachmentTitle={`上传图片、PDF或文件，也可直接粘贴或拖到聊天窗口。${attachmentSizeMessage}`}
               commands={() => {
@@ -2539,6 +2604,7 @@ function ServerPiPage({
               hasContent={!!input.trim() || !!staged.length}
               stop={() => void stopCurrent().catch((e) => setError(e.message))}
               sendDisabled={
+                removedProject ||
                 uploading ||
                 loadingHistory ||
                 manualCompacting ||
@@ -2547,15 +2613,17 @@ function ServerPiPage({
               }
               sendAria="发送给 Pi"
               sendDisabledReason={
-                uploading
-                  ? '请等待附件上传完成，或取消上传后发送。'
-                  : loadingHistory
-                    ? '正在恢复当前对话历史，请稍候。'
-                    : manualCompacting
-                      ? '正在压缩上下文，完成后可以发送。'
-                      : !status?.available
-                        ? '服务器 Pi 当前不可用，请在连接与设置中检查服务连接。'
-                        : '请输入消息或添加附件后发送。'
+                removedProject
+                  ? '请先恢复已移除的项目。'
+                  : uploading
+                    ? '请等待附件上传完成，或取消上传后发送。'
+                    : loadingHistory
+                      ? '正在恢复当前对话历史，请稍候。'
+                      : manualCompacting
+                        ? '正在压缩上下文，完成后可以发送。'
+                        : !status?.available
+                          ? '服务器 Pi 当前不可用，请在连接与设置中检查服务连接。'
+                          : '请输入消息或添加附件后发送。'
               }
               sendLabel={activeTask ? (sendMode === 'steer' ? '立即补充' : '排队') : '发送'}
             />

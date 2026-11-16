@@ -1313,11 +1313,19 @@ export function createCommunity(store, { token, body, options = {} }) {
     tasks,
     ownerAllowed: (owner) =>
       store.db.prepare('SELECT role FROM users WHERE id=?').get(owner)?.role === 'owner',
-    scope: (owner, id) => {
+    scope: (owner, id, run) => {
       options
         .unified?.()
         ?.assertWritable(owner, { origin: 'server', nativeId: id }, { switchingStatus: 503 });
-      return accounts.piScope(owner, id) || tasks.scope(owner, id);
+      const scope =
+        accounts.piScope(owner, id) ||
+        tasks.scope(owner, id) ||
+        conversationMetadata.get(owner, id);
+      options.unified?.()?.assertProjectSelectable?.(accounts.profile(owner), {
+        origin: 'server',
+        projectId: scope?.projectId ?? run?.projectId ?? null,
+      });
+      return scope;
     },
     completed: (owner, id) => accounts.piTurn(owner, id),
     computer: (run) => options.scheduleComputer?.(run),
@@ -1600,6 +1608,9 @@ export function createCommunity(store, { token, body, options = {} }) {
         options
           .unified?.()
           ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
+        options
+          .unified?.()
+          ?.assertProjectSelectable?.(actor, { origin: 'server', projectId: p.projectId });
         if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
         if (accounts.piTurn(actor.id, p.id) || accounts.piJob(actor.id, p.id))
           throw fail(409, '此请求已执行过，请查看历史。');
@@ -1653,6 +1664,9 @@ export function createCommunity(store, { token, body, options = {} }) {
         limit(`pi-task:${actor.id}`, 30);
         if (cleaningHelpers.has(`${actor.id}:${p.conversationId}`))
           throw fail(409, '临时对话正在清理，请重新打开后发送。');
+        options
+          .unified?.()
+          ?.assertProjectSelectable?.(actor, { origin: 'server', projectId: p.projectId });
         if (auto) {
           let task;
           store.db.exec('BEGIN IMMEDIATE');
@@ -2188,6 +2202,10 @@ export function createCommunity(store, { token, body, options = {} }) {
             .parse(await body(req));
           if (p.defaultProjectId) {
             await projectFor(actor, p.defaultProjectId);
+            options.unified?.()?.assertProjectSelectable?.(actor, {
+              origin: 'server',
+              projectId: p.defaultProjectId,
+            });
           }
           json(200, {
             preferences: conversationMetadata.setPreferences(actor.id, p.defaultProjectId),
@@ -2292,6 +2310,8 @@ export function createCommunity(store, { token, body, options = {} }) {
           if (project?.readOnly && p.access === 'edit') throw fail(403, '所选项目为只读。');
         }
         projectId ||= null;
+        if (!existing)
+          options.unified?.()?.assertProjectSelectable?.(actor, { origin: 'server', projectId });
         if (existing && (existing.projectId || null) !== projectId)
           throw fail(409, '此对话已绑定其他项目，请建立新对话。');
         if (!projectId && p.access === 'edit') throw fail(400, '请先选择工作目录。');
@@ -2464,6 +2484,9 @@ export function createCommunity(store, { token, body, options = {} }) {
         options
           .unified?.()
           ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
+        options
+          .unified?.()
+          ?.assertProjectSelectable?.(actor, { origin: 'server', projectId: p.projectId || null });
         if (!piReady) throw fail(503, '远程 Pi 尚未配置。');
         if (tasks.live(actor.id, p.conversationId).length)
           throw fail(409, '请等待当前任务和队列完成。');
@@ -2508,6 +2531,9 @@ export function createCommunity(store, { token, body, options = {} }) {
         options
           .unified?.()
           ?.assertWritable(actor.id, { origin: 'server', nativeId: p.conversationId });
+        options
+          .unified?.()
+          ?.assertProjectSelectable?.(actor, { origin: 'server', projectId: p.projectId || null });
         runtimeBindings.bind(actor.id, 'server', p.conversationId, runtime);
         activePi.add(`${actor.id}:${p.conversationId}`);
         if (p.projectId) accounts.reservePiJob(actor.id, p);

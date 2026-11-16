@@ -458,7 +458,8 @@ export function createRelay(db, { body, config, options = {} }) {
       if (path === '/api/relay/jobs') {
         if (req.method === 'GET') {
           const id = uuid.parse(url.searchParams.get('deviceId'));
-          ownedDevice(id, actor.id);
+          if (!db.prepare('SELECT 1 FROM relay_devices WHERE id=? AND owner=?').get(id, actor.id))
+            throw fail(404, '设备不存在。');
           json(200, {
             jobs: db
               .prepare(

@@ -21,6 +21,7 @@ import {
   Search,
   Server,
   X,
+  Trash2,
 } from 'lucide-react';
 import { api, dateLabel } from './data';
 import { useMobilePanels } from './MobilePanels';
@@ -34,7 +35,7 @@ import {
   type MenuAnchor,
 } from './ConversationMenu';
 import { ProjectConversationList } from './ProjectConversationList';
-import { ProjectSummary } from './ProjectSummary';
+import { ManagementSummary, ProjectSummary } from './ProjectSummary';
 import { NativeSegmentHistory } from './ConversationSegmentHistory';
 import { serverIdentity } from './session';
 import {
@@ -77,6 +78,23 @@ export type ConversationTarget = {
   projectName?: string;
 };
 type Selection = { origin: NativeConversationRef['origin']; nativeId: string };
+type ComputerTarget =
+  { origin: 'computer'; deviceId: string } | { origin: 'remote'; connectionId: string };
+type ManagedProject = {
+  target: ConversationTarget;
+  name: string;
+  originalName?: string;
+  removedAt?: string | null;
+  revision: number;
+};
+type ManagedComputer = {
+  target: ComputerTarget;
+  name: string;
+  removedAt?: string | null;
+  revision: number;
+  hostId?: string;
+};
+type ProjectManagement = { projects: ManagedProject[]; computers: ManagedComputer[] };
 type Model = {
   conversations: UnifiedConversation[];
   targets: ConversationTarget[];
@@ -100,12 +118,25 @@ type Model = {
   remove: (c: UnifiedConversation) => Promise<void>;
   projectName: (target: ConversationTarget) => string;
   renameProject: (target: ConversationTarget, name: string | null) => Promise<void>;
+  management: ProjectManagement;
+  refreshManagement: () => Promise<ProjectManagement>;
+  removeProject: (project: ManagedProject) => Promise<void>;
+  restoreProject: (project: ManagedProject) => Promise<void>;
+  removeComputer: (computer: ManagedComputer) => Promise<void>;
   importSession: (target: ConversationTarget, sessionId: string) => Promise<void>;
   sessions: (target: ConversationTarget) => Promise<RemoteSession[]>;
 };
 type RemoteSession = { id: string; title: string; workspaceIds: string[]; running?: boolean };
 const projectKey = (t: ConversationTarget) =>
   JSON.stringify([t.origin, t.connectionId || t.deviceId || null, t.projectId]);
+const computerKey = (t: ComputerTarget) =>
+  JSON.stringify([t.origin, t.origin === 'computer' ? t.deviceId : t.connectionId]);
+const computerFor = (t: ConversationTarget): ComputerTarget | null =>
+  t.origin === 'computer' && t.deviceId
+    ? { origin: 'computer', deviceId: t.deviceId }
+    : t.origin === 'remote' && t.connectionId
+      ? { origin: 'remote', connectionId: t.connectionId }
+      : null;
 const matchesRuntime = (target: ConversationTarget, segment: NativeConversationRef) =>
   target.origin === segment.origin &&
   target.projectId === segment.runtime.projectId &&
@@ -162,7 +193,40 @@ export function UnifiedConversationsProvider({
       return {};
     }
   });
-  const [renamedProjects, setRenamedProjects] = useState<Record<string, string>>({});
+  const [management, setManagement] = useState<ProjectManagement>({ projects: [], computers: [] });
+  const [managementReady, setManagementReady] = useState(false);
+  const managementRead = useRef(0);
+  const refreshManagement = useCallback(async () => {
+    const read = ++managementRead.current;
+    const result = await api<ProjectManagement>(
+      settings,
+      '/assistant/project-management',
+      undefined,
+      undefined,
+      false,
+      { fresh: true },
+    );
+    if (managementRead.current === read) {
+      setManagement(result);
+      setManagementReady(true);
+    }
+    return result;
+  }, [settings]);
+  useEffect(() => {
+    const load = () => {
+      void refreshManagement().catch((e) => setError(e.message));
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    window.addEventListener('focus', load);
+    window.addEventListener('astral:computer-changed', load);
+    return () => {
+      managementRead.current++;
+      clearInterval(timer);
+      window.removeEventListener('focus', load);
+      window.removeEventListener('astral:computer-changed', load);
+    };
+  }, [refreshManagement]);
   const [conversations, setConversations] = useState<UnifiedConversation[]>([]);
   const [targets, setTargets] = useState<ConversationTarget[]>([]);
   const [defaultBackend, setDefaultBackend] = useState<'pi' | 'dsh'>('pi');
@@ -339,11 +403,26 @@ export function UnifiedConversationsProvider({
   return (
     <Context.Provider
       value={{
-        conversations,
-        targets,
+        conversations: managementReady ? conversations : [],
+        targets: managementReady
+          ? targets.filter(
+              (t) =>
+                !management.projects.some(
+                  (p) => p.removedAt && projectKey(p.target) === projectKey(t),
+                ) &&
+                !management.computers.some(
+                  (c) =>
+                    c.removedAt &&
+                    computerFor(t) &&
+                    computerKey(c.target) === computerKey(computerFor(t)!),
+                ),
+            )
+          : [],
+        management,
+        refreshManagement,
         selected,
         defaultBackend,
-        ready,
+        ready: ready && managementReady,
         targetsLoading,
         targetsError,
         refreshTargets,
@@ -430,7 +509,7 @@ export function UnifiedConversationsProvider({
             }
           }),
         projectName: (target) =>
-          renamedProjects[projectKey(target)] ||
+          management.projects.find((p) => projectKey(p.target) === projectKey(target))?.name ||
           (target.origin === 'remote'
             ? projectAliases[target.connectionId + ':' + target.projectId]
             : '') ||
@@ -440,34 +519,43 @@ export function UnifiedConversationsProvider({
           '独立对话',
         renameProject: async (target, name) => {
           if (!target.projectId) return;
-          if (target.origin === 'remote') {
-            const next = { ...projectAliases },
-              key = target.connectionId + ':' + target.projectId;
-            if (name) next[key] = name;
-            else delete next[key];
-            localStorage.setItem(aliasStorageKey, JSON.stringify(next));
-            setProjectAliases(next);
-          } else {
-            const base = target.origin === 'server' ? '/pi/projects/' : '/relay/projects/';
-            const query =
-              target.origin === 'computer'
-                ? '?deviceId=' + encodeURIComponent(target.deviceId!)
-                : '';
-            await api(
-              settings,
-              base + encodeURIComponent(target.projectId) + '/display-name' + query,
-              { name },
-              'PUT',
-            );
-            setRenamedProjects((old) => {
-              const next = { ...old };
-              if (name) next[projectKey(target)] = name;
-              else delete next[projectKey(target)];
-              return next;
-            });
-            await refresh();
-          }
+          await api(
+            settings,
+            '/assistant/project-management/display-name',
+            { target: targetBody(target), name },
+            'PUT',
+          );
+          const aliases = { ...projectAliases };
+          delete aliases[target.connectionId + ':' + target.projectId];
+          localStorage.setItem(aliasStorageKey, JSON.stringify(aliases));
+          setProjectAliases(aliases);
+          await refreshManagement();
         },
+        removeProject: async (project) =>
+          mutate(async () => {
+            await api(settings, '/assistant/project-management/remove', {
+              target: targetBody(project.target),
+              revision: project.revision,
+            });
+            await refreshManagement();
+          }),
+        restoreProject: async (project) =>
+          mutate(async () => {
+            await api(settings, '/assistant/project-management/restore', {
+              target: targetBody(project.target),
+              revision: project.revision,
+            });
+            await refreshManagement();
+          }),
+        removeComputer: async (computer) =>
+          mutate(async () => {
+            await api(settings, '/assistant/computer-management/remove', {
+              target: computer.target,
+              revision: computer.revision,
+            });
+            await refreshManagement();
+            window.dispatchEvent(new Event('astral:computer-changed'));
+          }),
         sessions: async (target) => {
           if (target.origin !== 'remote') return [];
           const result = await api<{ sessions: RemoteSession[] }>(
@@ -705,6 +793,11 @@ export function UnifiedConversationNavigation({
   const { displayPanel, setPanel } = useMobilePanels();
   const [archived, setArchived] = useState(false),
     [newOpen, setNewOpen] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  const [removal, setRemoval] = useState<{
+    project?: ManagedProject;
+    computer?: ManagedComputer;
+  } | null>(null);
   const [menu, setMenu] = useState<MenuAnchor | null>(null),
     [editing, setEditing] = useState<UnifiedConversation | null>(null);
   const [deleting, setDeleting] = useState<UnifiedConversation | null>(null);
@@ -715,10 +808,24 @@ export function UnifiedConversationNavigation({
   const [locationExpansion, setLocationExpansion] = useState<Record<string, boolean>>({});
   const more = useRef<HTMLDetailsElement>(null);
   const open = displayPanel === 'conversations';
-  const visible = visibleConversations(model.conversations, archived);
+  const visible = removed
+    ? model.conversations
+    : visibleConversations(model.conversations, archived);
   const search = query.trim().toLocaleLowerCase();
   const selected = (c: UnifiedConversation) =>
     model.selected?.origin === c.active.origin && model.selected.nativeId === c.active.nativeId;
+  const removedProjects = model.management.projects.filter((p) => p.removedAt);
+  const removedComputers = model.management.computers.filter((c) => c.removedAt);
+  const matchingRemovedComputers = removedComputers.filter(
+    (c) => !search || c.name.toLocaleLowerCase().includes(search),
+  );
+  function isRemoved(target: ConversationTarget) {
+    const computer = computerFor(target);
+    return (
+      removedProjects.some((p) => projectKey(p.target) === projectKey(target)) ||
+      (!!computer && removedComputers.some((c) => computerKey(c.target) === computerKey(computer)))
+    );
+  }
   type Group = {
     title: string;
     target: ConversationTarget;
@@ -726,7 +833,7 @@ export function UnifiedConversationNavigation({
     available: boolean;
   };
   const groups = new Map<string, Group>();
-  if (!archived)
+  if (!archived && !removed)
     for (const target of model.targets)
       groups.set(projectKey(target), {
         title: target.locationName || (target.origin === 'server' ? '服务器' : '电脑'),
@@ -737,15 +844,17 @@ export function UnifiedConversationNavigation({
   for (const c of visible) {
     const first = c.segments[0] || c.active;
     const runtime = first.runtime;
-    const target = model.targets.find((t) => matchesRuntime(t, first)) || {
-      origin: first.origin,
-      projectId: runtime.projectId,
-      location: runtime.location,
-      ...(runtime.deviceId ? { hostId: runtime.deviceId } : {}),
-      ...(runtime.deviceId && first.origin === 'computer' ? { deviceId: runtime.deviceId } : {}),
-      ...(runtime.connectionId ? { connectionId: runtime.connectionId } : {}),
-    };
+    const target = model.targets.find((t) => matchesRuntime(t, first)) ||
+      model.management.projects.find((p) => matchesRuntime(p.target, first))?.target || {
+        origin: first.origin,
+        projectId: runtime.projectId,
+        location: runtime.location,
+        ...(runtime.deviceId ? { hostId: runtime.deviceId } : {}),
+        ...(runtime.deviceId && first.origin === 'computer' ? { deviceId: runtime.deviceId } : {}),
+        ...(runtime.connectionId ? { connectionId: runtime.connectionId } : {}),
+      };
     const key = projectKey(target);
+    if (isRemoved(target) !== removed) continue;
     if (!groups.has(key))
       groups.set(key, {
         title: target.locationName || (runtime.location === 'server' ? '服务器' : '电脑'),
@@ -755,6 +864,18 @@ export function UnifiedConversationNavigation({
       });
     groups.get(key)!.items.push(c);
   }
+  if (removed)
+    for (const project of removedProjects) {
+      const key = projectKey(project.target);
+      if (!groups.has(key))
+        groups.set(key, {
+          title:
+            project.target.locationName || (project.target.origin === 'server' ? '服务器' : '电脑'),
+          target: project.target,
+          items: [],
+          available: false,
+        });
+    }
   const matches = (group: Group, c?: UnifiedConversation) =>
     !search ||
     [c?.title, group.title, model.projectName(group.target)]
@@ -773,6 +894,7 @@ export function UnifiedConversationNavigation({
   >();
   if (
     !archived &&
+    !removed &&
     !search &&
     model.targets.some((target) => target.origin === 'server' || target.location === 'server')
   ) {
@@ -794,6 +916,35 @@ export function UnifiedConversationNavigation({
     if (!locations.has(key))
       locations.set(key, { title: server ? '服务器' : group.title, server, groups: [] });
     locations.get(key)!.groups.push(group);
+  }
+  if (!archived && !removed && !search)
+    for (const computer of model.management.computers.filter((c) => !c.removedAt)) {
+      const key = JSON.stringify([
+        'computer',
+        computer.hostId ||
+          (computer.target.origin === 'computer'
+            ? computer.target.deviceId
+            : computer.target.connectionId),
+      ]);
+      if (!locations.has(key))
+        locations.set(key, { title: computer.name, server: false, groups: [] });
+    }
+  function locationComputers(locationKey: string, groups: typeof filteredGroups) {
+    return model.management.computers.filter(
+      (computer) =>
+        !computer.removedAt &&
+        (JSON.stringify([
+          'computer',
+          computer.hostId ||
+            (computer.target.origin === 'computer'
+              ? computer.target.deviceId
+              : computer.target.connectionId),
+        ]) === locationKey ||
+          groups.some((g) => {
+            const t = computerFor(g.target);
+            return t && computerKey(t) === computerKey(computer.target);
+          })),
+    );
   }
   function row(c: UnifiedConversation) {
     return (
@@ -819,12 +970,30 @@ export function UnifiedConversationNavigation({
   }
   function showArchive(value: boolean) {
     setArchived(value);
+    setRemoved(false);
     setQuery('');
     if (more.current) more.current.open = false;
   }
+  async function askProjectRemoval(target: ConversationTarget) {
+    try {
+      const latest = await model.refreshManagement();
+      // Read the latest entry in the dialog instead of confirming a catalogue
+      // name whose permissions may have changed while the menu was open.
+      const project = latest.projects.find((p) => projectKey(p.target) === projectKey(target));
+      if (!project) throw Error('项目目录尚未读取完成，请刷新后重试。');
+      setRemoval({ project });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   function sameDirectory(c: UnifiedConversation) {
     const first = c.segments[0] || c.active;
-    setNewTarget(model.targets.find((t) => matchesRuntime(t, first)));
+    const target = model.targets.find((t) => matchesRuntime(t, first));
+    if (!target) {
+      setError('原项目已移除或暂不可用，请先恢复项目或选择其他执行位置。');
+      return;
+    }
+    setNewTarget(target);
     setNewOpen(true);
   }
   function action(kind: ConversationAction, value: Conversation) {
@@ -884,13 +1053,15 @@ export function UnifiedConversationNavigation({
               }}
             />
           </label>
-          {archived && (
+          {(archived || removed) && (
             <div className="unified-archive-heading">
               <button className="icon-btn" aria-label="返回对话" onClick={() => showArchive(false)}>
                 <ArrowLeft size={16} />
               </button>
-              <strong>已归档</strong>
-              <small>{visible.length}</small>
+              <strong>{removed ? '已移除' : '已归档'}</strong>
+              <small>
+                {filteredGroups.reduce((count, group) => count + group.items.length, 0)}
+              </small>
             </div>
           )}
         </div>
@@ -915,29 +1086,72 @@ export function UnifiedConversationNavigation({
                 })
               }
             >
-              <summary className="unified-location-heading" title={location.title}>
-                <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
-                {location.server ? <Server size={16} /> : <Monitor size={16} />}
-                <span>{location.title}</span>
-                <small>
-                  {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
-                </small>
-                {location.server && !archived && newProject && (
-                  <button
-                    className="icon-btn"
-                    aria-label="新建服务器项目"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      newProject();
-                    }}
-                  >
-                    <Plus size={15} />
-                  </button>
-                )}
-              </summary>
+              {!location.server ? (
+                <ManagementSummary
+                  name={location.title}
+                  className="unified-location-heading"
+                  title="长按或右键管理电脑"
+                  actions={locationComputers(locationKey, location.groups).map((computer) => ({
+                    label:
+                      '删除电脑' +
+                      (locationComputers(locationKey, location.groups).length > 1
+                        ? computer.target.origin === 'computer'
+                          ? '（Pi 连接）'
+                          : '（DPH 连接）'
+                        : ''),
+                    icon: <Trash2 size={16} />,
+                    danger: true,
+                    run: () => {
+                      void model
+                        .refreshManagement()
+                        .then((latest) => {
+                          const current = latest.computers.find(
+                            (c) => computerKey(c.target) === computerKey(computer.target),
+                          );
+                          if (current) setRemoval({ computer: current });
+                        })
+                        .catch((e) => setError(e.message));
+                    },
+                  }))}
+                >
+                  <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
+                  <Monitor size={16} />
+                  <span>{location.title}</span>
+                  <small>
+                    {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
+                  </small>
+                </ManagementSummary>
+              ) : (
+                <summary className="unified-location-heading" title={location.title}>
+                  <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
+                  <Server size={16} />
+                  <span>{location.title}</span>
+                  <small>
+                    {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
+                  </small>
+                  {!archived && !removed && newProject && (
+                    <button
+                      className="icon-btn"
+                      aria-label="新建服务器项目"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        newProject();
+                      }}
+                    >
+                      <Plus size={15} />
+                    </button>
+                  )}
+                </summary>
+              )}
               <div className="unified-location-projects">
-                {!location.groups.length && <p className="field-help">点击加号创建项目文件夹。</p>}
+                {!location.groups.length && (
+                  <p className="field-help">
+                    {location.server
+                      ? '点击加号创建项目文件夹。'
+                      : '当前没有可用项目，可长按或右键管理电脑连接。'}
+                  </p>
+                )}
                 {location.groups.map((group) => (
                   <details
                     key={group.key}
@@ -955,10 +1169,25 @@ export function UnifiedConversationNavigation({
                         name={model.projectName(group.target)}
                         detail={group.items.length || ''}
                         saveName={(name) => model.renameProject(group.target, name)}
-                        newConversation={() => {
-                          setNewTarget(group.target);
-                          setNewOpen(true);
-                        }}
+                        remove={!removed ? () => void askProjectRemoval(group.target) : undefined}
+                        restore={
+                          removedProjects.some((p) => projectKey(p.target) === group.key)
+                            ? () => {
+                                const p = removedProjects.find(
+                                  (p) => projectKey(p.target) === group.key,
+                                )!;
+                                void model.restoreProject(p).catch((e) => setError(e.message));
+                              }
+                            : undefined
+                        }
+                        newConversation={
+                          !removed && group.available
+                            ? () => {
+                                setNewTarget(group.target);
+                                setNewOpen(true);
+                              }
+                            : undefined
+                        }
                       />
                     ) : (
                       <summary>
@@ -970,7 +1199,11 @@ export function UnifiedConversationNavigation({
                     )}
                     <div className="unified-project-chats">
                       {!group.available && (
-                        <p className="field-help">主机或项目暂不可用，已有记录仍保留。</p>
+                        <p className="field-help">
+                          {removed
+                            ? '已从列表移除，文件与历史记录仍保留。'
+                            : '主机或项目暂不可用，已有记录仍保留。'}
+                        </p>
                       )}
                       {search ? (
                         group.items.map((c) => row(c))
@@ -979,29 +1212,42 @@ export function UnifiedConversationNavigation({
                           {group.items.map((c) => row(c))}
                         </ProjectConversationList>
                       )}
-                      {!group.items.length && (
+                      {!group.items.length && !removed && group.available && (
                         <p className="field-help">长按或右键项目可新建对话。</p>
                       )}
-                      {!archived && group.target.origin === 'remote' && group.available && (
-                        <RemoteSessionImports target={group.target} />
-                      )}
+                      {!archived &&
+                        !removed &&
+                        group.target.origin === 'remote' &&
+                        group.available && <RemoteSessionImports target={group.target} />}
                     </div>
                   </details>
                 ))}
               </div>
             </details>
           ))}
-          {!locations.size && (
+          {!locations.size && !(removed && matchingRemovedComputers.length) && (
             <p className="field-help unified-navigation-empty">
               {!model.ready
                 ? '正在读取项目与对话…'
                 : search
                   ? '没有找到匹配的对话或项目。'
-                  : archived
-                    ? '还没有归档的对话。'
-                    : '你的第一段对话从这里开始。'}
+                  : removed
+                    ? '没有已移除的项目或电脑记录。'
+                    : archived
+                      ? '还没有归档的对话。'
+                      : '你的第一段对话从这里开始。'}
             </p>
           )}
+          {removed &&
+            matchingRemovedComputers.map((computer) => (
+              <div className="unified-removed-computer" key={computerKey(computer.target)}>
+                <Monitor size={16} />
+                <div>
+                  <strong>{computer.name}</strong>
+                  <p className="field-help">连接已撤销。再次使用请重新配对或关联。</p>
+                </div>
+              </div>
+            ))}
         </div>
         <div className="pi-navigation-footer unified-navigation-footer">
           <details ref={more} className="unified-navigation-more">
@@ -1014,6 +1260,19 @@ export function UnifiedConversationNavigation({
               <Archive size={15} />
               <span>{archived ? '返回对话' : '已归档'}</span>
               <small>{model.conversations.filter((c) => c.archivedAt).length || ''}</small>
+            </button>
+            <button
+              className="pi-sidebar-control"
+              onClick={() => {
+                setRemoved(!removed);
+                setArchived(false);
+                setQuery('');
+                if (more.current) more.current.open = false;
+              }}
+            >
+              <Trash2 size={15} />
+              <span>{removed ? '返回对话' : '已移除'}</span>
+              <small>{removedProjects.length + removedComputers.length || ''}</small>
             </button>
             <div
               onClick={() => {
@@ -1036,7 +1295,11 @@ export function UnifiedConversationNavigation({
               className="pi-sidebar-control"
               onClick={() => {
                 if (more.current) more.current.open = false;
-                void model.refresh().catch((e) => setError(e.message));
+                void Promise.all([
+                  model.refresh(),
+                  model.refreshTargets(),
+                  model.refreshManagement(),
+                ]).catch((e) => setError(e.message));
               }}
             >
               <RefreshCw size={15} />
@@ -1062,6 +1325,22 @@ export function UnifiedConversationNavigation({
               : []),
           ]}
           action={action}
+        />
+      )}
+      {removal && (
+        <ManagementRemovalDialog
+          key={
+            removal.project
+              ? projectKey(removal.project.target)
+              : computerKey(removal.computer!.target)
+          }
+          value={removal}
+          close={() => setRemoval(null)}
+          submit={() =>
+            removal.project
+              ? model.removeProject(removal.project)
+              : model.removeComputer(removal.computer!)
+          }
         />
       )}
       {editing && (
@@ -1095,6 +1374,68 @@ export function UnifiedConversationNavigation({
         />
       )}
     </>
+  );
+}
+
+function ManagementRemovalDialog({
+  value,
+  close,
+  submit,
+}: {
+  value: { project?: ManagedProject; computer?: ManagedComputer };
+  close: () => void;
+  submit: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false),
+    [error, setError] = useState('');
+  const project = value.project,
+    name = project?.name || value.computer!.name;
+  return (
+    <ConversationDialog
+      title={project ? '删除项目' : '删除电脑'}
+      close={() => {
+        if (!pending) close();
+      }}
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (pending) return;
+          setPending(true);
+          setError('');
+          void submit()
+            .then(close)
+            .catch((e) => setError(e.message))
+            .finally(() => setPending(false));
+        }}
+      >
+        <p>
+          {project
+            ? `将「${name}」从当前账号的项目列表移除。`
+            : value.computer!.target.origin === 'remote'
+              ? `将撤销「${name}」的 DPH 连接及终端授权。远端任务可能继续运行。`
+              : `将撤销「${name}」的 Pi 连接，并停止该连接上的任务和终端。`}
+        </p>
+        <p className="field-help">
+          {project
+            ? '实际文件夹、文件和历史对话会保留，可在“更多 → 已移除”查看并恢复项目。'
+            : '电脑上的文件和历史对话会保留。再次使用需要重新配对或关联；其他独立连接不会被删除。'}
+        </p>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="action-row">
+          <button type="button" className="secondary" disabled={pending} onClick={close}>
+            取消
+          </button>
+          <button type="submit" className="primary pi-delete-confirm" disabled={pending}>
+            {pending ? '处理中…' : '确认删除'}
+          </button>
+        </div>
+      </form>
+    </ConversationDialog>
   );
 }
 

@@ -9,6 +9,11 @@ import { questionEditSchema } from './learning.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
 import { dshExtensionChange } from '../shared/dsh-extensions.mjs';
 import { assistanceSourceSchema } from './assistance-context.mjs';
+import {
+  projectManagementRenameSchema,
+  projectManagementChangeSchema,
+  computerManagementChangeSchema,
+} from './project-management.mjs';
 
 const empty = z.object({}).strict(),
   uuid = z.string().uuid();
@@ -33,8 +38,20 @@ async function request(handle, ctx, path, input, method = input ? 'POST' : 'GET'
 }
 export function registerAppFeatures(
   engine,
-  { community, mail, learning, memories, body, relay, usage, dshRemote, unified },
+  {
+    community,
+    mail,
+    learning,
+    memories,
+    body,
+    relay,
+    usage,
+    dshRemote,
+    unified,
+    projectManagement,
+  },
 ) {
+  if (projectManagement) registerProjectManagementFeatures(engine, projectManagement);
   engine.register({
     name: 'assistant.temporary_preferences',
     description:
@@ -687,5 +704,105 @@ export function registerAppFeatures(
     },
     commit: (ctx, p) =>
       computer(ctx, '/api/relay/conversations/' + p.conversationId, undefined, 'DELETE'),
+  });
+}
+
+// Route all engines through the account-scoped management service. A model may
+// select an object but cannot supply an account, filesystem path or authority.
+export function registerProjectManagementFeatures(engine, projectManagement) {
+  const projectChange = projectManagementChangeSchema.refine(
+    (p) => p.target.projectId !== null,
+    '请选择具体项目。',
+  );
+  const list = (ctx) => projectManagement.list(ctx.actor);
+  async function current(ctx, kind, target) {
+    return kind === 'projects'
+      ? projectManagement.previewProject(ctx.actor, target)
+      : projectManagement.previewComputer(ctx.actor, target);
+  }
+  const fingerprint = (item) =>
+    JSON.stringify([
+      item.name,
+      item.originalName ?? null,
+      item.hostId ?? null,
+      item.target.location ?? null,
+      item.target.hostId ?? null,
+      item.removedAt ?? null,
+      item.revision,
+    ]);
+  function registerRemoval({ name, kind, schema, method, title, text }) {
+    engine.register({
+      name,
+      description:
+        kind === 'projects'
+          ? '从当前账号导航移除指定项目，保留实际文件、原生绑定和历史对话；有运行任务时不可移除。先调用assistant.projects取得精确target和revision，再展示冻结预览由用户确认。不会删除磁盘目录或自动恢复任务。'
+          : '删除当前账号指定电脑的连接，保留文件与历史。Pi连接会撤销凭据并停止其任务和终端；DPH连接会撤销连接及终端授权，远端任务可能继续运行。再次使用需要重新配对或关联。先调用assistant.projects取得精确target和revision，再由用户确认冻结预览。不能删除服务器自身的DSH。',
+      schema,
+      prepare: async (ctx, p) => {
+        const item = await current(ctx, kind, p.target);
+        if (item.removedAt || item.revision !== p.revision)
+          throw fail(409, '对象状态已变化，请重新读取并预览。');
+        return {
+          preview: {
+            title,
+            text: text(item),
+            name: item.name,
+            target: p.target,
+            revision: item.revision,
+          },
+          private: { target: p.target, revision: item.revision, snapshot: fingerprint(item) },
+        };
+      },
+      validate: async (ctx, p) => {
+        const item = await current(ctx, kind, p.target);
+        if (fingerprint(item) !== p.snapshot)
+          throw fail(409, '对象状态或显示名称已变化，请重新预览。');
+      },
+      commit: (ctx, p) =>
+        projectManagement[method](ctx.actor, { target: p.target, revision: p.revision }),
+    });
+  }
+  engine.register({
+    name: 'assistant.projects',
+    description:
+      '读取当前账号服务器、电脑及Remote项目和电脑连接，包括已移除项目、离线电脑及管理revision。仅查缓存和账号元数据，不连接主机、不添加权限；操作必须使用返回的完整target，不能按同名合并电脑。',
+    schema: empty,
+    execute: list,
+  });
+  engine.register({
+    name: 'assistant.project_rename',
+    description:
+      '修改当前账号项目文件夹在软件中的显示名称，name:null恢复原名。服务器、电脑和Remote使用同一入口；绝不修改磁盘文件夹名、真实路径或既有对话绑定。',
+    schema: projectManagementRenameSchema.refine(
+      (p) => p.target.projectId !== null,
+      '请选择具体项目。',
+    ),
+    execute: (ctx, p) => projectManagement.rename(ctx.actor, p),
+  });
+  registerRemoval({
+    name: 'assistant.project_remove',
+    kind: 'projects',
+    schema: projectChange,
+    method: 'remove',
+    title: '删除项目',
+    text: (p) => `从导航删除项目“${p.name}”。实际文件和历史对话保留，可在“更多 → 已移除”中恢复。`,
+  });
+  engine.register({
+    name: 'assistant.project_restore',
+    description:
+      '恢复当前账号已移除项目的导航展示，使用assistant.projects返回的target和revision。仅恢复展示元数据，不恢复电脑连接、授权或任务；原连接不可用时需先由用户重新连接。',
+    schema: projectChange,
+    execute: (ctx, p) => projectManagement.restore(ctx.actor, p),
+  });
+  registerRemoval({
+    name: 'assistant.computer_remove',
+    kind: 'computers',
+    schema: computerManagementChangeSchema,
+    method: 'removeComputer',
+    title: '删除电脑',
+    text: (p) =>
+      p.target.origin === 'remote'
+        ? `删除电脑“${p.name}”的DPH连接及终端授权。远端任务可能继续运行。文件和历史对话保留，再次使用需要重新连接。`
+        : `删除电脑“${p.name}”的Pi连接，撤销凭据并停止其任务和终端。文件和历史对话保留，再次使用需要重新连接。`,
   });
 }

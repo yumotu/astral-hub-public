@@ -608,7 +608,13 @@ export function DshRemoteWorkspace({
     catalogue = current ? catalogues[current.id] : undefined,
     projectName =
       conversation &&
-      (names[conversation.connectionId + ':' + conversation.projectId] ||
+      (unified?.projectName({
+        origin: 'remote',
+        connectionId: conversation.connectionId,
+        projectId: conversation.projectId,
+        projectName: catalogue?.workspaces.find((p) => p.id === conversation.projectId)?.name,
+      }) ||
+        names[conversation.connectionId + ':' + conversation.projectId] ||
         catalogue?.workspaces.find((p) => p.id === conversation.projectId)?.name ||
         'DSH项目');
   async function patch(id: string, body: object) {
@@ -874,6 +880,20 @@ function DshChat({
   conversation: DshConversation;
   update: (c: DshConversation) => void;
 }) {
+  const unified = useUnifiedConversations();
+  const removedComputer = !!unified?.management.computers.some(
+    (computer) =>
+      computer.target.origin === 'remote' &&
+      computer.target.connectionId === c.connectionId &&
+      computer.removedAt,
+  );
+  const removedProject = !!unified?.management.projects.some(
+    (p) =>
+      p.target.origin === 'remote' &&
+      p.target.connectionId === c.connectionId &&
+      p.target.projectId === c.projectId &&
+      p.removedAt,
+  );
   const helperTasks = usePiTasks(settings, true).tasks;
   const draftKey = `astral.dsh.draft:${settings.url}:${owner}:${c.id}`;
   type Pending = { id: string; text: string; mode: string; state: string; files?: ChatFile[] };
@@ -957,6 +977,14 @@ function DshChat({
   }, [c.messages, c.interactions]);
   async function upload(files: File[]) {
     if (!files.length) return;
+    if (removedComputer) {
+      setError('电脑连接已撤销，历史和草稿仍保留；重新关联后可继续执行。');
+      return;
+    }
+    if (removedProject) {
+      setError('项目已移除，请先在“更多 → 已移除”恢复项目。');
+      return;
+    }
     if (uploadLock.current || !c.appTools.available || c.connection !== 'connected') {
       setError('请连接支持星屿软件功能的DSH主机后添加附件。');
       return;
@@ -996,6 +1024,14 @@ function DshChat({
     return r;
   }
   async function send() {
+    if (removedComputer) {
+      setError('电脑连接已撤销，历史和草稿仍保留；重新关联后可继续执行。');
+      return;
+    }
+    if (removedProject) {
+      setError('项目已移除，历史和草稿仍保留；请先在“更多 → 已移除”恢复项目。');
+      return;
+    }
     if (
       lock.current ||
       uploadLock.current ||
@@ -1090,6 +1126,13 @@ function DshChat({
       projectId={null}
     >
       <div data-assistance-source={`remote:${c.id}`} className="surface chat-panel">
+        {(removedComputer || removedProject) && (
+          <p className="pi-archived-banner" role="status">
+            {removedComputer
+              ? '电脑连接已撤销，历史和草稿仍保留；重新关联后可继续执行。'
+              : '项目已移除，历史和草稿仍保留。请在“更多 → 已移除”恢复项目后继续发送。'}
+          </p>
+        )}
         <details
           className="dsh-chat-settings"
           onToggle={(e) => {
@@ -1426,14 +1469,27 @@ function DshChat({
             changeThinking={() => {}}
             insertVoice={(v) => setInput((old) => old + v)}
             terminal={() => setTerminalOpen(true)}
-            terminalDisabled={!control.controls?.terminal || c.connection !== 'connected'}
+            terminalDisabled={
+              removedComputer || !control.controls?.terminal || c.connection !== 'connected'
+            }
             terminalDisabledReason="主机未提供终端，请在DSH主机的Remote设置中开启远程终端并刷新。"
             attach={() => attachmentInput.current?.click()}
             attachmentDisabled={
-              busy || uploading || !c.appTools.available || c.connection !== 'connected'
+              removedComputer ||
+              removedProject ||
+              busy ||
+              uploading ||
+              !c.appTools.available ||
+              c.connection !== 'connected'
             }
             attachmentDisabledReason={
-              !c.appTools.available ? '此服务器尚未提供DSH附件入口。' : undefined
+              removedComputer
+                ? '请先重新关联电脑。'
+                : removedProject
+                  ? '请先恢复已移除的项目。'
+                  : !c.appTools.available
+                    ? '此服务器尚未提供DSH附件入口。'
+                    : undefined
             }
             attachmentTitle="单文件50 MiB；传输原件至DSH主机最多20 MiB，较大文档可分页读取"
             commands={() => setSkillsOpen(true)}
@@ -1442,12 +1498,22 @@ function DshChat({
             hasContent={!!input.trim() || !!attachments.length}
             stop={() => void stop()}
             sendDisabled={
+              removedComputer ||
+              removedProject ||
               busy ||
               uploading ||
               (!input.trim() && !attachments.length) ||
               c.connection !== 'connected'
             }
-            sendDisabledReason={c.connection !== 'connected' ? '请等待主机重新连接。' : undefined}
+            sendDisabledReason={
+              removedComputer
+                ? '请先重新关联电脑。'
+                : removedProject
+                  ? '请先恢复已移除的项目。'
+                  : c.connection !== 'connected'
+                    ? '请等待主机重新连接。'
+                    : undefined
+            }
             sendLabel={c.runState.busy ? (messageMode === 'steer' ? '补充' : '排队') : '发送'}
             sendAria="发送给DSH"
           />
