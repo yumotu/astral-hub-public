@@ -4,6 +4,7 @@ import { X, Send, Save, Sparkles, LoaderCircle, Square, Check, ChevronDown } fro
 import { api } from './data';
 import { usePiTasks, taskPending, taskLabel, type PiTask } from './pi-tasks';
 import { PiMarkdown } from './PiMarkdown';
+import { mailAssistantDraft } from '../../shared/mail-display.mjs';
 import { useComposerSize, useMailEditorFocus } from './mobile-viewport';
 import type { Settings } from './types';
 import './mail-composer.css';
@@ -371,10 +372,16 @@ export function MailComposer({
                   {task.status === 'done' && !!task.output && (
                     <button
                       className="secondary"
-                      disabled={sent}
+                      disabled={sent || !!busy}
                       onClick={() => {
+                        const result = mailAssistantDraft(task.output);
+                        if (result.error) {
+                          setError(result.error);
+                          return;
+                        }
+                        setError('');
                         setPreviousText(draft.text);
-                        update('text', task.output);
+                        update('text', result.text!);
                         setNotice('已采用助手建议，请检查正文。');
                       }}
                     >

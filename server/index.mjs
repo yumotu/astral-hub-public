@@ -823,10 +823,20 @@ export async function createApp(options = {}) {
         });
         res.end(req.method === 'HEAD' ? undefined : bytes);
       } catch (e) {
+        const submission = ['rejected', 'unknown'].includes(e.submissionState)
+          ? { submissionState: e.submissionState }
+          : {};
         if (e instanceof z.ZodError)
-          json(400, { error: '输入格式不正确', details: e.issues.map((x) => x.message) });
+          json(400, {
+            error: '输入格式不正确',
+            details: e.issues.map((x) => x.message),
+            ...submission,
+          });
         else
-          json(e.status || 500, { error: e.status ? e.message : '服务器处理失败，请稍后重试。' });
+          json(e.status || 500, {
+            error: e.status ? e.message : '服务器处理失败，请稍后重试。',
+            ...submission,
+          });
       }
     }),
   );

@@ -333,12 +333,14 @@ export function createDshConversations(
     } catch (error) {
       if (!closed)
         db.prepare('UPDATE dsh_actions SET state=? WHERE owner=? AND id=? AND state<>?').run(
-          error.remoteRejected ||
-            error.localRejected ||
-            error.status === 400 ||
-            error.name === 'ZodError'
-            ? 'rejected'
-            : 'unknown',
+          kind === 'prompt' && error.submissionState
+            ? error.submissionState
+            : error.remoteRejected ||
+                error.localRejected ||
+                error.status === 400 ||
+                error.name === 'ZodError'
+              ? 'rejected'
+              : 'unknown',
           owner,
           operationId,
           'observed',
@@ -397,418 +399,465 @@ export function createDshConversations(
       };
     },
     async handle(req, url, json, actor, res) {
-      const base = '/api/agent/remote/conversations';
-      if (!url.pathname.startsWith(base)) return false;
-      const owner = actor.id;
-      if (url.pathname === base && req.method === 'GET') {
-        rate(owner, 'conversations', 120);
-        const items = db
-          .prepare(
-            'SELECT * FROM dsh_conversations WHERE owner=? ORDER BY updated_at DESC LIMIT 1000',
-          )
-          .all(owner);
-        json(200, {
-          conversations: items.map((r) => {
-            const v = view(r);
-            return {
-              id: v.id,
-              title: v.title,
-              connectionId: v.connectionId,
-              projectId: v.projectId,
-              sessionId: v.sessionId,
-              state: v.state,
-              updatedAt: v.updatedAt,
-              runState: v.runState,
-              pinnedAt: v.pinnedAt,
-              archivedAt: v.archivedAt,
-            };
-          }),
-        });
-        return true;
-      }
-      if (url.pathname === base && req.method === 'POST') {
-        rate(owner, 'conversation-open', 30);
-        const p = openSchema.parse(await body(req));
-        const old = saved(owner, p.id);
-        if (old) {
-          if (
-            old.connection_id !== p.connectionId ||
-            old.workspace_id !== p.workspaceId ||
-            (p.sessionId && p.sessionId !== old.session_id)
-          )
-            throw fail(409, '对话已绑定其他主机或项目。');
-          json(200, { conversation: view(old) });
+      const promptRequest =
+        req.method === 'POST' &&
+        /^\/api\/agent\/remote\/conversations\/[^/]+\/prompt$/.test(url.pathname);
+      let promptInput,
+        priorPrompt = false,
+        dispatched = false;
+      try {
+        if (promptRequest) {
+          promptInput = await body(req);
+          if (typeof promptInput?.id === 'string')
+            priorPrompt = !!db
+              .prepare('SELECT 1 FROM dsh_actions WHERE owner=? AND id=?')
+              .get(actor.id, promptInput.id);
+        }
+        const base = '/api/agent/remote/conversations';
+        if (!url.pathname.startsWith(base)) return false;
+        const owner = actor.id;
+        if (url.pathname === base && req.method === 'GET') {
+          rate(owner, 'conversations', 120);
+          const items = db
+            .prepare(
+              'SELECT * FROM dsh_conversations WHERE owner=? ORDER BY updated_at DESC LIMIT 1000',
+            )
+            .all(owner);
+          json(200, {
+            conversations: items.map((r) => {
+              const v = view(r);
+              return {
+                id: v.id,
+                title: v.title,
+                connectionId: v.connectionId,
+                projectId: v.projectId,
+                sessionId: v.sessionId,
+                state: v.state,
+                updatedAt: v.updatedAt,
+                runState: v.runState,
+                pinnedAt: v.pinnedAt,
+                archivedAt: v.archivedAt,
+              };
+            }),
+          });
           return true;
         }
-        const catalog = await catalogue(owner, p.connectionId);
-        unified?.()?.assertProjectSelectable?.(actor, {
-          origin: 'remote',
-          connectionId: p.connectionId,
-          projectId: p.workspaceId,
-        });
-        if (!catalog.workspaces.some((w) => w.id === p.workspaceId))
-          throw fail(404, 'DSH工作区不可用。');
-        if (
-          p.sessionId &&
-          !catalog.sessions.some(
-            (s) => s.id === p.sessionId && s.workspaceIds.includes(p.workspaceId),
-          )
-        )
-          throw fail(403, '此会话不属于已选择的工作区。');
-        const stamp = new Date(now()).toISOString(),
-          native = p.sessionId || p.id;
-        if (
-          db
-            .prepare(
-              'SELECT 1 FROM dsh_conversations WHERE owner=? AND connection_id=? AND session_id=?',
+        if (url.pathname === base && req.method === 'POST') {
+          rate(owner, 'conversation-open', 30);
+          const p = openSchema.parse(await body(req));
+          const old = saved(owner, p.id);
+          if (old) {
+            if (
+              old.connection_id !== p.connectionId ||
+              old.workspace_id !== p.workspaceId ||
+              (p.sessionId && p.sessionId !== old.session_id)
             )
-            .get(owner, p.connectionId, native)
-        )
-          throw fail(409, '此原生会话已在星屿中关联。');
-        // Persist only the software-function choice. Native permissions and
-        // short-lived task grants still require their normal host/session checks.
-        const rememberedTools = db
-          .prepare(
-            'SELECT enabled FROM assistant_dsh_tool_preferences WHERE owner=? AND connection_id=? AND workspace_id=?',
-          )
-          .get(owner, p.connectionId, p.workspaceId);
-        const toolsEnabled = software.enabled && (rememberedTools?.enabled ?? 1) === 1;
-        db.prepare(
-          'INSERT INTO dsh_conversations(owner,id,connection_id,workspace_id,session_id,state,snapshot,stop_cursor,created_at,updated_at,app_tools) VALUES(?,?,?,?,?,?,?,NULL,?,?,?)',
-        ).run(
-          owner,
-          p.id,
-          p.connectionId,
-          p.workspaceId,
-          native,
-          p.sessionId ? 'ready' : 'creating',
-          JSON.stringify(emptyDshSession()),
-          stamp,
-          stamp,
-          toolsEnabled ? 1 : 0,
-        );
-        if (p.sessionId)
-          bindings.bind(owner, 'remote', p.id, {
-            version: 1,
-            backend: 'dsh',
-            transport: 'dsh-remote',
-            location: catalog.host.location,
-            deviceId: catalog.host.deviceId,
-            connectionId: p.connectionId,
-            projectId: p.workspaceId,
-            sessionKey: p.sessionId,
-          });
-        try {
-          const { client, peer } = await connection(owner, p.connectionId);
+              throw fail(409, '对话已绑定其他主机或项目。');
+            json(200, { conversation: view(old) });
+            return true;
+          }
+          const catalog = await catalogue(owner, p.connectionId);
           unified?.()?.assertProjectSelectable?.(actor, {
             origin: 'remote',
             connectionId: p.connectionId,
             projectId: p.workspaceId,
           });
-          let sessionId = native;
-          if (!p.sessionId) {
-            const result = await client.chat().create(p.workspaceId, native);
-            sessionId = nativeId.parse(result?.sessionId);
-          }
-          live(owner, p.connectionId);
-          const runtime = {
-            version: 1,
-            backend: 'dsh',
-            transport: 'dsh-remote',
-            location: peer.location,
-            deviceId: peer.deviceId,
-            connectionId: p.connectionId,
-            projectId: p.workspaceId,
-            sessionKey: sessionId,
-          };
-          bindings.bind(owner, 'remote', p.id, runtime);
-          db.prepare(
-            "UPDATE dsh_conversations SET session_id=?,state='ready' WHERE owner=? AND id=?",
-          ).run(sessionId, owner, p.id);
-          await ensure(owner, p.id);
-        } catch (error) {
-          if (!closed)
-            db.prepare(
-              "UPDATE dsh_conversations SET state='unknown' WHERE owner=? AND id=? AND state='creating'",
-            ).run(owner, p.id);
-          throw error;
-        }
-        json(201, { conversation: view(row(owner, p.id)) });
-        return true;
-      }
-      const fileRoute = url.pathname.match(
-        /^\/api\/agent\/remote\/conversations\/([^/]+)\/files(?:\/[^/]+)?$/,
-      );
-      if (fileRoute) {
-        const current = row(owner, uuid.parse(fileRoute[1]));
-        const kind =
-          req.method === 'POST'
-            ? 'file-upload'
-            : req.method === 'DELETE'
-              ? 'file-delete'
-              : 'file-read';
-        rate(owner, kind, req.method === 'POST' ? 20 : req.method === 'DELETE' ? 60 : 120);
-        return attachments.handle(req, url, json, actor, current, res);
-      }
-      const workbenchRoute = url.pathname.match(
-        /^\/api\/agent\/remote\/conversations\/([^/]+)\/(controls|terminals)(?:\/|$)/,
-      );
-      if (workbenchRoute)
-        return workbench.handle(req, url, json, actor, row(owner, uuid.parse(workbenchRoute[1])));
-      const extensionRoute = url.pathname.match(
-        /^\/api\/agent\/remote\/conversations\/([^/]+)\/extensions(?:\/|$)/,
-      );
-      if (extensionRoute)
-        return extensions.handle(req, url, json, actor, uuid.parse(extensionRoute[1]));
-      const match = url.pathname.match(
-        /^\/api\/agent\/remote\/conversations\/([^/]+)(?:\/(prompt|stop|respond|history|tools))?$/,
-      );
-      if (!match) return false;
-      const id = uuid.parse(match[1]),
-        r = row(owner, id);
-      if (req.method === 'POST' && match[2] === 'tools') {
-        rate(owner, 'software-tools', 30);
-        const p = z
-          .object({ enabled: z.boolean() })
-          .strict()
-          .parse(await body(req));
-        if (p.enabled && !software.enabled) throw fail(503, '服务器尚未配置DSH软件工具入口。');
-        if (busy.has(key(owner, id))) throw fail(409, '此对话正在提交消息，请等待提交结束。');
-        if (p.enabled) target(owner, r);
-        db.prepare('UPDATE dsh_conversations SET app_tools=? WHERE owner=? AND id=?').run(
-          p.enabled ? 1 : 0,
-          owner,
-          id,
-        );
-        db.prepare(
-          'INSERT INTO assistant_dsh_tool_preferences(owner,connection_id,workspace_id,enabled) VALUES(?,?,?,?) ON CONFLICT(owner,connection_id,workspace_id) DO UPDATE SET enabled=excluded.enabled',
-        ).run(owner, r.connection_id, r.workspace_id, p.enabled ? 1 : 0);
-        if (!p.enabled) software.revoke(owner, id);
-        json(200, { conversation: view(row(owner, id)) });
-        return true;
-      }
-      if (req.method === 'PATCH' && !match[2]) {
-        rate(owner, 'metadata', 60);
-        const patch = z
-            .object({
-              title: z.string().trim().min(1).max(120).optional(),
-              pinned: z.boolean().optional(),
-              archived: z.boolean().optional(),
-            })
-            .strict()
-            .parse(await body(req)),
-          stamp = new Date(now()).toISOString();
-        db.prepare(
-          'UPDATE dsh_conversations SET title=?,pinned_at=?,archived_at=? WHERE owner=? AND id=?',
-        ).run(
-          patch.title ?? r.title,
-          patch.pinned === undefined ? r.pinned_at : patch.pinned ? stamp : null,
-          patch.archived === undefined ? r.archived_at : patch.archived ? stamp : null,
-          owner,
-          id,
-        );
-        await unified?.()?.nativePatch(actor, { origin: 'remote', nativeId: id }, patch);
-        json(200, { conversation: view(row(owner, id)) });
-        return true;
-      }
-      if (req.method === 'GET' && !match[2]) {
-        rate(owner, 'snapshot', 240);
-        // Read/reconnect never replays an action. Cached history is available
-        // even if credentials were revoked or the remote host is offline.
-        let warning = '';
-        if (r.state === 'ready') {
-          // Reconnecting a native transport can take much longer than a read.
-          // Share one reconnect and return the durable snapshot promptly;
-          // only the background follow updates it, never a replayed prompt.
-          const k = key(owner, id);
-          let pending = syncing.get(k);
-          if (!pending) {
-            pending = ensure(owner, id)
-              .then(
-                () => true,
-                () => false,
-              )
-              .finally(() => {
-                if (syncing.get(k) === pending) syncing.delete(k);
-              });
-            syncing.set(k, pending);
-          }
-          let timer;
-          try {
-            const connected = await Promise.race([
-              pending,
-              new Promise((resolve) => {
-                timer = setTimeout(() => resolve(false), 1000);
-              }),
-            ]);
-            if (!connected) warning = '正在重新连接，先显示已保存的记录。';
-          } finally {
-            clearTimeout(timer);
-          }
-        }
-        json(200, { conversation: view(row(owner, id)), warning });
-        return true;
-      }
-      if (req.method === 'POST' && match[2] === 'history') {
-        rate(owner, 'history', 30);
-        z.object({})
-          .strict()
-          .parse(await body(req));
-        const { r: current, chat } = await ensure(owner, id),
-          state = stateOf(current);
-        const first = state.events[0]?.seq;
-        if (state.hasMore && first !== undefined) {
-          const page = await chat.page(current.session_id, first, state.cursor);
-          target(owner, row(owner, id));
-          const latest = row(owner, id),
-            next = stateOf(latest);
-          if (next.events[0]?.seq !== first) throw fail(409, '历史窗口已更新，请重试读取。');
-          persist(latest, prependDshPage(next, page));
-        }
-        json(200, { conversation: view(row(owner, id)) });
-        return true;
-      }
-      if (req.method !== 'POST' || !['prompt', 'stop', 'respond'].includes(match[2])) return false;
-      rate(owner, 'chat-action', 60);
-      const input = await body(req),
-        op = match[2],
-        p =
-          op === 'prompt'
-            ? parseDshPrompt(input)
-            : op === 'stop'
-              ? actionId.parse(input)
-              : z
-                  .object({
-                    id: uuid,
-                    interactionId: z.string().regex(/^[a-f0-9]{64}$/),
-                    response: z.record(z.string(), z.unknown()),
-                  })
-                  .strict()
-                  .parse(input);
-      const lock = key(owner, id);
-      if (busy.has(lock)) throw fail(409, '此对话正在提交操作，请等待结果。');
-      const work = (async () => {
-        const old = db.prepare('SELECT * FROM dsh_actions WHERE owner=? AND id=?').get(owner, p.id);
-        if (old) {
-          recordAction(owner, p.id, id, op, p);
-          return { id: p.id, state: old.state };
-        }
-        const assertPromptSelectable = () => {
-          if (op !== 'prompt') return;
-          const current = row(owner, id);
-          unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
-          unified?.()?.assertProjectSelectable?.(actor, {
-            origin: 'remote',
-            connectionId: current.connection_id,
-            projectId: current.workspace_id,
-          });
-        };
-        assertPromptSelectable();
-        const { r: current, chat } = await ensure(owner, id);
-        assertPromptSelectable();
-        if (
-          op === 'respond' &&
-          db
-            .prepare(
-              "SELECT 1 FROM dsh_actions WHERE owner=? AND conversation_id=? AND kind='respond' AND reference=? AND state IN ('sending','unknown','accepted','observed')",
+          if (!catalog.workspaces.some((w) => w.id === p.workspaceId))
+            throw fail(404, 'DSH工作区不可用。');
+          if (
+            p.sessionId &&
+            !catalog.sessions.some(
+              (s) => s.id === p.sessionId && s.workspaceIds.includes(p.workspaceId),
             )
-            .get(owner, id, p.interactionId)
-        )
-          throw fail(409, '该答复已提交或结果待核对，不会重复答复。');
-        const nativeCommand = op === 'prompt' && p.text.trimStart().startsWith('/');
-        // Harness records native Skills as user messages. Keep those commands
-        // verbatim without consuming the first normal prompt's context handoff.
-        const hasNormalInput = dshSessionView(stateOf(current)).messages.some((m) => {
-          if (m.role !== 'user') return false;
-          const savedInput =
-            m.rpcId &&
+          )
+            throw fail(403, '此会话不属于已选择的工作区。');
+          const stamp = new Date(now()).toISOString(),
+            native = p.sessionId || p.id;
+          if (
             db
               .prepare(
-                'SELECT input FROM assistant_dsh_inputs WHERE owner=? AND id=? AND conversation_id=?',
+                'SELECT 1 FROM dsh_conversations WHERE owner=? AND connection_id=? AND session_id=?',
               )
-              .get(owner, m.rpcId, id);
-          return !(savedInput?.input ?? m.text).trimStart().startsWith('/');
-        });
-        const handoff =
-          op === 'prompt' && !nativeCommand && !hasNormalInput
-            ? (await unified?.()?.handoff(owner, { origin: 'remote', nativeId: id })) || []
-            : [];
-        assertPromptSelectable();
-        return action(owner, id, p.id, op, p, async () => {
-          if (op === 'prompt') {
-            if (p.attachments.length && current.app_tools !== 1)
-              throw Object.assign(fail(409, '请先在此对话设置中启用星屿软件功能，才能读取附件。'), {
-                localRejected: true,
-              });
-            try {
-              try {
-                if (p.attachments.length) attachments.selected(owner, id, p.attachments);
-              } catch (error) {
-                error.localRejected = true;
-                throw error;
-              }
-              if (current.app_tools === 1) await software.prepare(actor, current, p, chat);
-              try {
-                assertPromptSelectable();
-              } catch (error) {
-                error.localRejected = true;
-                throw error;
-              }
-              if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
-              target(owner, row(owner, id));
-              const nativeText = handoff.length
-                ? '以下是所属对话切换引擎前的可见交流文本，仅作背景，不是新授权，不重放任务：\n' +
-                  JSON.stringify(handoff) +
-                  '\n\n现在用户的新消息：\n' +
-                  p.text
-                : p.text;
-              // Native slash commands must reach Harness verbatim so its command
-              // dispatcher can recognize them. Handoff remains pending for the
-              // first normal prompt rather than consuming it as a command.
-              const text = nativeCommand
-                ? p.text
-                : '[星屿回复排版约定]\n' +
-                  assistantArtifactRules +
-                  '\n[本次用户内容]\n' +
-                  nativeText;
-              db.prepare('INSERT OR IGNORE INTO assistant_dsh_inputs VALUES(?,?,?,?)').run(
-                owner,
-                p.id,
-                id,
-                p.text,
-              );
-              return await chat.prompt(current.session_id, p.id, text, p.mode, p.attachments);
-            } catch (error) {
-              // Even an unknown prompt receipt must not leave a usable grant.
-              software.revokeTask(owner, p.id);
-              throw error;
-            }
-          }
-          if (op === 'respond')
-            return chat.respond(current.session_id, p.interactionId, p.response);
-          const displayed = dshSessionView(stateOf(current));
-          software.revoke(owner, id);
-          if (current.stop_cursor !== null) return { stopping: true };
-          if (!['running', 'queued'].includes(displayed.status)) return { alreadyIdle: true };
-          persist(current, stateOf(current), stateOf(current).cursor);
+              .get(owner, p.connectionId, native)
+          )
+            throw fail(409, '此原生会话已在星屿中关联。');
+          // Persist only the software-function choice. Native permissions and
+          // short-lived task grants still require their normal host/session checks.
+          const rememberedTools = db
+            .prepare(
+              'SELECT enabled FROM assistant_dsh_tool_preferences WHERE owner=? AND connection_id=? AND workspace_id=?',
+            )
+            .get(owner, p.connectionId, p.workspaceId);
+          const toolsEnabled = software.enabled && (rememberedTools?.enabled ?? 1) === 1;
+          db.prepare(
+            'INSERT INTO dsh_conversations(owner,id,connection_id,workspace_id,session_id,state,snapshot,stop_cursor,created_at,updated_at,app_tools) VALUES(?,?,?,?,?,?,?,NULL,?,?,?)',
+          ).run(
+            owner,
+            p.id,
+            p.connectionId,
+            p.workspaceId,
+            native,
+            p.sessionId ? 'ready' : 'creating',
+            JSON.stringify(emptyDshSession()),
+            stamp,
+            stamp,
+            toolsEnabled ? 1 : 0,
+          );
+          if (p.sessionId)
+            bindings.bind(owner, 'remote', p.id, {
+              version: 1,
+              backend: 'dsh',
+              transport: 'dsh-remote',
+              location: catalog.host.location,
+              deviceId: catalog.host.deviceId,
+              connectionId: p.connectionId,
+              projectId: p.workspaceId,
+              sessionKey: p.sessionId,
+            });
           try {
-            return await chat.cancel(current.session_id);
-          } catch (error) {
-            if (error.remoteRejected) {
-              const latest = row(owner, id);
-              persist(latest, stateOf(latest), null);
+            const { client, peer } = await connection(owner, p.connectionId);
+            unified?.()?.assertProjectSelectable?.(actor, {
+              origin: 'remote',
+              connectionId: p.connectionId,
+              projectId: p.workspaceId,
+            });
+            let sessionId = native;
+            if (!p.sessionId) {
+              const result = await client.chat().create(p.workspaceId, native);
+              sessionId = nativeId.parse(result?.sessionId);
             }
+            live(owner, p.connectionId);
+            const runtime = {
+              version: 1,
+              backend: 'dsh',
+              transport: 'dsh-remote',
+              location: peer.location,
+              deviceId: peer.deviceId,
+              connectionId: p.connectionId,
+              projectId: p.workspaceId,
+              sessionKey: sessionId,
+            };
+            bindings.bind(owner, 'remote', p.id, runtime);
+            db.prepare(
+              "UPDATE dsh_conversations SET session_id=?,state='ready' WHERE owner=? AND id=?",
+            ).run(sessionId, owner, p.id);
+            await ensure(owner, p.id);
+          } catch (error) {
+            if (!closed)
+              db.prepare(
+                "UPDATE dsh_conversations SET state='unknown' WHERE owner=? AND id=? AND state='creating'",
+              ).run(owner, p.id);
             throw error;
           }
-        });
-      })();
-      busy.set(lock, work);
-      try {
-        json(200, { operation: await work, conversation: view(row(owner, id)) });
-      } finally {
-        if (busy.get(lock) === work) busy.delete(lock);
+          json(201, { conversation: view(row(owner, p.id)) });
+          return true;
+        }
+        const fileRoute = url.pathname.match(
+          /^\/api\/agent\/remote\/conversations\/([^/]+)\/files(?:\/[^/]+)?$/,
+        );
+        if (fileRoute) {
+          const current = row(owner, uuid.parse(fileRoute[1]));
+          const kind =
+            req.method === 'POST'
+              ? 'file-upload'
+              : req.method === 'DELETE'
+                ? 'file-delete'
+                : 'file-read';
+          rate(owner, kind, req.method === 'POST' ? 20 : req.method === 'DELETE' ? 60 : 120);
+          return attachments.handle(req, url, json, actor, current, res);
+        }
+        const workbenchRoute = url.pathname.match(
+          /^\/api\/agent\/remote\/conversations\/([^/]+)\/(controls|terminals)(?:\/|$)/,
+        );
+        if (workbenchRoute)
+          return workbench.handle(req, url, json, actor, row(owner, uuid.parse(workbenchRoute[1])));
+        const extensionRoute = url.pathname.match(
+          /^\/api\/agent\/remote\/conversations\/([^/]+)\/extensions(?:\/|$)/,
+        );
+        if (extensionRoute)
+          return extensions.handle(req, url, json, actor, uuid.parse(extensionRoute[1]));
+        const match = url.pathname.match(
+          /^\/api\/agent\/remote\/conversations\/([^/]+)(?:\/(prompt|stop|respond|history|tools))?$/,
+        );
+        if (!match) return false;
+        const id = uuid.parse(match[1]),
+          r = row(owner, id);
+        if (req.method === 'POST' && match[2] === 'tools') {
+          rate(owner, 'software-tools', 30);
+          const p = z
+            .object({ enabled: z.boolean() })
+            .strict()
+            .parse(await body(req));
+          if (p.enabled && !software.enabled) throw fail(503, '服务器尚未配置DSH软件工具入口。');
+          if (busy.has(key(owner, id))) throw fail(409, '此对话正在提交消息，请等待提交结束。');
+          if (p.enabled) target(owner, r);
+          db.prepare('UPDATE dsh_conversations SET app_tools=? WHERE owner=? AND id=?').run(
+            p.enabled ? 1 : 0,
+            owner,
+            id,
+          );
+          db.prepare(
+            'INSERT INTO assistant_dsh_tool_preferences(owner,connection_id,workspace_id,enabled) VALUES(?,?,?,?) ON CONFLICT(owner,connection_id,workspace_id) DO UPDATE SET enabled=excluded.enabled',
+          ).run(owner, r.connection_id, r.workspace_id, p.enabled ? 1 : 0);
+          if (!p.enabled) software.revoke(owner, id);
+          json(200, { conversation: view(row(owner, id)) });
+          return true;
+        }
+        if (req.method === 'PATCH' && !match[2]) {
+          rate(owner, 'metadata', 60);
+          const patch = z
+              .object({
+                title: z.string().trim().min(1).max(120).optional(),
+                pinned: z.boolean().optional(),
+                archived: z.boolean().optional(),
+              })
+              .strict()
+              .parse(await body(req)),
+            stamp = new Date(now()).toISOString();
+          db.prepare(
+            'UPDATE dsh_conversations SET title=?,pinned_at=?,archived_at=? WHERE owner=? AND id=?',
+          ).run(
+            patch.title ?? r.title,
+            patch.pinned === undefined ? r.pinned_at : patch.pinned ? stamp : null,
+            patch.archived === undefined ? r.archived_at : patch.archived ? stamp : null,
+            owner,
+            id,
+          );
+          await unified?.()?.nativePatch(actor, { origin: 'remote', nativeId: id }, patch);
+          json(200, { conversation: view(row(owner, id)) });
+          return true;
+        }
+        if (req.method === 'GET' && !match[2]) {
+          rate(owner, 'snapshot', 240);
+          // Read/reconnect never replays an action. Cached history is available
+          // even if credentials were revoked or the remote host is offline.
+          let warning = '';
+          if (r.state === 'ready') {
+            // Reconnecting a native transport can take much longer than a read.
+            // Share one reconnect and return the durable snapshot promptly;
+            // only the background follow updates it, never a replayed prompt.
+            const k = key(owner, id);
+            let pending = syncing.get(k);
+            if (!pending) {
+              pending = ensure(owner, id)
+                .then(
+                  () => true,
+                  () => false,
+                )
+                .finally(() => {
+                  if (syncing.get(k) === pending) syncing.delete(k);
+                });
+              syncing.set(k, pending);
+            }
+            let timer;
+            try {
+              const connected = await Promise.race([
+                pending,
+                new Promise((resolve) => {
+                  timer = setTimeout(() => resolve(false), 1000);
+                }),
+              ]);
+              if (!connected) warning = '正在重新连接，先显示已保存的记录。';
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          json(200, { conversation: view(row(owner, id)), warning });
+          return true;
+        }
+        if (req.method === 'POST' && match[2] === 'history') {
+          rate(owner, 'history', 30);
+          z.object({})
+            .strict()
+            .parse(await body(req));
+          const { r: current, chat } = await ensure(owner, id),
+            state = stateOf(current);
+          const first = state.events[0]?.seq;
+          if (state.hasMore && first !== undefined) {
+            const page = await chat.page(current.session_id, first, state.cursor);
+            target(owner, row(owner, id));
+            const latest = row(owner, id),
+              next = stateOf(latest);
+            if (next.events[0]?.seq !== first) throw fail(409, '历史窗口已更新，请重试读取。');
+            persist(latest, prependDshPage(next, page));
+          }
+          json(200, { conversation: view(row(owner, id)) });
+          return true;
+        }
+        if (req.method !== 'POST' || !['prompt', 'stop', 'respond'].includes(match[2]))
+          return false;
+        rate(owner, 'chat-action', 60);
+        const input = promptRequest ? promptInput : await body(req),
+          op = match[2],
+          p =
+            op === 'prompt'
+              ? parseDshPrompt(input)
+              : op === 'stop'
+                ? actionId.parse(input)
+                : z
+                    .object({
+                      id: uuid,
+                      interactionId: z.string().regex(/^[a-f0-9]{64}$/),
+                      response: z.record(z.string(), z.unknown()),
+                    })
+                    .strict()
+                    .parse(input);
+        const lock = key(owner, id);
+        if (busy.has(lock)) throw fail(409, '此对话正在提交操作，请等待结果。');
+        const work = (async () => {
+          const old = db
+            .prepare('SELECT * FROM dsh_actions WHERE owner=? AND id=?')
+            .get(owner, p.id);
+          if (old) {
+            recordAction(owner, p.id, id, op, p);
+            return { id: p.id, state: old.state };
+          }
+          const assertPromptSelectable = () => {
+            if (op !== 'prompt') return;
+            const current = row(owner, id);
+            unified?.()?.assertWritable(owner, { origin: 'remote', nativeId: id });
+            unified?.()?.assertProjectSelectable?.(actor, {
+              origin: 'remote',
+              connectionId: current.connection_id,
+              projectId: current.workspace_id,
+            });
+          };
+          assertPromptSelectable();
+          const { r: current, chat } = await ensure(owner, id);
+          assertPromptSelectable();
+          if (
+            op === 'respond' &&
+            db
+              .prepare(
+                "SELECT 1 FROM dsh_actions WHERE owner=? AND conversation_id=? AND kind='respond' AND reference=? AND state IN ('sending','unknown','accepted','observed')",
+              )
+              .get(owner, id, p.interactionId)
+          )
+            throw fail(409, '该答复已提交或结果待核对，不会重复答复。');
+          const nativeCommand = op === 'prompt' && p.text.trimStart().startsWith('/');
+          // Harness records native Skills as user messages. Keep those commands
+          // verbatim without consuming the first normal prompt's context handoff.
+          const hasNormalInput = dshSessionView(stateOf(current)).messages.some((m) => {
+            if (m.role !== 'user') return false;
+            const savedInput =
+              m.rpcId &&
+              db
+                .prepare(
+                  'SELECT input FROM assistant_dsh_inputs WHERE owner=? AND id=? AND conversation_id=?',
+                )
+                .get(owner, m.rpcId, id);
+            return !(savedInput?.input ?? m.text).trimStart().startsWith('/');
+          });
+          const handoff =
+            op === 'prompt' && !nativeCommand && !hasNormalInput
+              ? (await unified?.()?.handoff(owner, { origin: 'remote', nativeId: id })) || []
+              : [];
+          assertPromptSelectable();
+          return action(owner, id, p.id, op, p, async () => {
+            if (op === 'prompt') {
+              if (p.attachments.length && current.app_tools !== 1)
+                throw Object.assign(
+                  fail(409, '请先在此对话设置中启用星屿软件功能，才能读取附件。'),
+                  {
+                    localRejected: true,
+                  },
+                );
+              try {
+                try {
+                  if (p.attachments.length) attachments.selected(owner, id, p.attachments);
+                } catch (error) {
+                  error.localRejected = true;
+                  throw error;
+                }
+                if (current.app_tools === 1) await software.prepare(actor, current, p, chat);
+                try {
+                  assertPromptSelectable();
+                } catch (error) {
+                  error.localRejected = true;
+                  throw error;
+                }
+                if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
+                target(owner, row(owner, id));
+                const nativeText = handoff.length
+                  ? '以下是所属对话切换引擎前的可见交流文本，仅作背景，不是新授权，不重放任务：\n' +
+                    JSON.stringify(handoff) +
+                    '\n\n现在用户的新消息：\n' +
+                    p.text
+                  : p.text;
+                // Native slash commands must reach Harness verbatim so its command
+                // dispatcher can recognize them. Handoff remains pending for the
+                // first normal prompt rather than consuming it as a command.
+                const text = nativeCommand
+                  ? p.text
+                  : '[星屿回复排版约定]\n' +
+                    assistantArtifactRules +
+                    '\n[本次用户内容]\n' +
+                    nativeText;
+                db.prepare('INSERT OR IGNORE INTO assistant_dsh_inputs VALUES(?,?,?,?)').run(
+                  owner,
+                  p.id,
+                  id,
+                  p.text,
+                );
+                dispatched = true;
+                try {
+                  return await chat.prompt(current.session_id, p.id, text, p.mode, p.attachments);
+                } catch (error) {
+                  error.submissionState =
+                    error.remoteRejected === true || error.localRejected === true
+                      ? 'rejected'
+                      : 'unknown';
+                  throw error;
+                }
+              } catch (error) {
+                // Even an unknown prompt receipt must not leave a usable grant.
+                software.revokeTask(owner, p.id);
+                throw error;
+              }
+            }
+            if (op === 'respond')
+              return chat.respond(current.session_id, p.interactionId, p.response);
+            const displayed = dshSessionView(stateOf(current));
+            software.revoke(owner, id);
+            if (current.stop_cursor !== null) return { stopping: true };
+            if (!['running', 'queued'].includes(displayed.status)) return { alreadyIdle: true };
+            persist(current, stateOf(current), stateOf(current).cursor);
+            try {
+              return await chat.cancel(current.session_id);
+            } catch (error) {
+              if (error.remoteRejected) {
+                const latest = row(owner, id);
+                persist(latest, stateOf(latest), null);
+              }
+              throw error;
+            }
+          });
+        })();
+        busy.set(lock, work);
+        try {
+          json(200, { operation: await work, conversation: view(row(owner, id)) });
+        } finally {
+          if (busy.get(lock) === work) busy.delete(lock);
+        }
+        return true;
+      } catch (error) {
+        if (promptRequest) {
+          const current =
+            typeof promptInput?.id === 'string'
+              ? db
+                  .prepare('SELECT state FROM dsh_actions WHERE owner=? AND id=?')
+                  .get(actor.id, promptInput.id)
+              : null;
+          const uncertain = priorPrompt || (current && current.state !== 'rejected');
+          error.submissionState =
+            !dispatched && !uncertain
+              ? 'rejected'
+              : error.submissionState === 'rejected' && !uncertain
+                ? 'rejected'
+                : 'unknown';
+        }
+        throw error;
       }
-      return true;
     },
     close() {
       workbench.close();
