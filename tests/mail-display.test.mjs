@@ -1,11 +1,116 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import assert from 'node:assert/strict';
-import { safeMailHref, mailLinkLabel } from '../shared/mail-display.mjs';
+import { safeMailHref, mailLinkLabel, mailAssistantDraft } from '../shared/mail-display.mjs';
 import { sanitizeMailHtml, MAX_MAIL_HTML } from '../server/mail-html.mjs';
 import { mailTableKind } from '../shared/mail-layout.mjs';
 import { nestedNotificationHtml } from './fixtures/mail-layout.mjs';
 import { createRequire } from 'node:module';
 const { mailLink } = createRequire(import.meta.url)('../desktop/mail-links.cjs');
+
+test('mail adopts one complete manuscript body without presentation markers or surrounding commentary', () => {
+  for (const variant of ['email', 'document', 'standard']) {
+    const body = 'I am writing to confirm.\r\n\r\n谢谢。';
+    const output = `Here is the draft.\r\n:::writing{variant="${variant}" title="回复"}\r\n${body}\r\n:::\r\nPlease review.`;
+    assert.deepEqual(mailAssistantDraft(output), { text: body });
+  }
+  const body = 'Example:\n```md\n:::writing{variant="email"}\nexample\n:::\n```\nRegards.';
+  assert.deepEqual(mailAssistantDraft(`:::writing{variant="email"}\n${body}\n:::`), { text: body });
+});
+
+test('mail preserves ordinary writing and literal fenced marker examples', () => {
+  for (const text of [
+    'I am writing about the writing workshop.',
+    '```md\n:::writing{variant="email"}\nExample\n:::\n```',
+    'Inline :::writing is a literal example.',
+  ])
+    assert.deepEqual(mailAssistantDraft(text), { text });
+});
+
+test('mail rejects ambiguous, unfinished, empty and unsupported manuscript wrappers', () => {
+  const complete = ':::writing{variant="email"}\nFirst\n:::';
+  for (const text of [
+    complete + '\n' + complete,
+    ':::writing',
+    ':::writing{variant="email"',
+    ':::writing{variant="email"}\nUnfinished',
+    ':::writing{variant="email"}\n:::',
+    ':::writing{variant="unknown"}\nBody\n:::',
+    ':::writing{variant="chat_message"}\nBody\n:::',
+    ':::writing{variant="email" invalid}\nBody\n:::',
+    complete + '\n:::writing{variant="email"}\nUnfinished',
+  ]) {
+    const result = mailAssistantDraft(text);
+    assert.ok(result.error, text);
+    assert.equal(result.text, undefined);
+  }
+});
+
+test('composer adoption handler keeps the draft on errors, adopts the parsed body and supports undo', () => {
+  const file = ts.createSourceFile(
+    'MailComposer.tsx',
+    readFileSync(new URL('../web/src/MailComposer.tsx', import.meta.url), 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const handlers = [];
+  function visit(node) {
+    if (ts.isArrowFunction(node)) handlers.push(node.getText(file));
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  const adopt = handlers.find((text) =>
+    text.includes('const result = mailAssistantDraft(task.output)'),
+  );
+  const undo = handlers.find((text) => text.includes("update('text', previousText)"));
+  assert.ok(adopt);
+  assert.ok(undo);
+  let draft = { text: 'Original draft' },
+    previousText,
+    error,
+    notice;
+  const bindings = {
+    mailAssistantDraft,
+    setError: (value) => {
+      error = value;
+    },
+    setPreviousText: (value) => {
+      previousText = value;
+    },
+    setNotice: (value) => {
+      notice = value;
+    },
+    update: (field, value) => {
+      draft[field] = value;
+    },
+  };
+  function run(handler, values) {
+    const scope = { ...bindings, draft, previousText, ...values };
+    const javascript = ts.transpile('const handler = ' + handler, {
+      target: ts.ScriptTarget.ES2022,
+    });
+    Function(...Object.keys(scope), javascript + '; handler();')(...Object.values(scope));
+  }
+  for (const output of [
+    ':::writing{variant="email"}\nIncomplete',
+    ':::writing{variant="email"}\nA\n:::\n:::writing{variant="email"}\nB\n:::',
+  ]) {
+    run(adopt, { task: { output } });
+    assert.equal(draft.text, 'Original draft');
+    assert.equal(previousText, undefined);
+    assert.ok(error);
+  }
+  run(adopt, { task: { output: 'Explanation\n:::writing{variant="email"}\nBody\n:::\nReview' } });
+  assert.equal(draft.text, 'Body');
+  assert.equal(previousText, 'Original draft');
+  assert.equal(error, '');
+  assert.ok(notice);
+  run(undo);
+  assert.equal(draft.text, 'Original draft');
+  assert.equal(previousText, null);
+});
 
 test('desktop mail link boundary permits ordinary websites while rejecting executable, credential-bearing and local paths', () => {
   for (const value of [

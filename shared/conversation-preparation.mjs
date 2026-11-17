@@ -33,6 +33,52 @@ const entry = z
       .optional(),
   })
   .strict();
+let database;
+function serializedPreparationWrite(work) {
+  if (typeof indexedDB === 'undefined')
+    return Promise.reject(Error('本地草稿存储不可用，请保留当前内容。'));
+  database ||= new Promise((resolve, reject) => {
+    const request = indexedDB.open('astral-conversation-preparations-v1', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('writes');
+    request.onerror = () => {
+      database = undefined;
+      reject(request.error);
+    };
+    request.onblocked = () => {
+      database = undefined;
+      reject(Error('本地草稿存储正在升级，请关闭其他页面后重试。'));
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        db.close();
+        database = undefined;
+      };
+      resolve(db);
+    };
+  });
+  return database.then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction('writes', 'readwrite');
+        let result, failure;
+        transaction.oncomplete = () => resolve(result);
+        transaction.onabort = transaction.onerror = () =>
+          reject(failure || transaction.error || Error('本地草稿保存失败。'));
+        // The request callback runs only after earlier readwrite transactions release
+        // this store. Do not await anything while holding the cross-tab mutex.
+        const request = transaction.objectStore('writes').get('mutex');
+        request.onsuccess = () => {
+          try {
+            result = work();
+          } catch (e) {
+            failure = e;
+            transaction.abort();
+          }
+        };
+      }),
+  );
+}
 /** Local intent only. A restored entry never resumes a create/send by itself. */
 export function createConversationPreparationJournal(storage, scope) {
   const key = scope + ':preparations';
@@ -49,7 +95,7 @@ export function createConversationPreparationJournal(storage, scope) {
         state: v.state === 'handed' ? 'handed' : 'unknown',
         error:
           v.state === 'handed'
-            ? '消息已交给原发送流程，请核对对话记录。'
+            ? '发送交接尚未确认，请核对对话记录；不会自动重复发送。'
             : '正在核对上次创建结果，草稿已保留。',
       }));
   } catch {}
@@ -65,7 +111,7 @@ export function createConversationPreparationJournal(storage, scope) {
     save(entries.map((v) => (v.id === id ? next : v)));
     return next;
   }
-  return {
+  const methods = {
     list: () => entries,
     begin(id, value) {
       const old = find(id);
@@ -145,4 +191,107 @@ export function createConversationPreparationJournal(storage, scope) {
     },
     remove: (id) => save(entries.filter((v) => v.id !== id)),
   };
+  const text = (value) => JSON.stringify([value?.draft, value?.message]);
+  let baseline = new Map();
+  try {
+    baseline = new Map(
+      z
+        .array(entry)
+        .max(40)
+        .parse(JSON.parse(storage.getItem(key) || '[]'))
+        .map((value) => [value.id, value]),
+    );
+  } catch {}
+  let pending = Promise.resolve();
+  return /** @type {Record<string, (...args: any[]) => any>} */ (
+    Object.fromEntries(
+      Object.entries(methods).map(([name, method]) => {
+        if (name === 'list') return [name, method];
+        /** @param {...any} args */
+        const write = (...args) => {
+          const run = pending.then(async () => {
+            const local = find(args[0]);
+            const unsaved = entries.filter(
+              (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
+            );
+            try {
+              return await serializedPreparationWrite(() => {
+                const fresh = z
+                  .array(entry)
+                  .max(40)
+                  .parse(JSON.parse(storage.getItem(key) || '[]'));
+                const current = fresh.find((value) => value.id === args[0]);
+                if (name !== 'begin' && name !== 'remove' && name !== 'claim' && !current)
+                  throw Error('本地草稿已在其他页面移除；当前输入仍保留，请先复制内容。');
+                if (
+                  current &&
+                  !['begin', 'resolve', 'fail'].includes(name) &&
+                  text(current) !== text(baseline.get(args[0]))
+                )
+                  throw Error(
+                    '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
+                  );
+                if (
+                  local &&
+                  !['draft', 'remove', 'begin'].includes(name) &&
+                  text(local) !== text(baseline.get(args[0]))
+                )
+                  throw Error('当前输入尚未保存，请先复制内容或重新保存草稿。');
+                const retained = entries.filter(
+                  (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
+                );
+                const confirmationRequired = new Set(
+                  entries.filter((value) => value.resumeRequired).map((value) => value.id),
+                );
+                entries = fresh.map((value) =>
+                  confirmationRequired.has(value.id) ? { ...value, resumeRequired: true } : value,
+                );
+                const result =
+                  current?.state === 'handed' &&
+                  ['creating', 'resume', 'resolve', 'fail'].includes(name)
+                    ? current
+                    : method(...args);
+                const previous = baseline;
+                baseline = new Map(entries.map((value) => [value.id, value]));
+                for (const value of retained) {
+                  if (previous.has(value.id)) baseline.set(value.id, previous.get(value.id));
+                  else baseline.delete(value.id);
+                  entries = entries.filter((item) => item.id !== value.id).concat(value);
+                }
+                return result;
+              });
+            } catch (e) {
+              for (const value of unsaved)
+                entries = entries.filter((item) => item.id !== value.id).concat(value);
+              if (local && name === 'draft') {
+                const retained = entry.parse({
+                  ...local,
+                  draft: args[1],
+                  resumeRequired: true,
+                  error: e.message,
+                });
+                entries = entries.some((value) => value.id === local.id)
+                  ? entries.map((value) => (value.id === local.id ? retained : value))
+                  : [...entries, retained];
+              } else if (local && name === 'claim') {
+                entries = entries.map((value) =>
+                  value.id === local.id
+                    ? {
+                        ...value,
+                        resumeRequired: true,
+                        error: '本地保存失败，消息尚未发送。内容已保留，请重试继续或放弃本地草稿。',
+                      }
+                    : value,
+                );
+              }
+              throw e;
+            }
+          });
+          pending = run.catch(() => {});
+          return run;
+        };
+        return [name, write];
+      }),
+    )
+  );
 }

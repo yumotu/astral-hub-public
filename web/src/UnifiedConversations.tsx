@@ -118,14 +118,14 @@ type Model = {
   preparations: ConversationPreparation[];
   preparing: ConversationPreparation | null;
   selectPreparation: (id: string) => void;
-  preparationDraft: (id: string, text: string) => void;
-  preparationQueue: (id: string, text: string) => void;
-  preparationEdit: (id: string) => void;
+  preparationDraft: (id: string, text: string) => Promise<void>;
+  preparationQueue: (id: string, text: string) => Promise<void>;
+  preparationEdit: (id: string) => Promise<void>;
   retryPreparation: (id: string) => Promise<void>;
-  resumePreparation: (id: string) => void;
-  claimPreparation: (id: string) => ConversationPreparation | null;
-  finishPreparation: (id: string) => void;
-  discardPreparation: (id: string) => void;
+  resumePreparation: (id: string) => Promise<void>;
+  claimPreparation: (id: string) => Promise<ConversationPreparation | null>;
+  finishPreparation: (id: string) => Promise<void>;
+  discardPreparation: (id: string) => Promise<void>;
   openPreparedConversation: (id: string) => void;
   settings: Settings;
   owner: string;
@@ -250,8 +250,9 @@ export function UnifiedConversationsProvider({
   function updatePreparations() {
     setPreparations([...preparationJournal.current.list()] as ConversationPreparation[]);
   }
-  function resolvePreparation(id: string, ref: Selection) {
-    preparationJournal.current.resolve(id, ref);
+  async function resolvePreparation(id: string, ref: Selection) {
+    await preparationJournal.current.resolve(id, ref);
+    if (!preparationAlive.current) return;
     updatePreparations();
     if (preparationSelection.current === id) {
       setSelected(ref);
@@ -308,6 +309,7 @@ export function UnifiedConversationsProvider({
   }, [settings]);
   useEffect(() => {
     const load = () => {
+      if (document.hidden) return;
       void refreshManagement().catch((e) => setError(e.message));
     };
     load();
@@ -363,7 +365,7 @@ export function UnifiedConversationsProvider({
     for (const pending of preparationJournal.current.list() as ConversationPreparation[]) {
       const found = result.conversations.find((c) => c.id === pending.id);
       if (found && !['ready', 'handed'].includes(pending.state))
-        resolvePreparation(pending.id, found.active);
+        await resolvePreparation(pending.id, found.active);
     }
     setSelected((old) => {
       const next = activeUnifiedSelection(result.conversations, old);
@@ -529,7 +531,8 @@ export function UnifiedConversationsProvider({
     preparationRequests.current.add(id);
     generation.current++;
     try {
-      preparationJournal.current.creating(id);
+      await preparationJournal.current.creating(id);
+      if (!preparationAlive.current) return;
       updatePreparations();
       const r = await api<{ conversation: UnifiedConversation }>(settings, endpoint, {
         id,
@@ -542,7 +545,7 @@ export function UnifiedConversationsProvider({
         return;
       generation.current++;
       setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== r.conversation.id)]);
-      resolvePreparation(id, r.conversation.active);
+      await resolvePreparation(id, r.conversation.active);
       operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
     } catch (e) {
       if (
@@ -552,7 +555,7 @@ export function UnifiedConversationsProvider({
         return;
       const reason = e as Error & { status?: number };
       try {
-        preparationJournal.current.fail(
+        await preparationJournal.current.fail(
           id,
           reason.message,
           [400, 401, 403, 404, 413].includes(reason.status || 0),
@@ -582,44 +585,47 @@ export function UnifiedConversationsProvider({
             saveUnifiedSelection(localStorage, storageKey, value.native);
           }
         },
-        preparationDraft: (id, text) => {
+        preparationDraft: async (id, text) => {
           try {
-            preparationJournal.current.draft(id, text);
+            await preparationJournal.current.draft(id, text);
           } finally {
             updatePreparations();
           }
         },
-        preparationQueue: (id, text) => {
-          preparationJournal.current.queue(id, text);
+        preparationQueue: async (id, text) => {
+          await preparationJournal.current.queue(id, text);
           updatePreparations();
         },
-        preparationEdit: (id) => {
-          preparationJournal.current.edit(id);
+        preparationEdit: async (id) => {
+          await preparationJournal.current.edit(id);
           updatePreparations();
         },
         retryPreparation: createPreparedConversation,
-        resumePreparation: (id) => {
-          preparationJournal.current.resume(id);
+        resumePreparation: async (id) => {
+          await preparationJournal.current.resume(id);
           updatePreparations();
         },
-        claimPreparation: (id) => {
-          if (preparationSelection.current !== id) return null;
+        claimPreparation: async (id) => {
+          if (preparationSelection.current !== id || !preparationAlive.current) return null;
           try {
-            return preparationJournal.current.claim(id) as ConversationPreparation | null;
+            const value = (await preparationJournal.current.claim(
+              id,
+            )) as ConversationPreparation | null;
+            return preparationAlive.current && preparationSelection.current === id ? value : null;
           } finally {
             updatePreparations();
           }
         },
-        finishPreparation: (id) => {
+        finishPreparation: async (id) => {
           try {
-            preparationJournal.current.remove(id);
+            await preparationJournal.current.remove(id);
           } catch {
             setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
           }
           updatePreparations();
           if (preparationSelection.current === id) showPreparation(null);
         },
-        discardPreparation: (id) => {
+        discardPreparation: async (id) => {
           const value = preparationJournal.current
             .list()
             .find((v: ConversationPreparation) => v.id === id) as
@@ -627,7 +633,7 @@ export function UnifiedConversationsProvider({
           if (!value) return;
           // Remove durable local intent first. This does not cancel an already
           // issued create/submission or delete the actual native conversation.
-          preparationJournal.current.remove(id);
+          await preparationJournal.current.remove(id);
           setError('');
           operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
           generation.current++;
@@ -686,7 +692,7 @@ export function UnifiedConversationsProvider({
         create: async (target) => {
           const key = 'create:' + JSON.stringify(targetBody(target));
           const id = operationIds.current.id(key);
-          preparationJournal.current.begin(id, target);
+          await preparationJournal.current.begin(id, target);
           updatePreparations();
           showPreparation(id);
           void createPreparedConversation(id);

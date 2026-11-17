@@ -1,3 +1,34 @@
+import { splitAssistantArtifacts } from './assistant-artifacts.mjs';
+
+export function mailAssistantDraft(input) {
+  let fence = null,
+    openers = 0,
+    closers = 0;
+  for (const line of input.split(/\r?\n/)) {
+    const code = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (code) {
+      if (!fence) fence = { char: code[1][0], size: code[1].length };
+      else if (code[1][0] === fence.char && code[1].length >= fence.size && !code[2].trim())
+        fence = null;
+      continue;
+    }
+    if (fence) continue;
+    if (/^:::writing\b/.test(line)) openers++;
+    else if (/^:::\s*$/.test(line)) closers++;
+  }
+  const artifacts = splitAssistantArtifacts(input).filter((part) => part.kind === 'artifact');
+  if (artifacts.length > 1)
+    return { error: '助手生成了多个文稿，请让助手只提供一份要采用的邮件正文。' };
+  if (openers && (openers !== 1 || closers !== 1 || artifacts.length !== 1))
+    return { error: '助手文稿包装未完整或格式不受支持，请重新生成完整邮件正文。' };
+  if (artifacts.length) {
+    if (!['email', 'document', 'standard'].includes(artifacts[0].variant))
+      return { error: '这份文稿不是邮件正文，请让助手生成完整邮件正文。' };
+    return { text: artifacts[0].text };
+  }
+  return { text: input };
+}
+
 /** Mail links are opened only after a deliberate click, never resolved against the app origin. */
 export function safeMailHref(value, image = false) {
   if (

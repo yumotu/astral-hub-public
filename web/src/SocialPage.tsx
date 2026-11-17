@@ -44,7 +44,9 @@ export function SocialPage({
     [draft, setDraft] = useState('');
   const [loadMap, setLoadMap] = useState(false),
     [duration, setDuration] = useState<15 | 60>(15),
-    [older, setOlder] = useState(false);
+    [older, setOlder] = useState(false),
+    [awayFromLatest, setAwayFromLatest] = useState(false);
+  const followLatest = useRef(true);
   const selectedRef = useRef(selected),
     scroll = useRef<HTMLDivElement>(null),
     pendingId = useRef<string | null>(null);
@@ -93,6 +95,8 @@ export function SocialPage({
   useEffect(() => {
     setMessages([]);
     setOlder(false);
+    followLatest.current = true;
+    setAwayFromLatest(false);
     setDraft('');
     pendingId.current = null;
     if (!session || !selected) return;
@@ -127,7 +131,8 @@ export function SocialPage({
     };
   }, [selected, session, settings]);
   useEffect(() => {
-    if (!older) scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' });
+    if (followLatest.current)
+      scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'instant' });
   }, [messages.at(-1)?.seq, selected]);
   useEffect(() => {
     const through = messages.at(-1)?.seq;
@@ -502,7 +507,18 @@ export function SocialPage({
                   </div>
                   <span className="tag">联系人私聊</span>
                 </div>
-                <div className="message-scroll" ref={scroll}>
+                <div
+                  className="message-scroll"
+                  ref={scroll}
+                  onScroll={(event) => {
+                    const panel = event.currentTarget;
+                    const nearBottom =
+                      panel.scrollHeight - panel.scrollTop - panel.clientHeight < 80;
+                    followLatest.current = nearBottom;
+                    setAwayFromLatest(!nearBottom);
+                    if (nearBottom) setOlder(false);
+                  }}
+                >
                   {messages.length >= 100 && (
                     <button
                       className="text-link"
@@ -515,6 +531,8 @@ export function SocialPage({
                             `/social/messages/${peer}?before=${messages[0].seq}`,
                           );
                           if (selectedRef.current === peer) {
+                            followLatest.current = false;
+                            setAwayFromLatest(true);
                             setOlder(true);
                             setMessages((old) => [...r.messages, ...old]);
                             if (!r.messages.length) notify('已到最早的消息。');
@@ -544,6 +562,22 @@ export function SocialPage({
                     </div>
                   ))}
                 </div>
+                {awayFromLatest && (
+                  <button
+                    className="text-link"
+                    onClick={() => {
+                      followLatest.current = true;
+                      setAwayFromLatest(false);
+                      setOlder(false);
+                      scroll.current?.scrollTo({
+                        top: scroll.current.scrollHeight,
+                        behavior: 'instant',
+                      });
+                    }}
+                  >
+                    回到最新消息
+                  </button>
+                )}
                 <form
                   className="message-composer"
                   onSubmit={(e) => {
@@ -560,6 +594,8 @@ export function SocialPage({
                         { id, content: input },
                       );
                       if (selectedRef.current === peer) {
+                        followLatest.current = true;
+                        setAwayFromLatest(false);
                         setMessages((old) => {
                           const ids = new Set(r.messages.map((m) => m.id));
                           return [...old.filter((m) => !ids.has(m.id)), ...r.messages].sort(
