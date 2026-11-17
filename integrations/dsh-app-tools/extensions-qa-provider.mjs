@@ -40,23 +40,42 @@ class Adapter extends LlmAdapter {
     const results = options.messages
       .slice(options.messages.indexOf(human) + 1)
       .filter((m) => m.role === 'tool');
-    if (value.startsWith('astral-tool:')) {
-      const plan = JSON.parse(value.slice('astral-tool:'.length));
+    // The application wraps ordinary prompts with its shared reply conventions.
+    // Keep this synthetic-only protocol inside the actual user-content section.
+    const marker = '[本次用户内容]\n';
+    const textInput = value.includes(marker)
+      ? value.slice(value.indexOf(marker) + marker.length)
+      : value;
+    const native = textInput.startsWith('astral-native-tools:');
+    if (native || textInput.startsWith('astral-tool:')) {
+      const plan = JSON.parse(
+        textInput.slice(native ? 'astral-native-tools:'.length : 'astral-tool:'.length),
+      );
+      if (
+        native &&
+        plan.some(
+          (p) =>
+            !['mcp__qa-mcp__echo', 'mcp__qa-http__http_echo', 'qa_plugin_echo'].includes(p.name),
+        )
+      )
+        throw Error('Only deterministic fixture tools are allowed in native acceptance');
       if (results.length < plan.length) {
-        const args = JSON.stringify(plan[results.length]),
+        const step = plan[results.length];
+        const tool = native ? step.name : 'app_functions';
+        const args = JSON.stringify(native ? step.args || {} : step),
           id = 'extension-qa-' + results.length + '-' + human.id;
         yield { type: 'block-start', index: 0, blockType: 'tool-call' };
         yield {
           type: 'tool-call-delta',
           index: 0,
           id,
-          name: 'app_functions',
+          name: tool,
           argumentsDelta: args,
         };
         yield {
           type: 'block-end',
           index: 0,
-          block: { type: 'tool-call', id, name: 'app_functions', arguments: args },
+          block: { type: 'tool-call', id, name: tool, arguments: args },
         };
         yield { type: 'finish', reason: { kind: 'tool-calls' } };
         return;

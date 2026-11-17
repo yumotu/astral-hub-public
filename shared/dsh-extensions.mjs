@@ -133,6 +133,33 @@ export const dshExtensionChange = z.discriminatedUnion('kind', [
     })
     .strict(),
 ]);
+// Chat may name credential fields, but their values belong only in the human editor.
+export const dshExtensionChatChange = dshExtensionChange.refine((change) => {
+  if (change.kind !== 'mcp-save') return true;
+  const c = change.config;
+  return (
+    Object.values(c.transport === 'stdio' ? c.env : c.headers).every((v) => !v) &&
+    (c.transport === 'stdio' || !new URL(c.url).search)
+  );
+}, 'MCP 凭据请留空并在聊天的配置界面填写；不要通过工具参数或地址查询串传递密钥。');
+
+export function editableDshExtension(change) {
+  const safe = structuredClone(change);
+  let requiresCredentials = false;
+  if (safe.kind === 'mcp-save') {
+    const c = safe.config,
+      key = c.transport === 'stdio' ? 'env' : 'headers';
+    requiresCredentials = Object.keys(c[key]).length > 0;
+    c[key] = Object.fromEntries(Object.keys(c[key]).map((name) => [name, '']));
+    if (c.transport !== 'stdio') {
+      const u = new URL(c.url);
+      requiresCredentials ||= !!u.search;
+      u.search = '';
+      c.url = u.href;
+    }
+  }
+  return { change: safe, requiresCredentials };
+}
 export const dshExtensionRequest = z.discriminatedUnion('action', [
   z.object({ action: z.literal('catalog') }).strict(),
   z.object({ action: z.literal('read-skill'), name }).strict(),

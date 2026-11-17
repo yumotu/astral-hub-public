@@ -37,6 +37,7 @@ import {
 } from './ConversationMenu';
 import { ProjectConversationList } from './ProjectConversationList';
 import { ManagementSummary, ProjectSummary } from './ProjectSummary';
+import { ComputerProjectSetup, type ProjectSetupComputer } from './ComputerProjectSetup';
 import { NativeSegmentHistory } from './ConversationSegmentHistory';
 import { serverIdentity } from './session';
 import {
@@ -49,6 +50,7 @@ import {
 import { visibleConversations } from '../../shared/pi-conversation-list.mjs';
 import type { Settings } from './types';
 import './unified-conversations.css';
+import { createConversationPreparationJournal } from '../../shared/conversation-preparation.mjs';
 
 export type NativeConversationRef = {
   origin: 'server' | 'computer' | 'remote';
@@ -101,7 +103,32 @@ type ConversationCatalogue = {
   targets?: ConversationTarget[];
   preferences?: { defaultBackend: 'pi' | 'dsh' };
 };
+export type ConversationPreparation = {
+  id: string;
+  target: ConversationTarget;
+  draft: string;
+  createdAt: string;
+  state: 'creating' | 'ready' | 'unknown' | 'failed' | 'handed';
+  error: string;
+  native?: Selection;
+  resumeRequired?: boolean;
+  message?: { id: string; text: string };
+};
 type Model = {
+  preparations: ConversationPreparation[];
+  preparing: ConversationPreparation | null;
+  selectPreparation: (id: string) => void;
+  preparationDraft: (id: string, text: string) => void;
+  preparationQueue: (id: string, text: string) => void;
+  preparationEdit: (id: string) => void;
+  retryPreparation: (id: string) => Promise<void>;
+  resumePreparation: (id: string) => void;
+  claimPreparation: (id: string) => ConversationPreparation | null;
+  finishPreparation: (id: string) => void;
+  discardPreparation: (id: string) => void;
+  openPreparedConversation: (id: string) => void;
+  settings: Settings;
+  owner: string;
   conversations: UnifiedConversation[];
   targets: ConversationTarget[];
   selected: Selection | null;
@@ -191,6 +218,46 @@ export function UnifiedConversationsProvider({
         owner,
       }) as Selection | null,
   );
+  const preparationJournal = useRef(createConversationPreparationJournal(localStorage, storageKey));
+  const [preparations, setPreparations] = useState<ConversationPreparation[]>(
+    () => preparationJournal.current.list() as ConversationPreparation[],
+  );
+  const [preparationId, setPreparationId] = useState<string | null>(() => {
+    const id = localStorage.getItem(storageKey + ':preparation-selection');
+    return preparationJournal.current.list().some((v: ConversationPreparation) => v.id === id)
+      ? id
+      : null;
+  });
+  const preparationSelection = useRef(preparationId);
+  const preparationRequests = useRef(new Set<string>());
+  const preparationAlive = useRef(true);
+  useEffect(() => {
+    preparationAlive.current = true;
+    return () => {
+      preparationAlive.current = false;
+    };
+  }, []);
+  function showPreparation(id: string | null) {
+    preparationSelection.current = id;
+    setPreparationId(id);
+    try {
+      if (id) localStorage.setItem(storageKey + ':preparation-selection', id);
+      else localStorage.removeItem(storageKey + ':preparation-selection');
+    } catch {
+      /* Keep navigation responsive; durable intent is still in the journal. */
+    }
+  }
+  function updatePreparations() {
+    setPreparations([...preparationJournal.current.list()] as ConversationPreparation[]);
+  }
+  function resolvePreparation(id: string, ref: Selection) {
+    preparationJournal.current.resolve(id, ref);
+    updatePreparations();
+    if (preparationSelection.current === id) {
+      setSelected(ref);
+      saveUnifiedSelection(localStorage, storageKey, ref);
+    }
+  }
   const aliasStorageKey = 'astral.dsh.projectNames:' + settings.url + ':' + owner;
   const [projectAliases, setProjectAliases] = useState<Record<string, string>>(() => {
     try {
@@ -293,6 +360,11 @@ export function UnifiedConversationsProvider({
     );
     if (generation.current !== born || historyRead.current !== read || mutationLock.current) return;
     setConversations(result.conversations);
+    for (const pending of preparationJournal.current.list() as ConversationPreparation[]) {
+      const found = result.conversations.find((c) => c.id === pending.id);
+      if (found && !['ready', 'handed'].includes(pending.state))
+        resolvePreparation(pending.id, found.active);
+    }
     setSelected((old) => {
       const next = activeUnifiedSelection(result.conversations, old);
       if (next && (next.origin !== old?.origin || next.nativeId !== old?.nativeId)) {
@@ -407,6 +479,15 @@ export function UnifiedConversationsProvider({
   }, [refresh]);
   const select = useCallback(
     (value: Selection) => {
+      const preparation = preparationJournal.current
+        .list()
+        .find((v: ConversationPreparation) => v.id === preparationSelection.current) as
+        ConversationPreparation | undefined;
+      if (
+        preparation?.native?.origin !== value.origin ||
+        preparation.native.nativeId !== value.nativeId
+      )
+        showPreparation(null);
       setSelected((old) =>
         old?.origin === value.origin && old.nativeId === value.nativeId ? old : value,
       );
@@ -439,9 +520,133 @@ export function UnifiedConversationsProvider({
       setBusy(false);
     }
   }
+  async function createPreparedConversation(id: string) {
+    if (preparationRequests.current.has(id)) return;
+    const value = preparationJournal.current
+      .list()
+      .find((v: ConversationPreparation) => v.id === id) as ConversationPreparation | undefined;
+    if (!value || value.state === 'handed') return;
+    preparationRequests.current.add(id);
+    generation.current++;
+    try {
+      preparationJournal.current.creating(id);
+      updatePreparations();
+      const r = await api<{ conversation: UnifiedConversation }>(settings, endpoint, {
+        id,
+        target: targetBody(value.target),
+      });
+      if (
+        !preparationAlive.current ||
+        !preparationJournal.current.list().some((v: ConversationPreparation) => v.id === id)
+      )
+        return;
+      generation.current++;
+      setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== r.conversation.id)]);
+      resolvePreparation(id, r.conversation.active);
+      operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
+    } catch (e) {
+      if (
+        !preparationAlive.current ||
+        !preparationJournal.current.list().some((v: ConversationPreparation) => v.id === id)
+      )
+        return;
+      const reason = e as Error & { status?: number };
+      try {
+        preparationJournal.current.fail(
+          id,
+          reason.message,
+          [400, 401, 403, 404, 413].includes(reason.status || 0),
+        );
+      } catch {
+        setError('本地准备记录保存失败，请保留当前内容后重试。');
+      }
+      updatePreparations();
+    } finally {
+      preparationRequests.current.delete(id);
+    }
+  }
   return (
     <Context.Provider
       value={{
+        preparations,
+        preparing: preparations.find((v) => v.id === preparationId) || null,
+        selectPreparation: (id) => {
+          const value = preparationJournal.current
+            .list()
+            .find((v: ConversationPreparation) => v.id === id) as
+            ConversationPreparation | undefined;
+          if (!value) return;
+          showPreparation(id);
+          if (value.native) {
+            setSelected(value.native);
+            saveUnifiedSelection(localStorage, storageKey, value.native);
+          }
+        },
+        preparationDraft: (id, text) => {
+          try {
+            preparationJournal.current.draft(id, text);
+          } finally {
+            updatePreparations();
+          }
+        },
+        preparationQueue: (id, text) => {
+          preparationJournal.current.queue(id, text);
+          updatePreparations();
+        },
+        preparationEdit: (id) => {
+          preparationJournal.current.edit(id);
+          updatePreparations();
+        },
+        retryPreparation: createPreparedConversation,
+        resumePreparation: (id) => {
+          preparationJournal.current.resume(id);
+          updatePreparations();
+        },
+        claimPreparation: (id) => {
+          if (preparationSelection.current !== id) return null;
+          try {
+            return preparationJournal.current.claim(id) as ConversationPreparation | null;
+          } finally {
+            updatePreparations();
+          }
+        },
+        finishPreparation: (id) => {
+          try {
+            preparationJournal.current.remove(id);
+          } catch {
+            setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
+          }
+          updatePreparations();
+          if (preparationSelection.current === id) showPreparation(null);
+        },
+        discardPreparation: (id) => {
+          const value = preparationJournal.current
+            .list()
+            .find((v: ConversationPreparation) => v.id === id) as
+            ConversationPreparation | undefined;
+          if (!value) return;
+          // Remove durable local intent first. This does not cancel an already
+          // issued create/submission or delete the actual native conversation.
+          preparationJournal.current.remove(id);
+          setError('');
+          operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
+          generation.current++;
+          updatePreparations();
+          if (preparationSelection.current === id) showPreparation(null);
+        },
+        openPreparedConversation: (id) => {
+          const value = preparationJournal.current
+            .list()
+            .find((v: ConversationPreparation) => v.id === id) as
+            ConversationPreparation | undefined;
+          if (value?.native) {
+            setSelected(value.native);
+            saveUnifiedSelection(localStorage, storageKey, value.native);
+            showPreparation(null);
+          }
+        },
+        settings,
+        owner,
         conversations: managementReady ? conversations : [],
         targets: managementReady
           ? targets.filter(
@@ -478,21 +683,14 @@ export function UnifiedConversationsProvider({
             throw e;
           }
         },
-        create: async (target) =>
-          mutate(async () => {
-            const key = 'create:' + JSON.stringify(targetBody(target));
-            const id = operationIds.current.id(key);
-            const r = await api<{ conversation: UnifiedConversation }>(settings, endpoint, {
-              id,
-              target: targetBody(target),
-            });
-            setConversations((old) => [
-              r.conversation,
-              ...old.filter((c) => c.id !== r.conversation.id),
-            ]);
-            select(r.conversation.active);
-            operationIds.current.complete(key);
-          }),
+        create: async (target) => {
+          const key = 'create:' + JSON.stringify(targetBody(target));
+          const id = operationIds.current.id(key);
+          preparationJournal.current.begin(id, target);
+          updatePreparations();
+          showPreparation(id);
+          void createPreparedConversation(id);
+        },
         switchEngine: async (c, target) =>
           mutate(async () => {
             const key = JSON.stringify([
@@ -842,6 +1040,7 @@ export function UnifiedConversationNavigation({
   const [deleting, setDeleting] = useState<UnifiedConversation | null>(null);
   const [error, setError] = useState('');
   const [newTarget, setNewTarget] = useState<ConversationTarget | undefined>();
+  const [projectSetup, setProjectSetup] = useState<ProjectSetupComputer[] | null>(null);
   const [query, setQuery] = useState('');
   const [projectExpansion, setProjectExpansion] = useState<Record<string, boolean>>({});
   const [locationExpansion, setLocationExpansion] = useState<Record<string, boolean>>({});
@@ -849,7 +1048,10 @@ export function UnifiedConversationNavigation({
   const open = displayPanel === 'conversations';
   const visible = removed
     ? model.conversations
-    : visibleConversations(model.conversations, archived);
+    : visibleConversations(
+        model.conversations.filter((c) => !model.preparations.some((p) => p.id === c.id)),
+        archived,
+      );
   const search = query.trim().toLocaleLowerCase();
   const selected = (c: UnifiedConversation) =>
     model.selected?.origin === c.active.origin && model.selected.nativeId === c.active.nativeId;
@@ -880,6 +1082,29 @@ export function UnifiedConversationNavigation({
         items: [],
         available: true,
       });
+  if (!archived && !removed)
+    for (const pending of model.preparations) {
+      const key = projectKey(pending.target);
+      if (!groups.has(key))
+        groups.set(key, {
+          title:
+            pending.target.locationName || (pending.target.origin === 'server' ? '服务器' : '电脑'),
+          target: pending.target,
+          items: [],
+          available: model.targets.some((t) => projectKey(t) === key),
+        });
+    }
+  const pendingIn = (target: ConversationTarget) =>
+    !archived && !removed
+      ? model.preparations.filter(
+          (p) =>
+            projectKey(p.target) === projectKey(target) &&
+            (!search ||
+              [p.draft, p.message?.text, model.projectName(p.target)]
+                .filter(Boolean)
+                .some((v) => v!.toLocaleLowerCase().includes(search))),
+        )
+      : [];
   for (const c of visible) {
     const first = c.segments[0] || c.active;
     const runtime = first.runtime;
@@ -926,7 +1151,12 @@ export function UnifiedConversationNavigation({
       ...group,
       items: group.items.filter((c) => matches(group, c)),
     }))
-    .filter((group) => group.items.length || (group.target.projectId && matches(group)));
+    .filter(
+      (group) =>
+        group.items.length ||
+        pendingIn(group.target).length ||
+        (group.target.projectId && matches(group)),
+    );
   const locations = new Map<
     string,
     { title: string; server: boolean; groups: typeof filteredGroups }
@@ -940,7 +1170,7 @@ export function UnifiedConversationNavigation({
     locations.set('server', { title: '服务器', server: true, groups: [] });
   }
   for (const group of filteredGroups) {
-    if (!group.target.projectId && !group.items.length) continue;
+    if (!group.target.projectId && !group.items.length && !pendingIn(group.target).length) continue;
     const home = group.items[0]?.segments[0] || group.items[0]?.active;
     const server =
       (group.target.location ||
@@ -984,6 +1214,20 @@ export function UnifiedConversationNavigation({
             return t && computerKey(t) === computerKey(computer.target);
           })),
     );
+  }
+  function projectSetupComputers(
+    locationKey: string,
+    location: { title: string; groups: typeof filteredGroups },
+  ) {
+    const computers = new Map<string, ProjectSetupComputer>();
+    for (const computer of locationComputers(locationKey, location.groups))
+      computers.set(computerKey(computer.target), computer);
+    for (const group of location.groups) {
+      const target = computerFor(group.target);
+      if (target && !computers.has(computerKey(target)))
+        computers.set(computerKey(target), { target, name: location.title });
+    }
+    return [...computers.values()];
   }
   function row(c: UnifiedConversation) {
     return (
@@ -1117,7 +1361,12 @@ export function UnifiedConversationNavigation({
               open={
                 !!search ||
                 (locationExpansion[locationKey] ??
-                  (location.server || location.groups.some((group) => group.items.some(selected))))
+                  (location.server ||
+                    location.groups.some(
+                      (group) =>
+                        group.items.some(selected) ||
+                        pendingIn(group.target).some((p) => p.id === model.preparing?.id),
+                    )))
               }
               onClick={(event) =>
                 toggleNavigationBranch(event, (expanded) => {
@@ -1130,28 +1379,40 @@ export function UnifiedConversationNavigation({
                   name={location.title}
                   className="unified-location-heading"
                   title="长按或右键管理电脑"
-                  actions={locationComputers(locationKey, location.groups).map((computer) => ({
-                    label:
-                      '删除电脑' +
-                      (locationComputers(locationKey, location.groups).length > 1
-                        ? computer.target.origin === 'computer'
-                          ? '（Pi 连接）'
-                          : '（DPH 连接）'
-                        : ''),
-                    icon: <Trash2 size={16} />,
-                    danger: true,
-                    run: () => {
-                      void model
-                        .refreshManagement()
-                        .then((latest) => {
-                          const current = latest.computers.find(
-                            (c) => computerKey(c.target) === computerKey(computer.target),
-                          );
-                          if (current) setRemoval({ computer: current });
-                        })
-                        .catch((e) => setError(e.message));
-                    },
-                  }))}
+                  actions={[
+                    ...(!archived && !removed && projectSetupComputers(locationKey, location).length
+                      ? [
+                          {
+                            label: '添加项目',
+                            icon: <Plus size={16} />,
+                            run: () =>
+                              setProjectSetup(projectSetupComputers(locationKey, location)),
+                          },
+                        ]
+                      : []),
+                    ...locationComputers(locationKey, location.groups).map((computer) => ({
+                      label:
+                        '删除电脑' +
+                        (locationComputers(locationKey, location.groups).length > 1
+                          ? computer.target.origin === 'computer'
+                            ? '（Pi 连接）'
+                            : '（DPH 连接）'
+                          : ''),
+                      icon: <Trash2 size={16} />,
+                      danger: true,
+                      run: () => {
+                        void model
+                          .refreshManagement()
+                          .then((latest) => {
+                            const current = latest.computers.find(
+                              (c) => computerKey(c.target) === computerKey(computer.target),
+                            );
+                            if (current) setRemoval({ computer: current });
+                          })
+                          .catch((e) => setError(e.message));
+                      },
+                    })),
+                  ]}
                 >
                   <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
                   <Monitor size={16} />
@@ -1159,6 +1420,21 @@ export function UnifiedConversationNavigation({
                   <small>
                     {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
                   </small>
+                  {!archived &&
+                    !removed &&
+                    !!projectSetupComputers(locationKey, location).length && (
+                      <button
+                        className="icon-btn"
+                        aria-label={'为' + location.title + '添加项目'}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setProjectSetup(projectSetupComputers(locationKey, location));
+                        }}
+                      >
+                        <Plus size={15} />
+                      </button>
+                    )}
                 </ManagementSummary>
               ) : (
                 <summary className="unified-location-heading" title={location.title}>
@@ -1188,14 +1464,19 @@ export function UnifiedConversationNavigation({
                   <p className="field-help">
                     {location.server
                       ? '点击加号创建项目文件夹。'
-                      : '当前没有可用项目，可长按或右键管理电脑连接。'}
+                      : '点击电脑旁的加号添加项目，已有连接会保留。'}
                   </p>
                 )}
                 {location.groups.map((group) => (
                   <details
                     key={group.key}
                     className="project-tree"
-                    open={!!search || (projectExpansion[group.key] ?? group.items.some(selected))}
+                    open={
+                      !!search ||
+                      (projectExpansion[group.key] ??
+                        (group.items.some(selected) ||
+                          pendingIn(group.target).some((p) => p.id === model.preparing?.id)))
+                    }
                     onClick={(event) =>
                       toggleNavigationBranch(event, (expanded) => {
                         if (!search)
@@ -1237,6 +1518,29 @@ export function UnifiedConversationNavigation({
                       </summary>
                     )}
                     <div className="unified-project-chats">
+                      {pendingIn(group.target).map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="conversation-preparation-row text-link"
+                          onClick={() => {
+                            model.selectPreparation(p.id);
+                            setPanel(null);
+                          }}
+                        >
+                          {p.message?.text.slice(0, 32) || p.draft.slice(0, 32) || '新对话'}
+                          <small>
+                            {p.target.origin === 'remote' ? 'DPH' : 'Pi'} ·{' '}
+                            {p.state === 'creating'
+                              ? '准备中'
+                              : p.state === 'ready'
+                                ? p.message
+                                  ? '待发送，打开后继续'
+                                  : '草稿就绪'
+                                : '草稿已保留'}
+                          </small>
+                        </button>
+                      ))}
                       {!group.available && (
                         <p className="field-help">
                           {removed
@@ -1347,6 +1651,20 @@ export function UnifiedConversationNavigation({
           </details>
         </div>
       </aside>
+      {projectSetup && (
+        <ComputerProjectSetup
+          computers={projectSetup}
+          directoryError={model.targetsError}
+          settings={model.settings}
+          owner={model.owner}
+          close={() => setProjectSetup(null)}
+          refresh={async () => {
+            await Promise.all([model.refreshTargets(), model.refreshManagement()]);
+            window.dispatchEvent(new Event('astral:computer-changed'));
+          }}
+          manage={manage}
+        />
+      )}
       {menu && (
         <ConversationMenu
           anchor={menu}

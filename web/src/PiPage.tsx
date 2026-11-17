@@ -32,6 +32,11 @@ import { CopyButton } from './CopyButton';
 import { readAssistantSelection, saveAssistantSelection } from '../../shared/assistant-resume.mjs';
 import { useMobilePanels } from './MobilePanels';
 import { AssistantComposer } from './AssistantComposer';
+import {
+  PreparingConversation,
+  usePreparedConversation,
+  type PreparedMessage,
+} from './PreparingConversation';
 import { AssistantUserMessage } from './AssistantUserMessage';
 import './message-actions.css';
 import { api, dateLabel } from './data';
@@ -289,30 +294,40 @@ function PiWorkspace(props: PiPageProps) {
             {unified.error}
           </p>
         )}
-        {driver === 'dsh' && props.session ? (
-          <DshRemoteWorkspace
-            key={`dsh:${props.settings.url}:${props.session.user.id}`}
+        {unified?.preparing && (
+          <PreparingConversation
             settings={props.settings}
-            owner={props.session.user.id}
             actions={workspaceActions}
             openNavigation={props.openNavigation}
             manage={() => setConnectionsOpen(true)}
-            navigationControls={navigationControls || undefined}
           />
-        ) : null}
-        <div
-          className="assistant-runtime-surface"
-          style={{ display: driver === 'pi' ? 'contents' : 'none' }}
-        >
-          <ServerPiPage
-            key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
-            driver={driver}
-            workspaceActions={driver === 'pi' ? workspaceActions : null}
-            openComputerConnections={() => setConnectionsOpen(true)}
-            connectionsOpen={connectionsOpen}
-            navigationControls={setNavigationControls}
-            {...props}
-          />
+        )}
+        <div style={{ display: unified?.preparing ? 'none' : 'contents' }}>
+          {driver === 'dsh' && props.session ? (
+            <DshRemoteWorkspace
+              key={`dsh:${props.settings.url}:${props.session.user.id}`}
+              settings={props.settings}
+              owner={props.session.user.id}
+              actions={workspaceActions}
+              openNavigation={props.openNavigation}
+              manage={() => setConnectionsOpen(true)}
+              navigationControls={navigationControls || undefined}
+            />
+          ) : null}
+          <div
+            className="assistant-runtime-surface"
+            style={{ display: driver === 'pi' ? 'contents' : 'none' }}
+          >
+            <ServerPiPage
+              key={`${props.settings.url}:${props.session?.user.id || 'guest'}`}
+              driver={driver}
+              workspaceActions={driver === 'pi' ? workspaceActions : null}
+              openComputerConnections={() => setConnectionsOpen(true)}
+              connectionsOpen={connectionsOpen}
+              navigationControls={setNavigationControls}
+              {...props}
+            />
+          </div>
         </div>
       </>
       {connectionsOpen && props.session && (
@@ -1430,23 +1445,25 @@ function ServerPiPage({
     window.addEventListener('astral-open-pi', open);
     return () => window.removeEventListener('astral-open-pi', open);
   }, [savedConversations, conversation, input, staged, access]);
-  async function send() {
-    if ((!input.trim() && !staged.length) || uploading || loadingHistory) return;
+  async function send(prepared?: PreparedMessage, preparedSaved?: () => void) {
+    const sendingInput = prepared?.text ?? input;
+    const sendingFiles = prepared ? [] : staged;
+    if ((!sendingInput.trim() && !sendingFiles.length) || uploading || loadingHistory) return;
     if (removedProject) {
       setError('项目已移除，历史和草稿仍保留；请先在“更多 → 已移除”恢复项目。');
       return;
     }
-    const command = input.trim();
-    if (menu.kind === 'skills') {
+    const command = sendingInput.trim();
+    if (!prepared && menu.kind === 'skills') {
       setCommandDismissed(false);
       composer.current?.focus();
       return;
     }
-    if (command === '/new') {
+    if (!prepared && command === '/new') {
       void fresh(undefined, true);
       return;
     }
-    if (command === '/compact' || command === '/status') {
+    if (!prepared && (command === '/compact' || command === '/status')) {
       if (generating || queued.length) {
         setError('请等待当前任务和队列结束后使用此命令。');
         return;
@@ -1456,8 +1473,8 @@ function ServerPiPage({
       return;
     }
     setError('');
-    const text = input.trim() || '请分析这些附件。';
-    const id = crypto.randomUUID();
+    const text = sendingInput.trim() || '请分析这些附件。';
+    const id = prepared?.id || crypto.randomUUID();
     const body = {
       id,
       conversationId: conversation,
@@ -1465,21 +1482,35 @@ function ServerPiPage({
       projectId: projectId || null,
       access,
       thinkingLevel,
-      attachments: staged.map((f) => f.id),
-      ...messageDelivery(activeTask, sendMode, staged.length ? '' : text),
+      attachments: sendingFiles.map((f) => f.id),
+      ...messageDelivery(activeTask, sendMode, sendingFiles.length ? '' : text),
       deliveryPreference: sendMode,
     };
     try {
-      outbox.add(body, staged);
+      outbox.add(body, sendingFiles);
       setInput('');
       setStaged([]);
       pending.current = null;
       drafts.current.set(conversation, { input: '', staged: [], pending: null, access });
       followBottom.current = true;
+      preparedSaved?.();
     } catch (e) {
       setError((e as Error).message);
     }
   }
+  usePreparedConversation({
+    origin: 'server',
+    nativeId: conversation,
+    ready:
+      !!status?.available &&
+      !loadingHistory &&
+      !computerTarget &&
+      driver === 'pi' &&
+      !removedProject &&
+      !uploading,
+    restoreDraft: setInput,
+    send,
+  });
   const acknowledged = useRef(new Set<string>());
   useEffect(() => {
     const ids = new Set(tasks.map((t) => t.id));
@@ -1722,7 +1753,17 @@ function ServerPiPage({
             <small className="pi-model-status">
               <Monitor size={12} />
               <span
-                className={'assistant-status-dot ' + (computerGroup?.device.online ? 'ready' : '')}
+                className={
+                  'assistant-status-dot ' +
+                  (computerGroup?.verified && computerGroup.device.online ? 'ready' : '')
+                }
+                title={
+                  computerGroup?.verified
+                    ? computerGroup.device.online
+                      ? '在线'
+                      : '离线'
+                    : '正在核验连接'
+                }
               />
               {computerGroup?.device.name || '远程电脑'} · {computerProject?.name || '读取项目中'}
             </small>

@@ -1,4 +1,5 @@
 import { assistantArtifactRules } from '../shared/assistant-artifacts.mjs';
+import { parseDshPrompt } from '../shared/dsh-prompt.mjs';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { fail } from './accounts.mjs';
@@ -27,14 +28,6 @@ const openSchema = z
     connectionId: uuid,
     workspaceId: nativeId,
     sessionId: nativeId.optional(),
-  })
-  .strict();
-const promptSchema = z
-  .object({
-    id: uuid,
-    text: z.string().trim().min(1).max(8000),
-    mode: z.enum(['queue', 'steer']).default('queue'),
-    attachments: z.array(uuid).max(8).default([]),
   })
   .strict();
 const actionId = z.object({ id: uuid }).strict();
@@ -681,7 +674,7 @@ export function createDshConversations(
         op = match[2],
         p =
           op === 'prompt'
-            ? promptSchema.parse(input)
+            ? parseDshPrompt(input)
             : op === 'stop'
               ? actionId.parse(input)
               : z

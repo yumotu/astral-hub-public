@@ -10,6 +10,11 @@ import {
 } from '../shared/dsh-session.mjs';
 import { createDshSessionChannel } from '../server/dsh-session-channel.mjs';
 import { createDshConversations } from '../server/dsh-conversations.mjs';
+import {
+  DSH_PREPARED_PROMPT_BYTES,
+  dshPromptFailure,
+  parseDshPrompt,
+} from '../shared/dsh-prompt.mjs';
 
 const record = (seq, type, data) => ({
   type: 'event',
@@ -452,6 +457,7 @@ function conversationsFixture(t, overrides = {}) {
     async prompt(sessionId, requestId, text, mode) {
       actions.push({ sessionId, requestId, text, mode });
       if (uncertain) throw Error('lost receipt');
+      if (overrides.prompt) return overrides.prompt(sessionId, requestId, text, mode);
       return { accepted: true };
     },
     async cancel() {
@@ -583,6 +589,109 @@ test('DSH native slash commands bypass reply formatting and visible-context hand
   await f.call('/' + id + '/prompt', { id: randomUUID(), text: 'Continue normally' });
   assert.equal(handoffReads, 1, 'only the first normal prompt receives the handoff');
   assert.doesNotMatch(f.actions[2].text, /old engine context/);
+});
+test('DSH carries long human input and engine handoff through the real prompt channel without the old 8000-character collision', async (t) => {
+  const gateway = gatewayFixture();
+  const channel = createDshSessionChannel(gateway.gateway, { v3: true });
+  t.after(() => channel.close());
+  const history = '历史上下文。'.repeat(8000);
+  const f = conversationsFixture(t, {
+    prompt: channel.prompt,
+    unified: () => ({
+      assertWritable() {},
+      handoff: async () => [{ role: 'assistant', content: history }],
+    }),
+  });
+  const id = randomUUID();
+  await f.call('', { id, connectionId: f.connectionId, workspaceId: 'project' });
+  for (const size of [8000, 8001, 64000]) {
+    const text = '中'.repeat(size),
+      requestId = randomUUID();
+    const result = await f.call('/' + id + '/prompt', { id: requestId, text });
+    assert.equal(result.operation.state, 'accepted');
+    const sent = gateway.calls.at(-1);
+    assert.equal(sent.endpoint, 'session/prompt');
+    assert.equal(sent.args.request.requestId, requestId);
+    assert.ok(sent.args.request.content[0].text.endsWith(text));
+    assert.ok(sent.args.request.content[0].text.includes(history));
+    assert.equal(
+      f.db.prepare('SELECT input FROM assistant_dsh_inputs WHERE id=?').get(requestId).input,
+      text,
+    );
+  }
+  assert.equal(gateway.calls.filter((call) => call.endpoint === 'session/prompt').length, 3);
+});
+test('DSH rejects an oversized human draft explicitly before journaling or dispatching it', async (t) => {
+  const f = conversationsFixture(t),
+    id = randomUUID(),
+    requestId = randomUUID();
+  await f.call('', { id, connectionId: f.connectionId, workspaceId: 'project' });
+  await assert.rejects(f.call('/' + id + '/prompt', { id: requestId, text: '中'.repeat(64001) }), {
+    status: 400,
+    message: /64000/,
+  });
+  assert.equal(f.actions.length, 0);
+  assert.equal(
+    f.db.prepare('SELECT COUNT(*) AS n FROM dsh_actions WHERE id=?').get(requestId).n,
+    0,
+  );
+});
+test('DSH prepared request budget counts escaped UTF-8 bytes before any host prompt call', async () => {
+  const gateway = gatewayFixture();
+  const channel = createDshSessionChannel(gateway.gateway, { v3: true });
+  try {
+    // 64k human characters plus 48k handoff characters and normal formatting
+    // are accepted even though they exceed the old second 8000-char check.
+    await channel.prompt('s', randomUUID(), '中'.repeat(112000), 'steer', [randomUUID()]);
+    const sent = gateway.calls[0].args.request;
+    assert.ok(sent.content[0].text.includes('chat_download'));
+    assert.equal(sent.mode, 'steer');
+    await assert.rejects(
+      channel.prompt('s', randomUUID(), '中'.repeat(DSH_PREPARED_PROMPT_BYTES / 2)),
+      {
+        status: 413,
+        localRejected: true,
+      },
+    );
+    await assert.rejects(
+      channel.prompt('s', randomUUID(), 'a' + '\u0000'.repeat(DSH_PREPARED_PROMPT_BYTES / 4)),
+      {
+        status: 413,
+        localRejected: true,
+      },
+    );
+    assert.equal(gateway.calls.length, 1, 'oversized prepared data never reaches the host');
+  } finally {
+    await channel.close();
+  }
+});
+test('DSH local input validation and rejection feedback distinguish an unsent draft from an uncertain receipt', () => {
+  const request = { id: randomUUID(), text: '  complete draft  ' };
+  assert.deepEqual(parseDshPrompt(request), {
+    ...request,
+    text: 'complete draft',
+    mode: 'queue',
+    attachments: [],
+  });
+  for (const value of [
+    null,
+    { ...request, id: 'invalid' },
+    { ...request, text: '' },
+    { ...request, text: 'x'.repeat(64001) },
+    { ...request, extra: true },
+  ])
+    assert.throws(() => parseDshPrompt(value), { status: 400, localRejected: true });
+  for (const status of [400, 401, 403, 404, 413]) {
+    const failure = dshPromptFailure({ status, message: '明确拒绝' });
+    assert.equal(failure.state, 'rejected');
+    assert.match(failure.message, /未提交.*恢复到草稿/);
+    assert.doesNotMatch(failure.message, /核对主机记录/);
+  }
+  for (const status of [undefined, 409, 429, 500, 502, 504]) {
+    const failure = dshPromptFailure({ status, message: '结果待确认' });
+    assert.equal(failure.state, 'unknown');
+    assert.match(failure.message, /不会自动重发/);
+  }
 });
 test('DSH conversations isolate native bindings, journal exact submissions and never replay unknown acceptance, including after restart', async (t) => {
   const f = conversationsFixture(t),

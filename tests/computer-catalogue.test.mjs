@@ -126,3 +126,83 @@ test('fresh grant removal replaces cached projects and other scopes never supply
   assert.deepEqual(groups[0].projects, []);
   assert.equal(groups[0].verified, true);
 });
+
+test('unified directory restores exact computer labels when relay cache entries are missing', () => {
+  const targets = [
+    { origin: 'server', projectId: 'server', projectName: 'server project' },
+    { origin: 'remote', connectionId: 'dph', projectId: 'remote', projectName: 'DPH project' },
+    {
+      origin: 'computer',
+      deviceId: 'one',
+      locationName: 'my laptop',
+      projectId: 'work',
+      projectName: 'saved work',
+      readOnly: false,
+      allowExecute: true,
+    },
+    {
+      origin: 'computer',
+      deviceId: 'one',
+      locationName: 'my laptop',
+      projectId: 'other',
+      projectName: 'other work',
+    },
+    {
+      origin: 'computer',
+      deviceId: 'two',
+      locationName: 'my laptop',
+      projectId: 'work',
+      projectName: 'second device work',
+    },
+  ];
+  for (const path of [
+    '/assistant/targets?backend=pi',
+    '/assistant/targets',
+    '/assistant/conversations?targets=deferred',
+  ]) {
+    const cache = new Map([[path, { targets }]]);
+    const groups = readComputerCatalogueCache((key) => cache.get(key));
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].device.id, 'one');
+    assert.equal(groups[0].device.name, 'my laptop');
+    assert.equal(groups[0].device.online, false);
+    assert.deepEqual(
+      groups[0].projects.map((p) => p.name),
+      ['saved work', 'other work'],
+    );
+    assert.equal(groups[1].projects[0].name, 'second device work');
+    for (const group of groups) {
+      assert.equal(group.verified, false);
+      assert.equal(group.loading, false);
+      assert(group.projects.every((p) => p.readOnly && !p.allowExecute));
+    }
+  }
+});
+
+test('explicit empty relay responses and newer directory removals override fallback labels', () => {
+  const target = {
+    origin: 'computer',
+    deviceId: 'one',
+    projectId: 'work',
+    projectName: 'old name',
+  };
+  const cache = new Map([
+    ['/assistant/targets', { targets: [target] }],
+    ['/assistant/conversations?targets=deferred', { targets: [target] }],
+    ['/relay/devices', { devices: [] }],
+  ]);
+  const read = () => readComputerCatalogueCache((path) => cache.get(path));
+  assert.deepEqual(read(), []);
+  cache.set('/relay/devices', { devices: [device('one')] });
+  assert.equal(read()[0].projects[0].name, 'old name');
+  cache.set('/relay/projects?deviceId=one', { projects: [] });
+  assert.deepEqual(read()[0].projects, []);
+  cache.delete('/relay/devices');
+  cache.delete('/relay/projects?deviceId=one');
+  cache.set('/assistant/targets?backend=pi', { targets: [] });
+  assert.deepEqual(read(), []);
+  assert.deepEqual(
+    readComputerCatalogueCache(() => undefined),
+    [],
+  );
+});

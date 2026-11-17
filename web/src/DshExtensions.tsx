@@ -28,7 +28,10 @@ type Catalog = {
   nativePlugins: Item[];
   pending?: Preview[];
 };
-type Preview = {
+export type DshExtensionTab = 'skills' | 'plugins' | 'mcps';
+export type Preview = {
+  kind?: string;
+  needsConfiguration?: boolean;
   plan: string;
   title: string;
   target: string;
@@ -54,15 +57,21 @@ export function DshExtensions({
   id,
   close,
   updated,
+  initialPlan,
+  initialTab = 'skills',
+  idle = true,
 }: {
   settings: Settings;
   owner: string;
   id: string;
   close: () => void;
   updated: () => void;
+  initialPlan?: string;
+  initialTab?: DshExtensionTab;
+  idle?: boolean;
 }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null),
-    [tab, setTab] = useState<'skills' | 'plugins' | 'mcps'>('skills'),
+    [tab, setTab] = useState<DshExtensionTab>(initialTab),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
@@ -70,6 +79,7 @@ export function DshExtensions({
     [editing, setEditing] = useState<Item | null>(null),
     [name, setName] = useState(''),
     [markdown, setMarkdown] = useState(''),
+    [resources, setResources] = useState<{ path: string; text: string }[] | undefined>(),
     [spec, setSpec] = useState(''),
     [transport, setTransport] = useState('stdio'),
     [command, setCommand] = useState(''),
@@ -98,7 +108,13 @@ export function DshExtensions({
   }
   useEffect(() => {
     alive.current = true;
-    void run(reload);
+    void run(async () => {
+      if (initialPlan) {
+        const result = await api<{ preview: Preview }>(settings, base + '/previews/' + initialPlan);
+        if (alive.current) setPreview(result.preview);
+      }
+      await reload();
+    });
     return () => {
       alive.current = false;
     };
@@ -121,12 +137,74 @@ export function DshExtensions({
     setEditing(null);
     setName('');
     setMarkdown('');
+    setResources(undefined);
     setSpec('');
     setCommand('');
     setArgs('[]');
     setUrl('');
     setSecrets('{}');
     setPreview(null);
+  }
+  function changed() {
+    window.dispatchEvent(new CustomEvent('astral:dsh-extensions', { detail: id }));
+  }
+  async function editPreview() {
+    if (!preview) return;
+    await run(async () => {
+      type Draft = {
+        kind: string;
+        name?: string;
+        revision?: string;
+        markdown?: string;
+        resources?: { path: string; text: string }[];
+        spec?: string;
+        config?: {
+          transport: string;
+          command?: string;
+          args?: string[];
+          url?: string;
+          env?: Record<string, string>;
+          headers?: Record<string, string>;
+        };
+      };
+      const r = await api<{ change: Draft; requiresCredentials: boolean }>(
+        settings,
+        base + '/previews/' + preview.plan,
+      );
+      await api(settings, base + '/discard', { plan: preview.plan });
+      if (!alive.current) return;
+      reset();
+      setCatalog((value) =>
+        value
+          ? { ...value, pending: value.pending?.filter((p) => p.plan !== preview.plan) }
+          : value,
+      );
+      const c = r.change;
+      setName(c.name || '');
+      if (c.revision) setEditing({ name: c.name || '', revision: c.revision, state: 'enabled' });
+      if (c.kind === 'skill-save') {
+        setTab('skills');
+        setMarkdown(c.markdown || '');
+        setResources(c.resources);
+      } else if (c.kind.startsWith('plugin-')) {
+        setTab('plugins');
+        setSpec(c.spec || '');
+      } else if (c.config) {
+        const v = c.config;
+        setTab('mcps');
+        setTransport(v.transport);
+        setCommand(v.command || '');
+        setArgs(JSON.stringify(v.args || []));
+        setUrl(v.url || '');
+        setSecrets(JSON.stringify(v.env || v.headers || {}, null, 2));
+      }
+      setNotice(
+        r.requiresCredentials
+          ? '旧预览已取消。请在这里补齐凭据，再查看新的操作预览；凭据不发送到聊天。'
+          : '旧预览已取消。修改后请查看新的操作预览。',
+      );
+      changed();
+    });
   }
   async function prepare(change: object) {
     await run(async () => {
@@ -135,17 +213,21 @@ export function DshExtensions({
         setPreview(r.preview);
         setSecrets('{}');
         setNotice('');
+        changed();
       }
     });
   }
   async function confirm() {
-    if (!preview) return;
+    if (!preview || !idle || preview.needsConfiguration) return;
     await run(async () => {
       const op = crypto.randomUUID();
       setOperation(op);
       // Only the opaque operation ID is saved, never package/MCP secrets.
-      sessionStorage.setItem(`astral.dsh.extension-operation:${settings.url}:${owner}:${id}`, op);
+      try {
+        sessionStorage.setItem(`astral.dsh.extension-operation:${settings.url}:${owner}:${id}`, op);
+      } catch {}
       setPreview(null);
+      changed();
       const r = await api<{ operation: { state: string }; result: { state: string } | null }>(
         settings,
         base + '/confirm',
@@ -165,6 +247,7 @@ export function DshExtensions({
       reset();
       await reload();
       updated();
+      changed();
     });
   }
   async function discard() {
@@ -172,6 +255,7 @@ export function DshExtensions({
     await run(async () => {
       await api(settings, base + '/discard', { plan: preview.plan });
       setPreview(null);
+      changed();
       await reload();
     });
   }
@@ -181,6 +265,10 @@ export function DshExtensions({
       const r = await api<{ result: { state: string } }>(
         settings,
         base + '/operations/' + operation,
+        undefined,
+        undefined,
+        false,
+        { fresh: true },
       );
       setNotice(
         r.result.state === 'applied'
@@ -282,13 +370,26 @@ export function DshExtensions({
             {!!preview.resourceNames?.length && <p>资源：{preview.resourceNames.join('、')}</p>}
             {preview.configuration && <pre>{JSON.stringify(preview.configuration, null, 2)}</pre>}
             <p>{preview.notice}</p>
+            {!idle && <p className="field-help">本轮任务结束后可应用；不会停止当前任务。</p>}
+            {preview.needsConfiguration && (
+              <p className="field-help">请先编辑配置，填写所需凭据。</p>
+            )}
             <div className="dsh-extension-buttons">
+              {['skill-save', 'mcp-save', 'plugin-install', 'plugin-update'].includes(
+                preview.kind || '',
+              ) && (
+                <button className="secondary" disabled={busy} onClick={() => void editPreview()}>
+                  编辑方案
+                </button>
+              )}
               <button className="secondary" disabled={busy} onClick={() => void discard()}>
                 取消
               </button>
               <button
                 className="primary"
-                disabled={busy || Date.now() >= preview.expiresAt}
+                disabled={
+                  busy || !idle || !!preview.needsConfiguration || Date.now() >= preview.expiresAt
+                }
                 onClick={() => void confirm()}
               >
                 {busy ? '正在处理…' : '确认应用'}
@@ -429,6 +530,7 @@ export function DshExtensions({
                     kind: 'skill-save',
                     name,
                     markdown,
+                    ...(resources ? { resources } : {}),
                     ...(editing ? { revision: editing.revision } : {}),
                   });
                 else if (tab === 'plugins')
@@ -500,6 +602,7 @@ export function DshExtensions({
                   <label>
                     技能内容
                     <textarea
+                      aria-label="技能内容"
                       required
                       value={markdown}
                       onChange={(e) => setMarkdown(e.target.value)}
@@ -551,7 +654,12 @@ export function DshExtensions({
                       </label>
                       <label>
                         参数（JSON 数组）
-                        <textarea required value={args} onChange={(e) => setArgs(e.target.value)} />
+                        <textarea
+                          aria-label="参数（JSON 数组）"
+                          required
+                          value={args}
+                          onChange={(e) => setArgs(e.target.value)}
+                        />
                       </label>
                     </>
                   ) : (
@@ -569,6 +677,7 @@ export function DshExtensions({
                   <label>
                     {transport === 'stdio' ? '环境变量' : '请求头'}（JSON，凭据不回显）
                     <textarea
+                      aria-label={`${transport === 'stdio' ? '环境变量' : '请求头'}（JSON，凭据不回显）`}
                       spellCheck={false}
                       autoComplete="off"
                       value={secrets}

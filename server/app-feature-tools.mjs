@@ -7,7 +7,7 @@ import { scheduleActionSchema } from './schedule-actions.mjs';
 import { memoryFields, memoryWrite, memoryRevision } from './memories.mjs';
 import { questionEditSchema } from './learning.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
-import { dshExtensionChange } from '../shared/dsh-extensions.mjs';
+import { dshExtensionChatChange } from '../shared/dsh-extensions.mjs';
 import { assistanceSourceSchema } from './assistance-context.mjs';
 import {
   projectManagementRenameSchema,
@@ -108,18 +108,33 @@ export function registerAppFeatures(
     engine.register({
       name: 'assistant.extension_change',
       description:
-        '为当前DSH工作区准备Skill、MCP或固定版本npm原生bundle的更改预览，暂不安装或修改。先查询已有revision；任务结束后由管理员在聊天设置的扩展管理里确认固定预览，再应用。模型不能自批、重启主机或安装Pi插件。',
-      schema: z.object({ change: dshExtensionChange }).strict(),
+        '为当前DSH工作区准备Skill、MCP或固定版本npm原生bundle的更改预览，暂不安装或修改。先查询已有revision；任务结束后由管理员在聊天内查看、编辑并确认固定预览，再应用。MCP环境变量和请求头只填字段名与空值，凭据由用户在配置界面填写；程序参数公开，不得放密钥。模型不能自批、重启主机或安装Pi插件。',
+      schema: z.object({ change: dshExtensionChatChange }).strict(),
       available: (ctx) => ctx.origin === 'dsh' && ctx.actor.role === 'owner',
       execute: async (ctx, p) => {
         const actor = dshRemote.extensionActor(ctx, ctx.actor);
-        const preview = await dshRemote.extensions.prepare(actor, ctx.conversation, p.change);
+        const preview = await dshRemote.extensions.prepare(actor, ctx.conversation, p.change, {
+          fromChat: true,
+        });
         return {
           preview,
           state: 'awaiting-user',
-          next: '任务结束后，在当前聊天的设置 → 扩展管理中确认此预览；尚未应用。',
+          next: '方案已显示在当前聊天。结束本轮，让用户查看、编辑配置并确认；尚未应用，不要等待自己安装。',
         };
       },
+    });
+    engine.register({
+      name: 'assistant.extension_status',
+      description:
+        '只读核对当前DSH对话的原扩展操作结果；不重新安装、不调用MCP业务工具、不自动重启。',
+      schema: z.object({ id: uuid }).strict(),
+      available: (ctx) => ctx.origin === 'dsh' && ctx.actor.role === 'owner',
+      execute: (ctx, p) =>
+        dshRemote.extensions.status(
+          dshRemote.extensionActor(ctx, ctx.actor),
+          ctx.conversation,
+          p.id,
+        ),
     });
     engine.register({
       name: 'assistant.remote_connections',

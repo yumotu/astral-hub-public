@@ -17,12 +17,15 @@ import {
   dshDirectorySnapshot,
 } from '../../shared/dsh-display-cache.mjs';
 import { readAssistantSelection, saveAssistantSelection } from '../../shared/assistant-resume.mjs';
+import { parseDshPrompt, dshPromptFailure } from '../../shared/dsh-prompt.mjs';
 import type { Settings } from './types';
 import { AssistantComposer } from './AssistantComposer';
+import { usePreparedConversation, type PreparedMessage } from './PreparingConversation';
 import { AssistantComposerActions } from './AssistantComposerActions';
 import { ThinkingControl } from './ThinkingControl';
 import { DshPermissions, DshSkills, useDshControls } from './DshControls';
-import { DshExtensions } from './DshExtensions';
+import { DshExtensions, type DshExtensionTab } from './DshExtensions';
+import { DshExtensionRequests } from './DshExtensionRequests';
 import { AssistantUserMessage } from './AssistantUserMessage';
 import { DshMessage } from './DshMessage';
 import { JumpToLatest } from './JumpToLatest';
@@ -1028,7 +1031,14 @@ function DshChat({
   const control = useDshControls(settings, c.id, c.connection === 'connected');
   const [terminalOpen, setTerminalOpen] = useState(false),
     [skillsOpen, setSkillsOpen] = useState(false),
-    [extensionsOpen, setExtensionsOpen] = useState(false);
+    [extensionsOpen, setExtensionsOpen] = useState(false),
+    [extensionPlan, setExtensionPlan] = useState<string | undefined>(),
+    [extensionTab, setExtensionTab] = useState<DshExtensionTab>('skills');
+  function openExtensions(plan?: string, tab: DshExtensionTab = 'skills') {
+    setExtensionPlan(plan);
+    setExtensionTab(tab);
+    setExtensionsOpen(true);
+  }
   const nativeModel = control.controls?.model;
   const nativeReasoning = control.controls?.models?.groups
     .find((g) => g.id === nativeModel?.provider)
@@ -1109,7 +1119,8 @@ function DshChat({
     if (alive.current) update(r.conversation);
     return r;
   }
-  async function send() {
+  async function send(prepared?: PreparedMessage, preparedSaved?: () => void) {
+    const sendingInput = prepared?.text ?? input;
     if (removedComputer) {
       setError('电脑连接已撤销，历史和草稿仍保留；重新关联后可继续执行。');
       return;
@@ -1121,18 +1132,20 @@ function DshChat({
     if (
       lock.current ||
       uploadLock.current ||
-      (!input.trim() && !attachments.length) ||
+      (!sendingInput.trim() && !attachments.length) ||
       c.connection !== 'connected'
     )
       return;
     lock.current = true;
     setBusy(true);
     setError('');
-    const text = input.trim() || '请查看这些附件。',
-      files = attachmentsRef.current,
-      id = crypto.randomUUID();
+    const text = sendingInput.trim() || '请查看这些附件。',
+      files = prepared ? [] : attachmentsRef.current,
+      id = prepared?.id || crypto.randomUUID();
     try {
       if (pendingRef.current.length >= 50) throw Error('待核对消息较多，请先查看主机进度。');
+      // Validate before consuming the draft or creating a pending delivery row.
+      parseDshPrompt({ id, text, mode: messageMode, attachments: files.map((file) => file.id) });
       savePending([
         ...pendingRef.current,
         { id, text, mode: messageMode, state: 'sending', files },
@@ -1148,6 +1161,11 @@ function DshChat({
     saveAttachments([]);
     follow.current = true;
     try {
+      preparedSaved?.();
+    } catch {
+      // Local cleanup cannot cancel a persisted submission.
+    }
+    try {
       const result = await perform('prompt', {
         id,
         text,
@@ -1161,27 +1179,33 @@ function DshChat({
           ),
         );
     } catch (e) {
+      const failure = dshPromptFailure(e);
       if (alive.current)
         savePending(
-          pendingRef.current.map((v) =>
-            v.id === id
-              ? {
-                  ...v,
-                  state: [400, 401, 403, 404].includes(
-                    (e as Error & { status?: number }).status || 0,
-                  )
-                    ? 'rejected'
-                    : 'unknown',
-                }
-              : v,
-          ),
+          pendingRef.current.map((v) => (v.id === id ? { ...v, state: failure.state } : v)),
         );
-      if (alive.current) setError((e as Error).message + '；请核对主机记录，系统不会自动重发。');
+      if (alive.current) setError(failure.message);
     } finally {
       lock.current = false;
       if (alive.current) setBusy(false);
     }
   }
+  usePreparedConversation({
+    origin: 'remote',
+    nativeId: c.id,
+    ready:
+      c.connection === 'connected' &&
+      c.state !== 'cached' &&
+      !removedComputer &&
+      !removedProject &&
+      !uploading &&
+      !busy &&
+      !!control.controls &&
+      !control.loading &&
+      !control.error,
+    restoreDraft: setInput,
+    send,
+  });
   async function stop() {
     if (lock.current || c.stopPending) return;
     lock.current = true;
@@ -1252,9 +1276,17 @@ function DshChat({
               type="button"
               className="secondary"
               disabled={c.connection !== 'connected'}
-              onClick={() => setExtensionsOpen(true)}
+              onClick={() => openExtensions()}
             >
               扩展管理
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={c.connection !== 'connected'}
+              onClick={() => openExtensions(undefined, 'mcps')}
+            >
+              配置 MCP
             </button>
             <button
               type="button"
@@ -1387,6 +1419,13 @@ function DshChat({
                   }
                 />
               ))}
+              <DshExtensionRequests
+                settings={settings}
+                id={c.id}
+                connected={c.connection === 'connected'}
+                idle={!c.runState.busy}
+                open={openExtensions}
+              />
               {c.appTools.tasks.map((task) => (
                 <AppFunctionRequests
                   key={task.id}
@@ -1485,6 +1524,9 @@ function DshChat({
           attributes={{
             'aria-label': '发送给DSH的消息',
             placeholder: '发送消息… 执行中也可继续补充',
+            // Preserve pasted text; report an over-limit draft before sending
+            // instead of silently truncating it through the shared 8000 limit.
+            maxLength: undefined,
           }}
           header={
             <ChatFiles
@@ -1616,6 +1658,9 @@ function DshChat({
             owner={owner}
             id={c.id}
             close={() => setExtensionsOpen(false)}
+            initialPlan={extensionPlan}
+            initialTab={extensionTab}
+            idle={!c.runState.busy}
             updated={() => void control.reload()}
           />
         )}

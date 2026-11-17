@@ -7,9 +7,43 @@
  * @returns {ComputerGroup[]}
  */
 export function readComputerCatalogueCache(peek) {
-  return (peek('/relay/devices')?.devices || []).map((device) => ({
+  // The unified tree can outlive individual relay entries after cache eviction.
+  // Reuse exact target labels only; never infer a grant or merge by display name.
+  // An explicit empty response is authoritative and must not revive old entries.
+  const targets =
+    peek('/assistant/targets?backend=pi')?.targets ??
+    peek('/assistant/targets')?.targets ??
+    peek('/assistant/conversations?targets=deferred')?.targets ??
+    [];
+  const fallback = new Map();
+  for (const target of targets) {
+    if (target.origin !== 'computer' || !target.deviceId || !target.projectId) continue;
+    if (!fallback.has(target.deviceId))
+      fallback.set(target.deviceId, {
+        device: {
+          id: target.deviceId,
+          name: target.locationName || '远程电脑',
+          online: false,
+          lastSeen: '',
+        },
+        projects: [],
+      });
+    const group = fallback.get(target.deviceId);
+    if (!group.projects.some((project) => project.id === target.projectId))
+      group.projects.push({
+        id: target.projectId,
+        name: target.projectName || '电脑项目',
+        readOnly: true,
+        allowExecute: false,
+      });
+  }
+  const devices = peek('/relay/devices')?.devices ?? [...fallback.values()].map((g) => g.device);
+  return devices.map((device) => ({
     device,
-    projects: peek('/relay/projects?deviceId=' + device.id)?.projects || [],
+    projects:
+      peek('/relay/projects?deviceId=' + device.id)?.projects ??
+      fallback.get(device.id)?.projects ??
+      [],
     verified: false,
     loading: false,
   }));

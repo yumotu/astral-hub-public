@@ -2,6 +2,19 @@
 
 已于2026-11-12部署服务器/网页0.8.12-dsh4，本轮没有发布新安装包。进入关联的 DSH 对话，在上方「设置 → 扩展管理」使用；仅当前登录管理员可管理，外部 DSH 主机须先装星屿扩展桥。验证、备份和回滚见[发行说明](release-0.8.13.md)。
 
+## 聊天内配置与安装（开发分支，尚未发行）
+
+可以直接在 DSH 主对话描述需要的扩展：例如“把这个 SKILL.md 注册为技能”“连接这个 MCP 服务”“安装这个固定版本 DSH 插件”。Agent 使用 `assistant.extensions` 查询现有版本、`assistant.extension_change` 准备方案；聊天消息区显示待确认卡片。模型不持有确认安装或重启主机的接口。
+
+1. 点击「查看和确认」核对目标主机、作用范围、版本和配置；任务仍在运行时只能查看，结束后才能应用。
+2. 需要调整时点「编辑方案」。旧预览先取消，编辑内容重新生成一个预览，不沿用旧确认。新技能随附的文本资料在编辑正文时保留。
+3. MCP 的密钥在配置窗口填写。Agent 只可传空的环境变量/请求头字段，不能把凭据值或含查询串的地址经聊天工具透传。编辑已准备的方案会清空密钥值与 URL 查询串，需要重新填写；命令参数仍是可见配置，不应放密钥。
+4. 点击「确认应用」后显示真实结果：已应用、需重启、失败或待核对。自动查询聊天卡片只读 App 本地记录，不重复连接 MCP、不调用业务工具。结果未知时「核对原操作」读取主机账本，不重装。
+
+上方「设置 → 配置 MCP」可直接打开 MCP 表单；「扩展管理」仍保留三个分类的完整目录。`assistant.extension_status` 可在后续聊天中查询原操作结果，不能用新操作 ID 重复确认同一预览。预览只属于生成它的登录，账号登出或换登录不会继承确认权。
+
+此流程复用固定 Harness 的原生 Skill 注册、MCP 连接与插件加载能力，不把 Pi 插件当成 DSH bundle。来源需要真实可核验，npm 安装必须固定版本；未提供可信来源时只补充方案，不虚构包名或宣称已经安装。安装完成仅说明加载与注册状态，某个业务操作是否可用仍由实际调用结果决定；连通探测不自动运行第三方业务工具。
+
 ## 技能、原生插件与 MCP
 
 | 类型 | 本轮支持 | 作用范围 |
@@ -28,7 +41,7 @@ MCP 主机进程配置使用程序与 JSON 参数数组，凭据放环境变量�
 
 ## 预览和恢复
 
-每次更改先冻结名称、版本、作用范围和具体配置预览，五分钟内由同一账号/登录/连接/原生会话确认。取消使预览失效。旧预览与已变化版本冲突时拒绝，不覆盖新修改。管理员可在聊天要求准备扩展更改，模型通过 `assistant.extensions` 查询、`assistant.extension_change` 准备；任务完成后到扩展管理确认。模型没有自行确认、重启或恢复失效授权的工具。
+每次更改先冻结名称、版本、作用范围和具体配置预览，五分钟内由同一账号/登录/连接/原生会话确认。取消使预览失效。旧预览与已变化版本冲突时拒绝，不覆盖新修改。管理员可在聊天要求准备扩展更改，模型通过 `assistant.extensions` 查询、`assistant.extension_change` 准备；任务完成后可从聊天方案卡片查看、编辑并确认，也可进入扩展管理。模型没有自行确认、重启或恢复失效授权的工具。
 
 安装不停止正在执行的任务；工作区更改等待对应 Agent 空闲，原生插件更改要求该 Profile 全部 Agent 空闲。临时维护期间不创建新 Agent，已有任务不重放。若主机返回需要重启，保存配置并明确提示，用户另择时重启。
 
@@ -43,6 +56,8 @@ MCP 配置替换失败会恢复原配置并报告失败/未知。连接状态以
 | 方法/后缀 | 用途 |
 | --- | --- |
 | `GET /` | 当前工作区目录、原生插件及本登录待确认预览 |
+| `GET /requests` | 只读当前登录待确认方案与最近扩展操作 |
+| `GET /previews/:plan` | 读取脱敏可编辑配置；不回显凭据 |
 | `GET /skills/:name` | 读取本工作区管理的技能正文/资源 |
 | `POST /preview` | 严格 `{change}`；准备具体更改，不执行 |
 | `POST /confirm` | `{plan,id}`；一次性确认，ID 绑定固定计划 |
@@ -59,9 +74,17 @@ Harness `0.2.2-rc.1`、Remote `14037e78`、pnpm `11.25.0`。主机使用单独�
 npm test
 npx tsc --noEmit
 npm run build
-ASTRAL_DSH_EXTENSION_UI=1 node deploy/dsh/extensions-acceptance.mjs
 ```
 
-最后一条只使用临时合成账号、模型、npm registry 和 MCP，不使用生产密钥或真实用户目录；需要本机固定 Harness QA 依赖、pnpm 和后台 Chrome/Playwright。可用 `ASTRAL_DSH_QA_MODULES`、`ASTRAL_QA_PNPM`、`ASTRAL_QA_PLAYWRIGHT`、`ASTRAL_QA_CHROME` 指定已有安装路径。测试只在用例分组推进隔离 App 时钟，不降低产品频率保护。
+原生扩展验收使用维护者的独立测试环境，包含固定 Harness、临时 npm registry、合成模型与 MCP 服务；公开仓库不包含维护者专用验收脚本。不能以单元测试通过替代原生工具调用或平台安装包验证。
 
-构建必须使用完整 `deploy/dsh/Dockerfile`；兼容的 `Dockerfile.workbench` 也已改成完整构建，旧的仅复制 `host.mjs` 配方不包含新依赖。pnpm11使用`pnpm_config_`配置，安装缓存/XDG路径在DSH持久目录，不能退回旧`npm_config_`前缀。本轮完整Linux镜像、隔离60项、实际原生扩展/新进程恢复及生产只读验收通过；测试使用临时真实包，不代表所有第三方插件已验收。原生安装包没有重打。
+构建必须使用完整 `deploy/dsh/Dockerfile`；仅复制 `host.mjs` 不包含扩展运行需要的依赖。pnpm11使用`pnpm_config_`配置，安装缓存/XDG路径在DSH持久目录，不能退回旧`npm_config_`前缀。此前扩展管理基础已完成 Linux 镜像及原生运行验收；当前聊天增量尚未发行，测试使用临时真实包，不代表所有第三方插件已验收。原生安装包没有重打。
+
+
+## 设计依据
+
+- [Harness MCP 子系统](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/mcp.md)与[MCP 客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)：复用服务器范围与原生工具注册，支持 stdio / Streamable HTTP；不把“配置已保存”当成“已连接”。
+- [Harness 技能子系统](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/skills.md)：保留 Skill provider 的作用域、读取与刷新。
+- [原生插件管理器](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/boot/plugin-manager/README.md)：先检查固定来源，再安装、加载并报告实际状态；安装与启用分别核验，明确需要重启的结果。
+
+以上官方最新资料用于设计参照，实际调用仍按本项目固定 `0.2.2-rc.1` 的已验证接口，不直接假定新版 API 可用。

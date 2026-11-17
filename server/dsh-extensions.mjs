@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { fail } from './accounts.mjs';
-import { dshExtensionChange } from '../shared/dsh-extensions.mjs';
+import {
+  dshExtensionChange,
+  dshExtensionChatChange,
+  editableDshExtension,
+} from '../shared/dsh-extensions.mjs';
 
 const uuid = z.string().uuid();
 // This layer freezes a host preview under the exact login/connection/session.
@@ -36,7 +40,9 @@ export function createDshExtensions({
     authorize(actor, id);
     return value;
   }
-  async function prepare(actor, id, change) {
+  async function prepare(actor, id, change, { fromChat = false } = {}) {
+    change = (fromChat ? dshExtensionChatChange : dshExtensionChange).parse(change);
+    const editable = editableDshExtension(change);
     const r = authorize(actor, id),
       plan = randomUUID();
     for (const [key, p] of previews) if (p.expires <= now()) previews.delete(key);
@@ -49,7 +55,9 @@ export function createDshExtensions({
     const current = authorize(actor, id);
     if (preview.plan !== plan || !Number.isFinite(preview.expiresAt))
       throw fail(502, '主机预览编号不符。');
+    if (fromChat && editable.requiresCredentials) preview.needsConfiguration = true;
     previews.set(plan, {
+      editable,
       owner: actor.id,
       login: actor.sessionHash,
       conversation: id,
@@ -77,6 +85,10 @@ export function createDshExtensions({
   }
   async function commit(actor, id, plan, operationId) {
     const p = ownedPreview(actor, id, plan);
+    if (p.preview.needsConfiguration) throw fail(409, '请先编辑配置并由你填写凭据，再生成新预览。');
+    if (p.operationId && p.operationId !== operationId)
+      throw fail(409, '此预览已提交，请核对原操作，不会再次安装。');
+    p.operationId = operationId;
     const operation = await action(actor.id, id, operationId, 'extensions', { plan }, async () => {
       const control = new AbortController();
       controllers.set(operationId, { owner: actor.id, control });
@@ -108,31 +120,74 @@ export function createDshExtensions({
     if (stored?.result) p.confirmed = true;
     return { operation, result: stored?.result ? JSON.parse(stored.result) : null };
   }
+  function requests(actor, id) {
+    const r = authorize(actor, id);
+    return {
+      pending: [...previews.values()]
+        .filter(
+          (p) =>
+            p.owner === actor.id &&
+            p.login === actor.sessionHash &&
+            p.conversation === id &&
+            p.connection === r.connection_id &&
+            p.session === r.session_id &&
+            p.expires > now() &&
+            !p.confirmed &&
+            !p.operationId,
+        )
+        .map((p) => p.preview),
+      operations: db
+        .prepare(
+          'SELECT id,state,result,created_at FROM dsh_actions WHERE owner=? AND conversation_id=? AND kind=? ORDER BY created_at DESC LIMIT 5',
+        )
+        .all(actor.id, id, 'extensions')
+        .map((r) => ({
+          id: r.id,
+          state: r.result ? JSON.parse(r.result).state : r.state,
+          createdAt: r.created_at,
+        })),
+    };
+  }
+  async function status(actor, id, operationId) {
+    authorize(actor, id);
+    uuid.parse(operationId);
+    const record = db
+      .prepare('SELECT * FROM dsh_actions WHERE owner=? AND id=? AND conversation_id=? AND kind=?')
+      .get(actor.id, operationId, id, 'extensions');
+    if (!record) throw fail(404, '此对话没有该扩展操作。');
+    const result = await native(actor, id, { action: 'status', id: operationId });
+    // Return the native ledger, never re-run installation as a status probe.
+    return result;
+  }
   return {
     authorize,
-    catalog: async (actor, id) => {
-      const value = await native(actor, id, { action: 'catalog' });
-      return {
-        ...value,
-        pending: [...previews.values()]
-          .filter(
-            (p) =>
-              p.owner === actor.id &&
-              p.login === actor.sessionHash &&
-              p.conversation === id &&
-              p.expires > now() &&
-              !p.confirmed,
-          )
-          .map((p) => p.preview),
-      };
+    requests,
+    status,
+    preview: (actor, id, plan) => {
+      const p = ownedPreview(actor, id, plan);
+      if (p.operationId) throw fail(409, '此预览已提交，请核对原操作。');
+      return { preview: p.preview, ...p.editable };
     },
+    catalog: async (actor, id) => ({
+      ...(await native(actor, id, { action: 'catalog' })),
+      ...requests(actor, id),
+    }),
     prepare,
     commit,
     async handle(req, url, json, actor, id) {
       const base = '/api/agent/remote/conversations/' + id + '/extensions';
       if (!url.pathname.startsWith(base)) return false;
       authorize(actor, id);
+      if (req.method === 'GET' && url.pathname === base + '/requests') {
+        json(200, requests(actor, id));
+        return true;
+      }
       rate(actor.id, 'extensions', 45);
+      const preview = url.pathname.match(/\/extensions\/previews\/([^/]+)$/);
+      if (req.method === 'GET' && preview) {
+        json(200, this.preview(actor, id, uuid.parse(preview[1])));
+        return true;
+      }
       if (req.method === 'GET' && url.pathname === base) {
         json(200, { extensions: await this.catalog(actor, id) });
         return true;
@@ -142,16 +197,9 @@ export function createDshExtensions({
         json(200, { skill: await native(actor, id, { action: 'read-skill', name: readSkill[1] }) });
         return true;
       }
-      const status = url.pathname.match(/\/extensions\/operations\/([^/]+)$/);
-      if (req.method === 'GET' && status) {
-        const operationId = uuid.parse(status[1]);
-        const record = db
-          .prepare(
-            'SELECT * FROM dsh_actions WHERE owner=? AND id=? AND conversation_id=? AND kind=?',
-          )
-          .get(actor.id, operationId, id, 'extensions');
-        if (!record) throw fail(404, '此对话没有该扩展操作。');
-        json(200, { result: await native(actor, id, { action: 'status', id: operationId }) });
+      const operation = url.pathname.match(/\/extensions\/operations\/([^/]+)$/);
+      if (req.method === 'GET' && operation) {
+        json(200, { result: await status(actor, id, operation[1]) });
         return true;
       }
       if (req.method === 'POST' && url.pathname === base + '/preview') {
@@ -175,7 +223,8 @@ export function createDshExtensions({
           .object({ plan: uuid })
           .strict()
           .parse(await body(req));
-        ownedPreview(actor, id, input.plan);
+        const pending = ownedPreview(actor, id, input.plan);
+        if (pending.operationId) throw fail(409, '此预览已提交，请核对原操作。');
         const result = await native(actor, id, { action: 'discard', plan: input.plan });
         if (result.state !== 'discarded') throw fail(409, '主机尚未确认取消预览。');
         previews.delete(input.plan);

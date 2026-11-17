@@ -5,6 +5,7 @@ import { usePiTasks } from './pi-tasks';
 import { ConversationEngineSettings, ConversationSegmentHistory } from './UnifiedConversations';
 import { AssistantComposerActions } from './AssistantComposerActions';
 import { AssistantComposer } from './AssistantComposer';
+import { usePreparedConversation, type PreparedMessage } from './PreparingConversation';
 import { AssistantUserMessage } from './AssistantUserMessage';
 import { AssistantSettings } from './AssistantSettings';
 import { AssistantMode } from './AssistantMode';
@@ -149,8 +150,12 @@ export function ComputerChat({
     uploadBusy = useRef(false),
     fileInput = useRef<HTMLInputElement>(null);
   const [input, setInput] = useState(() => sessionStorage.getItem(key + ':draft:' + id) || ''),
-    [jobs, setJobs] = useState<Job[]>([]),
-    [older, setOlder] = useState<string | null>(null),
+    [jobs, setJobs] = useState<Job[]>(
+      () => peekAPI<{ jobs: Job[] }>(settings, '/relay/conversations/' + id)?.jobs || [],
+    ),
+    [older, setOlder] = useState<string | null>(
+      () => peekAPI<{ next: string | null }>(settings, '/relay/conversations/' + id)?.next || null,
+    ),
     [access, setAccess] = useState<'read' | 'edit'>(() =>
       !project.readOnly && preferences().access === 'edit' ? 'edit' : 'read',
     ),
@@ -159,6 +164,7 @@ export function ComputerChat({
     ),
     [error, setError] = useState(''),
     [showLatest, setShowLatest] = useState(false);
+  const [verifiedConversation, setVerifiedConversation] = useState<string | null>(null);
   const current = useRef(id);
   const titleCallback = useRef(titleChanged);
   titleCallback.current = titleChanged;
@@ -239,6 +245,7 @@ export function ComputerChat({
         if (!live) return;
         setAPICache(settings, '/relay/conversations/' + id, r);
         titleCallback.current(id, r.conversation.title);
+        setVerifiedConversation(id);
         if (
           r.jobs.some(
             (j) =>
@@ -433,39 +440,49 @@ export function ComputerChat({
       if (alive.current) setUploading(false);
     }
   }
-  function send() {
+  function send(prepared?: PreparedMessage, preparedSaved?: () => void) {
+    const sendingInput = prepared?.text ?? input;
+    const sendingFiles = prepared ? [] : staged;
     if (executionBlocked) {
       setError(executionBlocked);
       return;
     }
-    if ((!input.trim() && !staged.length) || uploadBusy.current) return;
+    if ((!sendingInput.trim() && !sendingFiles.length) || uploadBusy.current) return;
     try {
       outbox.add(
         {
-          id: crypto.randomUUID(),
+          id: prepared?.id || crypto.randomUUID(),
           deviceId,
           projectId: project.id,
           conversationId: id,
-          input: input.trim(),
-          access: project.readOnly ? 'read' : access,
-          execute: !!project.allowExecute && execute,
+          input: sendingInput.trim(),
+          access: project.readOnly ? 'read' : prepared ? preferences().access || 'read' : access,
+          execute: !!project.allowExecute && (prepared ? preferences().execute === true : execute),
           thinkingLevel: capabilities.includes('thinking_levels') ? thinkingLevel : 'off',
-          attachments: staged.map((f) => f.id),
+          attachments: sendingFiles.map((f) => f.id),
           mode: active ? 'steer' : 'queue',
           parentId: active?.id || null,
           deliveryPreference: mode,
         },
-        staged,
+        sendingFiles,
       );
       setInput('');
       setStaged([]);
       sessionStorage.removeItem(key + ':draft:' + id);
       follow.current = true;
       setError('');
+      preparedSaved?.();
     } catch (e) {
       setError((e as Error).message);
     }
   }
+  usePreparedConversation({
+    origin: 'computer',
+    nativeId: id,
+    ready: verifiedConversation === id && !executionBlocked && !uploading,
+    restoreDraft: setInput,
+    send,
+  });
   async function stop() {
     const target = active || queued[0];
     if (!target) return;
