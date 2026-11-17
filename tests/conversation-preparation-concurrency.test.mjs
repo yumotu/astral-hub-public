@@ -245,3 +245,104 @@ test('post-write transaction abort leaves the durable journal and preview unchan
   await b.hydrate();
   assert.equal(b.list()[0].draft, 'committed');
 });
+
+for (const operation of ['draft', 'queue', 'edit']) {
+  test(`hydrated journal cannot ${operation} from a stale visible editor`, async () => {
+    const s = storage(),
+      a = createConversationPreparationJournal(s, 'visible-' + operation),
+      id = crypto.randomUUID();
+    await a.begin(id, target);
+    await a.draft(id, 'shown in A');
+    const b = createConversationPreparationJournal(s, 'visible-' + operation);
+    await b.draft(id, 'saved in B');
+    await a.hydrate();
+    assert.equal(a.list()[0].draft, 'saved in B');
+    // A's DOM has not rendered the hydrated value yet.
+    const attempt =
+      operation === 'draft'
+        ? a.draft(id, 'shown in A plus typing', 'shown in A')
+        : operation === 'queue'
+          ? a.queue(id, 'shown in A', undefined, 'shown in A')
+          : a.edit(id, 'shown in A');
+    await assert.rejects(attempt, /其他页面修改/);
+    await b.hydrate();
+    assert.equal(b.list()[0].draft, 'saved in B');
+    assert.equal(b.list()[0].message, undefined);
+    if (operation === 'draft') {
+      assert.equal(a.list()[0].draft, 'shown in A plus typing');
+      await a.hydrate();
+      assert.equal(a.list()[0].draft, 'shown in A plus typing');
+    }
+  });
+}
+
+test('visible draft comparisons preserve ordered typing and queued supplements', async () => {
+  const a = createConversationPreparationJournal(storage(), 'editor-chain'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await Promise.all([
+    a.draft(id, 'A', ''),
+    a.draft(id, 'AB', 'A'),
+    a.queue(id, 'AB', undefined, 'AB'),
+    a.draft(id, 'supplement', ''),
+    a.draft(id, 'supplement C', 'supplement'),
+  ]);
+  assert.equal(a.list()[0].message.text, 'AB');
+  assert.equal(a.list()[0].draft, 'supplement C');
+});
+
+test('typing while own queue waits follows only that exact committed transition', async () => {
+  const s = storage(),
+    a = createConversationPreparationJournal(s, 'queue-transition'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await a.draft(id, 'still visible');
+  await Promise.all([
+    a.queue(id, 'still visible', undefined, 'still visible'),
+    a.draft(id, 'new supplement during wait', 'still visible'),
+  ]);
+  assert.equal(a.list()[0].draft, 'new supplement during wait');
+  assert.equal(a.list()[0].message.text, 'still visible');
+  await assert.rejects(
+    a.draft(id, 'stale again', 'still visible'),
+    /其他页面修改/,
+    'the alias is consumed once',
+  );
+});
+
+test('typing during edit cannot replace the queued message merged into the durable draft', async () => {
+  const s = storage(),
+    a = createConversationPreparationJournal(s, 'edit-transition'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await a.queue(id, 'QUEUED FIRST MESSAGE');
+  await a.draft(id, 'supplement visible');
+  const edit = a.edit(id, 'supplement visible');
+  const typing = a.draft(id, 'supplement visible + typed', 'supplement visible');
+  await edit;
+  await assert.rejects(typing, /其他页面修改/);
+  assert.equal(a.list()[0].draft, 'supplement visible + typed', 'retain unsaved local text');
+  const reopened = createConversationPreparationJournal(s, 'edit-transition');
+  await reopened.hydrate();
+  assert.equal(
+    reopened.list()[0].draft,
+    'QUEUED FIRST MESSAGE\n\nsupplement visible',
+    'retain original queued body durably',
+  );
+  assert.equal(reopened.list()[0].message, undefined);
+});
+
+test('another tab change cannot use an earlier local queue transition', async () => {
+  const s = storage(),
+    a = createConversationPreparationJournal(s, 'transition-conflict'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await a.draft(id, 'A');
+  await a.queue(id, 'A', undefined, 'A');
+  const b = createConversationPreparationJournal(s, 'transition-conflict');
+  await b.draft(id, 'B');
+  await a.hydrate();
+  await assert.rejects(a.draft(id, 'A typed', 'A'), /其他页面修改/);
+  await b.hydrate();
+  assert.equal(b.list()[0].draft, 'B');
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LoaderCircle, Menu, PanelRight } from 'lucide-react';
 import { AssistantComposer } from './AssistantComposer';
 import { AssistantComposerActions } from './AssistantComposerActions';
@@ -166,8 +166,11 @@ export function PreparingConversation({
           ? '发送交接尚未确认，正文仍保留。'
           : '对话尚未准备完成，内容已保留。';
   const [input, setInput] = useState(prep.draft);
+  const inputValue = useRef(prep.draft);
   const inputVersion = useRef(0);
   const inputPreparation = useRef<string | null>(prep.id);
+  const inputActivity = useRef({ id: prep.id, pending: 0, failed: false });
+  const [inputRevision, setInputRevision] = useState(0);
   inputPreparation.current = prep.id;
   useEffect(() => {
     inputPreparation.current = prep.id;
@@ -175,42 +178,96 @@ export function PreparingConversation({
       inputPreparation.current = null;
     };
   }, [prep.id]);
-  useEffect(() => {
-    setInput(prep.draft);
-    inputVersion.current++;
-  }, [prep.id]);
+  useLayoutEffect(() => {
+    if (inputActivity.current.id !== prep.id) {
+      inputActivity.current = { id: prep.id, pending: 0, failed: false };
+      inputValue.current = prep.draft;
+      setInput(prep.draft);
+      inputVersion.current++;
+    } else if (
+      !inputActivity.current.pending &&
+      !inputActivity.current.failed &&
+      inputValue.current !== prep.draft
+    ) {
+      // Adopt a different window's saved text before painting, only when this
+      // editor has no unfinished or rejected local change to preserve.
+      inputValue.current = prep.draft;
+      setInput(prep.draft);
+      inputVersion.current++;
+    }
+  }, [prep.id, prep.draft, inputRevision]);
   const change = (value: string) => {
+    const expectedDraft = inputValue.current;
+    inputValue.current = value;
     setInput(value);
     const version = ++inputVersion.current;
+    const activity = inputActivity.current;
+    const id = prep.id;
+    activity.pending++;
     void model
-      .preparationDraft(prep.id, value)
+      .preparationDraft(id, value, expectedDraft)
       .then(() => {
-        if (version === inputVersion.current) setError('');
+        if (inputPreparation.current === id && version === inputVersion.current) {
+          activity.failed = false;
+          setError('');
+        }
       })
       .catch((e) => {
-        if (version === inputVersion.current) setError((e as Error).message);
+        if (inputPreparation.current === id && version === inputVersion.current) {
+          activity.failed = true;
+          setError((e as Error).message);
+        }
+      })
+      .finally(() => {
+        activity.pending--;
+        if (inputPreparation.current === id) setInputRevision((value) => value + 1);
       });
   };
   const edit = async () => {
     const version = inputVersion.current;
     const id = prep.id;
+    const expectedDraft = inputValue.current;
+    const activity = inputActivity.current;
+    activity.pending++;
     try {
-      await model.preparationEdit(id);
+      await model.preparationEdit(id, expectedDraft);
       if (inputPreparation.current !== id || inputVersion.current !== version) return;
-      setInput((prep.message?.text || '') + (input ? '\n\n' + input : ''));
+      const value = (prep.message?.text || '') + (expectedDraft ? '\n\n' + expectedDraft : '');
+      inputValue.current = value;
+      setInput(value);
+      activity.failed = false;
+      setError('');
     } catch (e) {
-      if (inputPreparation.current === id && inputVersion.current === version)
+      if (inputPreparation.current === id && inputVersion.current === version) {
+        activity.failed = true;
         setError((e as Error).message);
+      }
+    } finally {
+      activity.pending--;
+      if (inputPreparation.current === id) setInputRevision((value) => value + 1);
     }
   };
   const submit = async () => {
     const version = inputVersion.current;
+    const id = prep.id;
+    const expectedDraft = inputValue.current;
+    const activity = inputActivity.current;
+    activity.pending++;
     try {
-      await model.preparationQueue(prep.id, input);
-      if (version === inputVersion.current) setInput('');
+      await model.preparationQueue(id, expectedDraft, expectedDraft);
+      if (inputPreparation.current !== id || inputVersion.current !== version) return;
+      inputValue.current = '';
+      setInput('');
+      activity.failed = false;
       setError('');
     } catch (e) {
-      setError((e as Error).message);
+      if (inputPreparation.current === id && inputVersion.current === version) {
+        activity.failed = true;
+        setError((e as Error).message);
+      }
+    } finally {
+      activity.pending--;
+      if (inputPreparation.current === id) setInputRevision((value) => value + 1);
     }
   };
   return (

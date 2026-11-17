@@ -101,96 +101,149 @@ test('actual handoff effect does not dispatch after unmount during claim', async
   await Promise.resolve();
   assert.deepEqual(fixture.counts(), { sends: 0, restores: 0 });
 });
-test('actual submit handler does not clear text typed during queue wait', async () => {
-  const body = source.slice(
-    source.indexOf('  const submit = async () => {'),
-    source.indexOf('  return (', source.indexOf('  const submit = async () => {')),
-  );
-  const js = ts.transpileModule(body, {
+function editorHandler(name) {
+  const start = source.indexOf(`  const ${name} = `);
+  const end =
+    name === 'submit'
+      ? source.indexOf('  return (', start)
+      : source.indexOf(`  const ${name === 'change' ? 'edit' : 'submit'} = `, start);
+  const js = ts.transpileModule(source.slice(start, end), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
   let resolve,
+    reject,
     input = 'first',
     error;
-  const version = { current: 1 };
-  const submit = new Function(
+  const version = { current: 1 },
+    identity = { current: 'test' },
+    value = { current: input },
+    activity = { current: { id: 'test', pending: 0, failed: false } },
+    calls = [];
+  const operation = (...args) => {
+    calls.push(args);
+    return new Promise((r, j) => {
+      resolve = r;
+      reject = j;
+    });
+  };
+  const handler = new Function(
     'inputVersion',
+    'inputPreparation',
+    'inputValue',
+    'inputActivity',
+    'setInputRevision',
     'model',
     'prep',
-    'input',
     'setInput',
     'setError',
-    `${js}; return submit;`,
+    `${js}; return ${name};`,
   )(
     version,
-    {
-      preparationQueue: () =>
-        new Promise((r) => {
-          resolve = r;
-        }),
+    identity,
+    value,
+    activity,
+    () => {},
+    { preparationQueue: operation, preparationEdit: operation, preparationDraft: operation },
+    { id: 'test', message: { text: 'queued' } },
+    (text) => {
+      input = text;
     },
-    { id: 'test' },
-    input,
-    (value) => {
-      input = value;
-    },
-    (value) => {
-      error = value;
+    (text) => {
+      error = text;
     },
   );
-  const pending = submit();
-  input = 'new supplement';
-  version.current++;
-  resolve();
+  return {
+    handler,
+    version,
+    identity,
+    value,
+    activity,
+    calls,
+    resolve: () => resolve(),
+    reject: () => reject(Error('conflict')),
+    type(text) {
+      input = text;
+      value.current = text;
+      version.current++;
+    },
+    read: () => ({ input, error }),
+  };
+}
+test('actual submit handler forwards displayed draft and does not clear newer input', async () => {
+  const fixture = editorHandler('submit');
+  const pending = fixture.handler();
+  assert.deepEqual(fixture.calls, [['test', 'first', 'first']]);
+  fixture.type('new supplement');
+  fixture.resolve();
   await pending;
-  assert.equal(input, 'new supplement');
-  assert.equal(error, '');
+  assert.equal(fixture.read().input, 'new supplement');
+  assert.equal(fixture.activity.current.pending, 0);
 });
 for (const boundary of ['typing', 'selection']) {
   test(`actual edit handler preserves input after ${boundary} during wait`, async () => {
-    const body = source.slice(
-      source.indexOf('  const edit = async () => {'),
-      source.indexOf('  const submit = async () => {'),
+    const fixture = editorHandler('edit');
+    const pending = fixture.handler();
+    assert.deepEqual(fixture.calls, [['test', 'first']]);
+    fixture.type(boundary === 'typing' ? 'new input' : 'other conversation input');
+    if (boundary === 'selection') fixture.identity.current = 'other';
+    fixture.resolve();
+    await pending;
+    assert.equal(
+      fixture.read().input,
+      boundary === 'typing' ? 'new input' : 'other conversation input',
     );
+  });
+}
+test('actual change handler supplies previous displayed value and retains rejected local input', async () => {
+  const fixture = editorHandler('change');
+  fixture.handler('local unsaved');
+  assert.deepEqual(fixture.calls, [['test', 'local unsaved', 'first']]);
+  fixture.reject();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(fixture.read().input, 'local unsaved');
+  assert.equal(fixture.activity.current.failed, true);
+  assert.equal(fixture.activity.current.pending, 0);
+  assert.equal(fixture.read().error, 'conflict');
+});
+for (const protection of ['idle', 'pending', 'failed']) {
+  test(`external draft layout sync respects ${protection} editor`, () => {
+    const start = source.indexOf('  useLayoutEffect(() => {');
+    const body = source.slice(start, source.indexOf('  const change = ', start));
     const js = ts.transpileModule(body, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
-    let resolve,
-      input = 'old supplement';
-    const version = { current: 1 },
-      identity = { current: 'test' };
-    const edit = new Function(
+    const inputValue = { current: 'local A' },
+      version = { current: 1 },
+      activity = {
+        current: {
+          id: 'test',
+          pending: protection === 'pending' ? 1 : 0,
+          failed: protection === 'failed',
+        },
+      };
+    let input = 'local A';
+    new Function(
+      'useLayoutEffect',
+      'inputActivity',
+      'inputValue',
       'inputVersion',
-      'inputPreparation',
-      'model',
-      'prep',
-      'input',
       'setInput',
-      'setError',
-      `${js}; return edit;`,
+      'prep',
+      'inputRevision',
+      js,
     )(
+      (fn) => fn(),
+      activity,
+      inputValue,
       version,
-      identity,
-      {
-        preparationEdit: () =>
-          new Promise((r) => {
-            resolve = r;
-          }),
+      (text) => {
+        input = text;
       },
-      { id: 'test', message: { text: 'first' } },
-      input,
-      (value) => {
-        input = value;
-      },
-      () => {},
+      { id: 'test', draft: 'other B' },
+      0,
     );
-    const pending = edit();
-    input = boundary === 'typing' ? 'new input' : 'other conversation input';
-    if (boundary === 'typing') version.current++;
-    else identity.current = 'other';
-    resolve();
-    await pending;
-    assert.equal(input, boundary === 'typing' ? 'new input' : 'other conversation input');
+    assert.equal(input, protection === 'idle' ? 'other B' : 'local A');
+    assert.equal(inputValue.current, input);
   });
 }
 for (const boundary of ['selection', 'unmount']) {

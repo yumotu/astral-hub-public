@@ -119,9 +119,9 @@ type Model = {
   preparations: ConversationPreparation[];
   preparing: ConversationPreparation | null;
   selectPreparation: (id: string) => void;
-  preparationDraft: (id: string, text: string) => Promise<void>;
-  preparationQueue: (id: string, text: string) => Promise<void>;
-  preparationEdit: (id: string) => Promise<void>;
+  preparationDraft: (id: string, text: string, expectedDraft: string) => Promise<void>;
+  preparationQueue: (id: string, text: string, expectedDraft: string) => Promise<void>;
+  preparationEdit: (id: string, expectedDraft: string) => Promise<void>;
   retryPreparation: (id: string) => Promise<void>;
   resumePreparation: (id: string) => Promise<void>;
   claimPreparation: (id: string) => Promise<ConversationPreparation | null>;
@@ -634,25 +634,25 @@ export function UnifiedConversationsProvider({
             saveUnifiedSelection(localStorage, storageKey, value.native);
           }
         },
-        preparationDraft: async (id, text) => {
+        preparationDraft: async (id, text, expectedDraft) => {
           const input = { text };
           preparationInputs.current.set(id, input);
           try {
-            await preparationJournal.current.draft(id, text);
+            await preparationJournal.current.draft(id, text, expectedDraft);
             if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           } finally {
             updatePreparations();
           }
         },
-        preparationQueue: async (id, text) => {
+        preparationQueue: async (id, text, expectedDraft) => {
           const input = preparationInputs.current.get(id);
-          await preparationJournal.current.queue(id, text);
+          await preparationJournal.current.queue(id, text, undefined, expectedDraft);
           if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           updatePreparations();
         },
-        preparationEdit: async (id) => {
+        preparationEdit: async (id, expectedDraft) => {
           const input = preparationInputs.current.get(id);
-          await preparationJournal.current.edit(id);
+          await preparationJournal.current.edit(id, expectedDraft);
           if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           updatePreparations();
         },

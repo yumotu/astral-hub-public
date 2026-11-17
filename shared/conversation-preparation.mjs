@@ -212,6 +212,7 @@ export function createConversationPreparationJournal(storage, scope) {
   } catch {}
   let pending = Promise.resolve();
   const seen = new Set(entries.map((value) => value.id));
+  const editorTransitions = new Map();
   return /** @type {Record<string, (...args: any[]) => any>} */ (
     Object.fromEntries(
       Object.entries(methods).map(([name, method]) => {
@@ -236,6 +237,33 @@ export function createConversationPreparationJournal(storage, scope) {
                   const current = fresh.find((value) => value.id === args[0]);
                   if (!['begin', 'remove', 'claim', 'hydrate'].includes(name) && !current)
                     throw Error('本地草稿已在其他页面移除；当前输入仍保留，请先复制内容。');
+                  // Hydration can finish before React displays the new draft.
+                  // Compare with the text the editor actually showed, not only
+                  // the journal's refreshed baseline, inside this transaction.
+                  const expectedDraft =
+                    name === 'draft'
+                      ? args[2]
+                      : name === 'queue'
+                        ? args[3]
+                        : name === 'edit'
+                          ? args[1]
+                          : undefined;
+                  // A queued send may commit while its old input is still
+                  // displayed. Accept that one local transition only if the
+                  // exact resulting draft/message is still durable.
+                  const transition = editorTransitions.get(args[0]);
+                  const followsOwnEdit =
+                    name === 'draft' &&
+                    transition?.from === expectedDraft &&
+                    transition?.to === text(current);
+                  if (
+                    typeof expectedDraft === 'string' &&
+                    current?.draft !== expectedDraft &&
+                    !followsOwnEdit
+                  )
+                    throw Error(
+                      '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
+                    );
                   if (
                     current &&
                     !['begin', 'resolve', 'fail'].includes(name) &&
@@ -279,6 +307,12 @@ export function createConversationPreparationJournal(storage, scope) {
                 },
               );
               for (const value of durable) seen.add(value.id);
+              if (name === 'queue') {
+                const next = durable.find((value) => value.id === args[0]);
+                if (local && next)
+                  editorTransitions.set(args[0], { from: local.draft, to: text(next) });
+              } else if (name === 'draft' || name === 'remove' || name === 'edit')
+                editorTransitions.delete(args[0]);
               // Optional startup preview only. A stale/failed mirror must never
               // roll back a committed journal or become the next writer's source.
               try {
