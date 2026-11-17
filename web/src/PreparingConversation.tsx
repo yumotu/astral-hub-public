@@ -118,8 +118,7 @@ export function usePreparedConversation({
           latest.current.model?.preparing?.id !== value.id
         )
           return;
-        current.restoreDraft(value.draft);
-        void current.model!.finishPreparation(value.id).catch(() => {});
+        void current.model!.finishPreparation(value.id, current.restoreDraft).catch(() => {});
       };
       if (value.message) {
         try {

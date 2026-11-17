@@ -8,6 +8,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import { flushSync } from 'react-dom';
 import {
   ArrowLeft,
   Archive,
@@ -124,7 +125,7 @@ type Model = {
   retryPreparation: (id: string) => Promise<void>;
   resumePreparation: (id: string) => Promise<void>;
   claimPreparation: (id: string) => Promise<ConversationPreparation | null>;
-  finishPreparation: (id: string) => Promise<void>;
+  finishPreparation: (id: string, restoreDraft: (text: string) => void) => Promise<void>;
   discardPreparation: (id: string) => Promise<void>;
   openPreparedConversation: (id: string) => void;
   settings: Settings;
@@ -229,6 +230,13 @@ export function UnifiedConversationsProvider({
       : null;
   });
   const preparationSelection = useRef(preparationId);
+  const preparationNavigation = useRef(0);
+  const initialPreparationSelection = useRef(
+    localStorage.getItem(storageKey + ':preparation-selection'),
+  );
+  // Input events update this before asynchronous persistence; a handoff must not
+  // restore the older snapshot returned by claim().
+  const preparationInputs = useRef(new Map<string, { text: string }>());
   const preparationRequests = useRef(new Set<string>());
   const preparationAlive = useRef(true);
   useEffect(() => {
@@ -238,6 +246,7 @@ export function UnifiedConversationsProvider({
     };
   }, []);
   function showPreparation(id: string | null) {
+    preparationNavigation.current++;
     preparationSelection.current = id;
     setPreparationId(id);
     try {
@@ -346,6 +355,45 @@ export function UnifiedConversationsProvider({
     piDirectoryReady = useRef(initialCache.directoryReady),
     mutationLock = useRef(false);
   const operationIds = useRef(createUnifiedOperationJournal(localStorage, storageKey));
+  useEffect(() => {
+    let live = true;
+    let first = true;
+    const hydrate = async () => {
+      const navigation = preparationNavigation.current;
+      const restoreSelection = first;
+      first = false;
+      try {
+        await preparationJournal.current.hydrate();
+        if (!live) return;
+        updatePreparations();
+        const id = initialPreparationSelection.current;
+        if (
+          restoreSelection &&
+          navigation === 0 &&
+          preparationNavigation.current === navigation &&
+          id &&
+          preparationJournal.current
+            .list()
+            .some((value: ConversationPreparation) => value.id === id)
+        ) {
+          showPreparation(id);
+          const value = preparationJournal.current
+            .list()
+            .find((item: ConversationPreparation) => item.id === id) as ConversationPreparation;
+          if (value.native) setSelected(value.native);
+        }
+      } catch (e) {
+        if (live) setError((e as Error).message);
+      }
+    };
+    void hydrate();
+    const focus = () => void hydrate();
+    window.addEventListener('focus', focus);
+    return () => {
+      live = false;
+      window.removeEventListener('focus', focus);
+    };
+  }, [storageKey]);
   const refresh = useCallback(async () => {
     const born = generation.current,
       read = ++historyRead.current;
@@ -481,6 +529,7 @@ export function UnifiedConversationsProvider({
   }, [refresh]);
   const select = useCallback(
     (value: Selection) => {
+      preparationNavigation.current++;
       const preparation = preparationJournal.current
         .list()
         .find((v: ConversationPreparation) => v.id === preparationSelection.current) as
@@ -586,18 +635,25 @@ export function UnifiedConversationsProvider({
           }
         },
         preparationDraft: async (id, text) => {
+          const input = { text };
+          preparationInputs.current.set(id, input);
           try {
             await preparationJournal.current.draft(id, text);
+            if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           } finally {
             updatePreparations();
           }
         },
         preparationQueue: async (id, text) => {
+          const input = preparationInputs.current.get(id);
           await preparationJournal.current.queue(id, text);
+          if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           updatePreparations();
         },
         preparationEdit: async (id) => {
+          const input = preparationInputs.current.get(id);
           await preparationJournal.current.edit(id);
+          if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
           updatePreparations();
         },
         retryPreparation: createPreparedConversation,
@@ -616,14 +672,29 @@ export function UnifiedConversationsProvider({
             updatePreparations();
           }
         },
-        finishPreparation: async (id) => {
+        finishPreparation: async (id, restoreDraft) => {
+          if (preparationSelection.current !== id || !preparationAlive.current) return;
+          const value = preparationJournal.current
+            .list()
+            .find((item: ConversationPreparation) => item.id === id) as
+            ConversationPreparation | undefined;
+          if (!value) return;
+          const draft = preparationInputs.current.get(id)?.text ?? value.draft;
+          // Close the old editor and restore its newest input in one render,
+          // before awaiting cleanup. No editable cleanup window may consume a
+          // later keystroke. Queued draft writes precede remove in the journal.
+          flushSync(() => {
+            restoreDraft(draft);
+            showPreparation(null);
+          });
           try {
             await preparationJournal.current.remove(id);
+            preparationInputs.current.delete(id);
           } catch {
-            setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
+            if (preparationAlive.current)
+              setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
           }
-          updatePreparations();
-          if (preparationSelection.current === id) showPreparation(null);
+          if (preparationAlive.current) updatePreparations();
         },
         discardPreparation: async (id) => {
           const value = preparationJournal.current
@@ -634,6 +705,7 @@ export function UnifiedConversationsProvider({
           // Remove durable local intent first. This does not cancel an already
           // issued create/submission or delete the actual native conversation.
           await preparationJournal.current.remove(id);
+          preparationInputs.current.delete(id);
           setError('');
           operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
           generation.current++;

@@ -40,7 +40,8 @@ function setup() {
       new Promise((resolve) => {
         resolveClaim = resolve;
       }),
-    finishPreparation: async () => {
+    finishPreparation: async (_id, restoreDraft) => {
+      restoreDraft(model.preparing.draft);
       finishes++;
     },
   };
@@ -206,5 +207,110 @@ for (const boundary of ['selection', 'unmount']) {
     assert.equal(fixture.counts().restores, 0);
     assert.equal(fixture.value.message.text, 'first');
     assert.equal(fixture.value.draft, 'supplement');
+  });
+}
+
+const provider = readFileSync(
+  new URL('../web/src/UnifiedConversations.tsx', import.meta.url),
+  'utf8',
+);
+function finishFixture() {
+  const start = provider.indexOf('finishPreparation: async (');
+  const body = provider.slice(start, provider.indexOf('        discardPreparation:', start));
+  const js = ts.transpileModule(`const operations = {${body}};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const selection = { current: 'test' },
+    alive = { current: true };
+  const inputs = { current: new Map([['test', { text: 'latest supplement' }]]) };
+  const saved = { id: 'test', draft: 'claim snapshot', message: { text: 'first' } };
+  let resolveRemove,
+    rejectRemove,
+    draft = '',
+    closed = false,
+    updates = 0,
+    error = '';
+  const finish = new Function(
+    'preparationSelection',
+    'preparationAlive',
+    'preparationInputs',
+    'preparationJournal',
+    'flushSync',
+    'showPreparation',
+    'setError',
+    'updatePreparations',
+    `${js};return operations.finishPreparation;`,
+  )(
+    selection,
+    alive,
+    inputs,
+    {
+      current: {
+        list: () => [saved],
+        remove: () =>
+          new Promise((resolve, reject) => {
+            resolveRemove = resolve;
+            rejectRemove = reject;
+          }),
+      },
+    },
+    (work) => work(),
+    () => {
+      closed = true;
+      selection.current = null;
+    },
+    (value) => {
+      error = value;
+    },
+    () => {
+      updates++;
+    },
+  );
+  return {
+    start: () =>
+      finish('test', (text) => {
+        draft = text;
+      }),
+    read: () => ({ draft, closed, updates, error }),
+    selection,
+    alive,
+    saved,
+    inputs,
+    resolve: () => resolveRemove(),
+    reject: () => rejectRemove(Error('storage failure')),
+  };
+}
+test('handoff restores latest synchronous input and closes preparing editor before cleanup waits', async () => {
+  const fixture = finishFixture();
+  const pending = fixture.start();
+  assert.deepEqual(fixture.read(), {
+    draft: 'latest supplement',
+    closed: true,
+    updates: 0,
+    error: '',
+  });
+  assert.equal(fixture.saved.message.text, 'first');
+  fixture.resolve();
+  await pending;
+  assert.equal(fixture.read().draft, 'latest supplement');
+  assert.equal(fixture.inputs.current.has('test'), false);
+});
+test('cleanup failure retains recovery and never clears restored supplement', async () => {
+  const fixture = finishFixture();
+  const pending = fixture.start();
+  fixture.reject();
+  await pending;
+  assert.equal(fixture.read().draft, 'latest supplement');
+  assert.equal(fixture.inputs.current.get('test').text, 'latest supplement');
+  assert.equal(fixture.saved.message.text, 'first');
+  assert.match(fixture.read().error, /不会自动重复发送/);
+});
+for (const boundary of ['selection', 'unmount']) {
+  test(`finishing a handed conversation does nothing after ${boundary}`, async () => {
+    const fixture = finishFixture();
+    if (boundary === 'selection') fixture.selection.current = 'other';
+    else fixture.alive.current = false;
+    await fixture.start();
+    assert.deepEqual(fixture.read(), { draft: '', closed: false, updates: 0, error: '' });
   });
 }
