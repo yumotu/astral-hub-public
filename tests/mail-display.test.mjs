@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import assert from 'node:assert/strict';
 import { safeMailHref, mailLinkLabel, mailAssistantDraft } from '../shared/mail-display.mjs';
+import { splitAssistantArtifacts } from '../shared/assistant-artifacts.mjs';
 import { sanitizeMailHtml, MAX_MAIL_HTML } from '../server/mail-html.mjs';
 import { mailTableKind } from '../shared/mail-layout.mjs';
 import { nestedNotificationHtml } from './fixtures/mail-layout.mjs';
@@ -24,8 +25,43 @@ test('mail preserves ordinary writing and literal fenced marker examples', () =>
     'I am writing about the writing workshop.',
     '```md\n:::writing{variant="email"}\nExample\n:::\n```',
     'Inline :::writing is a literal example.',
+    'DSL example:\n:::writing-team\nKeep this exact text.',
+    ':::writing.example\nLiteral directive.',
+    ':::writing notes about the workshop',
+    ':::writ',
+    ' :::writing{variant="email"}\nIndented literal\n :::',
+    ':::Writing{variant="email"}\nCase-sensitive literal\n:::',
+    '```md\n:::writing{variant="email" variant="email"}\nExample\n:::\n```',
   ])
     assert.deepEqual(mailAssistantDraft(text), { text });
+});
+
+test('mail rejects duplicate attributes without changing the shared preview parser', () => {
+  for (const attrs of [
+    'variant="email" variant="email"',
+    'variant="chat_message" variant="email"',
+    'variant="email" variant="chat_message"',
+    'variant="email" title="A" title="B"',
+  ]) {
+    const input = `:::writing{${attrs}}\nBody\n:::`;
+    assert.equal(
+      splitAssistantArtifacts(input).filter((part) => part.kind === 'artifact').length,
+      1,
+    );
+    const result = mailAssistantDraft(input);
+    assert.ok(result.error, attrs);
+    assert.equal(result.text, undefined);
+  }
+  assert.deepEqual(
+    mailAssistantDraft(':::writing{Variant="chat_message" variant="email"}\nBody\n:::'),
+    { text: 'Body' },
+  );
+});
+
+test('mail keeps non-grammar second markers as outside text, not extra body candidates', () => {
+  const complete = ':::writing{variant="email"}\nBody\n:::';
+  for (const suffix of [':::writ', ' :::writing{variant="unknown"}\nSecond\n :::'])
+    assert.deepEqual(mailAssistantDraft(complete + '\n' + suffix), { text: 'Body' });
 });
 
 test('mail rejects ambiguous, unfinished, empty and unsupported manuscript wrappers', () => {
@@ -39,6 +75,8 @@ test('mail rejects ambiguous, unfinished, empty and unsupported manuscript wrapp
     ':::writing{variant="unknown"}\nBody\n:::',
     ':::writing{variant="chat_message"}\nBody\n:::',
     ':::writing{variant="email" invalid}\nBody\n:::',
+    ':::writing{variant="email"} trailing text\nBody\n:::',
+    ':::writing   ',
     complete + '\n:::writing{variant="email"}\nUnfinished',
   ]) {
     const result = mailAssistantDraft(text);
@@ -96,6 +134,9 @@ test('composer adoption handler keeps the draft on errors, adopts the parsed bod
   for (const output of [
     ':::writing{variant="email"}\nIncomplete',
     ':::writing{variant="email"}\nA\n:::\n:::writing{variant="email"}\nB\n:::',
+    ':::writing{variant="email" variant="email"}\nBody\n:::',
+    ':::writing{variant="chat_message" variant="email"}\nBody\n:::',
+    ':::writing{variant="email" variant="chat_message"}\nBody\n:::',
   ]) {
     run(adopt, { task: { output } });
     assert.equal(draft.text, 'Original draft');
@@ -110,6 +151,13 @@ test('composer adoption handler keeps the draft on errors, adopts the parsed bod
   run(undo);
   assert.equal(draft.text, 'Original draft');
   assert.equal(previousText, null);
+  const plain = 'DSL example:\n:::writing-team\nKeep this exact text.';
+  run(adopt, { task: { output: plain } });
+  assert.equal(draft.text, plain);
+  assert.equal(previousText, 'Original draft');
+  assert.equal(error, '');
+  run(undo);
+  assert.equal(draft.text, 'Original draft');
 });
 
 test('desktop mail link boundary permits ordinary websites while rejecting executable, credential-bearing and local paths', () => {

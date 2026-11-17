@@ -13,8 +13,15 @@ export function mailAssistantDraft(input) {
       continue;
     }
     if (fence) continue;
-    if (/^:::writing\b/.test(line)) openers++;
-    else if (/^:::\s*$/.test(line)) closers++;
+    if (/^:::writing(?:\{|\s*$)/.test(line)) {
+      openers++;
+      const open = /^:::writing\{([^{}\r\n]{0,500})\}\s*$/.exec(line);
+      if (open) {
+        const keys = [...open[1].matchAll(/([a-zA-Z]+)="([^"\r\n]*)"/g)].map((field) => field[1]);
+        if (new Set(keys).size !== keys.length)
+          return { error: '助手文稿属性重复，请重新生成一份明确的邮件正文。' };
+      }
+    } else if (/^:::\s*$/.test(line)) closers++;
   }
   const artifacts = splitAssistantArtifacts(input).filter((part) => part.kind === 'artifact');
   if (artifacts.length > 1)

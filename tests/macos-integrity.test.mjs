@@ -39,9 +39,9 @@ test('integrity packaging signs both architectures before archives and never inv
     run(program, args, options) { calls.push({ program, args, options }); return { status: 0 }; },
   });
   assert.equal(calls.length, 3);
-  assert.match(calls[0].args[0], /desktop\/prepare\.cjs$/);
-  assert.match(calls[1].args[0], /scripts\/prepare-desktop-agent\.mjs$/);
-  assert.match(calls[2].args[0], /desktop\/node_modules\/electron-builder\/cli\.js$/);
+  assert.match(calls[0].args[0], /(?:^|[\\/])desktop[\\/]prepare\.cjs$/);
+  assert.match(calls[1].args[0], /(?:^|[\\/])scripts[\\/]prepare-desktop-agent\.mjs$/);
+  assert.match(calls[2].args[0], /(?:^|[\\/])desktop[\\/]node_modules[\\/]electron-builder[\\/]cli\.js$/);
   assert.deepEqual(calls[2].args.slice(1), [
     '--mac', '--arm64', '--x64', '--publish', 'never', '-c.mac.identity=-', '-c.mac.notarize=false',
   ]);

@@ -972,9 +972,19 @@ function ServerPiPage({
       localStorage.setItem(viewKey + ':project', projectId);
     } catch {}
   }, [conversation, projectId, viewKey]);
+  const refreshGeneration = useRef(0);
   async function refresh() {
-    const [s, c] = await Promise.all([
-      api<Status>(settings, '/pi/status', undefined, undefined, false, { fresh: true }),
+    const generation = ++refreshGeneration.current;
+    const live = () => alive.current && refreshGeneration.current === generation;
+    const failed = (e: Error) => {
+      if (live()) setError(e.message);
+    };
+    await Promise.all([
+      api<Status>(settings, '/pi/status', undefined, undefined, false, { fresh: true })
+        .then((s) => {
+          if (live()) setStatus(s);
+        })
+        .catch(failed),
       api<{ conversations: Conversation[] }>(
         settings,
         '/pi/conversations?archived=include',
@@ -982,31 +992,43 @@ function ServerPiPage({
         undefined,
         false,
         { fresh: true },
-      ),
+      )
+        .then((c) => {
+          if (live()) setConversations(c.conversations);
+        })
+        .catch(failed),
+      api<{ preferences: { defaultProjectId: string | null } }>(
+        settings,
+        '/pi/preferences',
+        undefined,
+        undefined,
+        false,
+        { fresh: true },
+      )
+        .then((p) => {
+          if (live()) {
+            setDefaultProjectId(p.preferences.defaultProjectId);
+            setPreferencesReady(true);
+          }
+        })
+        .catch(failed),
     ]);
-    setStatus(s);
-    setConversations(c.conversations);
-    const p = await api<{ preferences: { defaultProjectId: string | null } }>(
-      settings,
-      '/pi/preferences',
-      undefined,
-      undefined,
-      false,
-      { fresh: true },
-    );
-    setDefaultProjectId(p.preferences.defaultProjectId);
-    setPreferencesReady(true);
   }
   useEffect(() => {
+    const generation = ++refreshGeneration.current;
     if (!session) return;
-    let live = true;
-    Promise.all([
-      api<Status>(settings, '/pi/status'),
-      api<{ conversations: Conversation[] }>(settings, '/pi/conversations?archived=include'),
-    ])
-      .then(([s, c]) => {
-        if (live) {
-          setStatus(s);
+    let active = true;
+    const live = () => active && refreshGeneration.current === generation;
+    api<Status>(settings, '/pi/status')
+      .then((s) => {
+        if (live()) setStatus(s);
+      })
+      .catch((e) => {
+        if (live()) setError(e.message);
+      });
+    api<{ conversations: Conversation[] }>(settings, '/pi/conversations?archived=include')
+      .then((c) => {
+        if (live()) {
           setConversations(c.conversations);
           const restored = restoredConversation.current;
           restoredConversation.current = null;
@@ -1026,7 +1048,7 @@ function ServerPiPage({
             )
               .then((history) => {
                 if (
-                  live &&
+                  live() &&
                   currentConversation.current === restored &&
                   !history.conversation &&
                   !history.turns.length
@@ -1040,25 +1062,26 @@ function ServerPiPage({
         }
       })
       .catch((e) => {
-        if (live) setError(e.message);
+        if (live()) setError(e.message);
       });
     api<{ preferences: { defaultProjectId: string | null } }>(settings, '/pi/preferences')
       .then((r) => {
-        if (live) {
+        if (live()) {
           setDefaultProjectId(r.preferences.defaultProjectId);
           setPreferencesReady(true);
         }
       })
       .catch((e) => {
-        if (live) setError(e.message);
+        if (live()) setError(e.message);
       });
     api<{ projects: ServerProject[] }>(settings, '/pi/projects')
       .then((r) => {
-        if (live) setProjects(r.projects);
+        if (active) setProjects(r.projects);
       })
       .catch(() => {});
     return () => {
-      live = false;
+      active = false;
+      refreshGeneration.current++;
     };
   }, [session, settings]);
   useEffect(() => {
