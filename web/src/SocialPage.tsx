@@ -136,10 +136,23 @@ export function SocialPage({
   }, [messages.at(-1)?.seq, selected]);
   useEffect(() => {
     const through = messages.at(-1)?.seq;
-    if (!session || !selected || !through || older) return;
+    if (!session || !selected || !through || older || awayFromLatest || tab !== 'chat') return;
     let live = true;
     const mark = async () => {
-      if (document.visibilityState === 'hidden' || !document.hasFocus()) return;
+      const panel = scroll.current;
+      // Following near the bottom is a scroll preference, not proof that the
+      // latest message is visible. Recheck live geometry for focus callbacks.
+      if (
+        !live ||
+        selectedRef.current !== selected ||
+        !followLatest.current ||
+        document.visibilityState === 'hidden' ||
+        !document.hasFocus() ||
+        !panel ||
+        panel.clientHeight <= 0 ||
+        panel.scrollHeight - panel.scrollTop - panel.clientHeight > 1
+      )
+        return;
       try {
         const result = await api<{ unread: number }>(
           settings,
@@ -170,7 +183,7 @@ export function SocialPage({
       document.removeEventListener('visibilitychange', mark);
       window.removeEventListener('focus', mark);
     };
-  }, [selected, messages.at(-1)?.seq, older, settings, session]);
+  }, [selected, messages.at(-1)?.seq, older, awayFromLatest, tab, settings, session]);
   useEffect(() => {
     if (selected && overview && !overview.contacts.some((u) => u.id === selected)) {
       setSelected('');
@@ -515,7 +528,9 @@ export function SocialPage({
                     const nearBottom =
                       panel.scrollHeight - panel.scrollTop - panel.clientHeight < 80;
                     followLatest.current = nearBottom;
-                    setAwayFromLatest(!nearBottom);
+                    setAwayFromLatest(
+                      panel.scrollHeight - panel.scrollTop - panel.clientHeight > 1,
+                    );
                     if (nearBottom) setOlder(false);
                   }}
                 >

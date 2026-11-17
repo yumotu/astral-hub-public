@@ -208,7 +208,106 @@ test('incoming social messages retain reader position, latest button resumes fol
   panel.scrollTop = 1660;
   onScroll({ currentTarget: panel });
   assert.equal(followLatest.current, true, 'within 80px still follows');
+  assert.equal(away, true, 'near-bottom following does not hide the unread-position transition');
   panel.scrollTop = 1400;
   onScroll({ currentTarget: panel });
   assert.equal(followLatest.current, false);
+});
+
+test('social receipts wait for visible latest messages and recheck stale focus callbacks', async () => {
+  const file = source('SocialPage.tsx');
+  const effect = find(
+    file,
+    (n) =>
+      ts.isCallExpression(n) &&
+      n.expression.getText(file) === 'useEffect' &&
+      n.arguments[0]?.getText(file).includes('/read`'),
+  );
+  assert.match(
+    effect.arguments[1].getText(file),
+    /awayFromLatest/,
+    'returning to latest must rerun the receipt effect without requiring a new message',
+  );
+  const listeners = new Map(),
+    requests = [];
+  const panel = { scrollHeight: 2000, scrollTop: 100, clientHeight: 500 };
+  const document = {
+    visibilityState: 'visible',
+    focused: true,
+    hasFocus() {
+      return this.focused;
+    },
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: (name) => listeners.delete(name),
+  };
+  const followLatest = { current: false },
+    selectedRef = { current: 'friend' };
+  const bindings = {
+    session: {},
+    selected: 'friend',
+    messages: [{ seq: 31 }],
+    older: false,
+    awayFromLatest: true,
+    tab: 'chat',
+    document,
+    followLatest,
+    selectedRef,
+    scroll: { current: panel },
+    settings: {},
+    api: async (_settings, url, body) => {
+      requests.push({ url, ...body });
+      return { unread: 0 };
+    },
+    setOverview: () => {},
+    setError: assert.fail,
+    window: {
+      addEventListener: (name, callback) => listeners.set(name, callback),
+      removeEventListener: (name) => listeners.delete(name),
+    },
+  };
+  let cleanup = evaluate(effect.arguments[0].getText(file), bindings)();
+  await Promise.resolve();
+  assert.equal(requests.length, 0, 'a message below the viewport remains unread');
+  cleanup?.();
+
+  panel.scrollTop = 1500;
+  followLatest.current = true;
+  bindings.awayFromLatest = false;
+  cleanup = evaluate(effect.arguments[0].getText(file), bindings)();
+  await Promise.resolve();
+  assert.deepEqual(requests, [{ url: '/social/messages/friend/read', through: 31 }]);
+  const focused = listeners.get('focus');
+  panel.scrollTop = 100;
+  followLatest.current = false;
+  await focused();
+  assert.equal(requests.length, 1, 'focus callback rechecks live scroll position');
+  panel.scrollTop = 1450;
+  followLatest.current = true;
+  await focused();
+  assert.equal(requests.length, 1, '80px follow threshold is not read evidence');
+  panel.scrollTop = 1500;
+  document.visibilityState = 'hidden';
+  await focused();
+  document.visibilityState = 'visible';
+  document.focused = false;
+  await focused();
+  assert.equal(requests.length, 1, 'hidden or unfocused pages do not mark messages read');
+  document.focused = true;
+  panel.clientHeight = 0;
+  await focused();
+  panel.clientHeight = 500;
+  bindings.scroll.current = null;
+  await focused();
+  bindings.scroll.current = panel;
+  assert.equal(requests.length, 1, 'hidden or unmounted message panes are not read');
+  await focused();
+  assert.equal(requests.length, 2);
+  selectedRef.current = 'other';
+  await focused();
+  assert.equal(requests.length, 2, 'stale contact callbacks cannot mark the old thread read');
+  selectedRef.current = 'friend';
+  cleanup();
+  await focused();
+  assert.equal(requests.length, 2, 'cleaned-up callbacks cannot issue receipts');
+  assert.equal(listeners.size, 0);
 });
