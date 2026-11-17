@@ -34,7 +34,7 @@ const entry = z
   })
   .strict();
 let database;
-function serializedPreparationWrite(work) {
+function serializedPreparationWrite(key, legacy, work) {
   if (typeof indexedDB === 'undefined')
     return Promise.reject(Error('本地草稿存储不可用，请保留当前内容。'));
   database ||= new Promise((resolve, reject) => {
@@ -65,12 +65,17 @@ function serializedPreparationWrite(work) {
         transaction.oncomplete = () => resolve(result);
         transaction.onabort = transaction.onerror = () =>
           reject(failure || transaction.error || Error('本地草稿保存失败。'));
-        // The request callback runs only after earlier readwrite transactions release
-        // this store. Do not await anything while holding the cross-tab mutex.
-        const request = transaction.objectStore('writes').get('mutex');
+        // Read and write the actual journal in the same transaction. Locking IDB
+        // while reading a different tab's localStorage cache is not atomic.
+        const store = transaction.objectStore('writes');
+        const request = store.get(key);
         request.onsuccess = () => {
           try {
-            result = work();
+            const current = request.result === undefined ? legacy() : request.result;
+            const value = work(current);
+            if (value.persist !== false || request.result === undefined)
+              store.put(value.entries, key);
+            result = value.result;
           } catch (e) {
             failure = e;
             transaction.abort();
@@ -99,9 +104,11 @@ export function createConversationPreparationJournal(storage, scope) {
             : '正在核对上次创建结果，草稿已保留。',
       }));
   } catch {}
+  let stagedWrite;
+  // Mutations stage in memory; the enclosing IDB transaction commits the array.
   function save(next) {
-    storage.setItem(key, JSON.stringify(next));
     entries = next;
+    stagedWrite = next;
   }
   const find = (id) => entries.find((v) => v.id === id);
   function patch(id, value) {
@@ -113,6 +120,7 @@ export function createConversationPreparationJournal(storage, scope) {
   }
   const methods = {
     list: () => entries,
+    hydrate: () => entries,
     begin(id, value) {
       const old = find(id);
       if (old) return old;
@@ -203,6 +211,7 @@ export function createConversationPreparationJournal(storage, scope) {
     );
   } catch {}
   let pending = Promise.resolve();
+  const seen = new Set(entries.map((value) => value.id));
   return /** @type {Record<string, (...args: any[]) => any>} */ (
     Object.fromEntries(
       Object.entries(methods).map(([name, method]) => {
@@ -211,56 +220,74 @@ export function createConversationPreparationJournal(storage, scope) {
         const write = (...args) => {
           const run = pending.then(async () => {
             const local = find(args[0]);
+            const before = entries,
+              previousBaseline = baseline;
             const unsaved = entries.filter(
               (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
             );
             try {
-              return await serializedPreparationWrite(() => {
-                const fresh = z
-                  .array(entry)
-                  .max(40)
-                  .parse(JSON.parse(storage.getItem(key) || '[]'));
-                const current = fresh.find((value) => value.id === args[0]);
-                if (name !== 'begin' && name !== 'remove' && name !== 'claim' && !current)
-                  throw Error('本地草稿已在其他页面移除；当前输入仍保留，请先复制内容。');
-                if (
-                  current &&
-                  !['begin', 'resolve', 'fail'].includes(name) &&
-                  text(current) !== text(baseline.get(args[0]))
-                )
-                  throw Error(
-                    '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
+              let durable;
+              const result = await serializedPreparationWrite(
+                key,
+                () => JSON.parse(storage.getItem(key) || '[]'),
+                (stored) => {
+                  stagedWrite = undefined;
+                  const fresh = z.array(entry).max(40).parse(stored);
+                  const current = fresh.find((value) => value.id === args[0]);
+                  if (!['begin', 'remove', 'claim', 'hydrate'].includes(name) && !current)
+                    throw Error('本地草稿已在其他页面移除；当前输入仍保留，请先复制内容。');
+                  if (
+                    current &&
+                    !['begin', 'resolve', 'fail'].includes(name) &&
+                    text(current) !== text(baseline.get(args[0]))
+                  )
+                    throw Error(
+                      '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
+                    );
+                  if (
+                    local &&
+                    !['draft', 'remove', 'begin'].includes(name) &&
+                    text(local) !== text(baseline.get(args[0]))
+                  )
+                    throw Error('当前输入尚未保存，请先复制内容或重新保存草稿。');
+                  const retained = entries.filter(
+                    (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
                   );
-                if (
-                  local &&
-                  !['draft', 'remove', 'begin'].includes(name) &&
-                  text(local) !== text(baseline.get(args[0]))
-                )
-                  throw Error('当前输入尚未保存，请先复制内容或重新保存草稿。');
-                const retained = entries.filter(
-                  (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
-                );
-                const confirmationRequired = new Set(
-                  entries.filter((value) => value.resumeRequired).map((value) => value.id),
-                );
-                entries = fresh.map((value) =>
-                  confirmationRequired.has(value.id) ? { ...value, resumeRequired: true } : value,
-                );
-                const result =
-                  current?.state === 'handed' &&
-                  ['creating', 'resume', 'resolve', 'fail'].includes(name)
-                    ? current
-                    : method(...args);
-                const previous = baseline;
-                baseline = new Map(entries.map((value) => [value.id, value]));
-                for (const value of retained) {
-                  if (previous.has(value.id)) baseline.set(value.id, previous.get(value.id));
-                  else baseline.delete(value.id);
-                  entries = entries.filter((item) => item.id !== value.id).concat(value);
-                }
-                return result;
-              });
+                  const confirmationRequired = new Set(
+                    entries.filter((value) => value.resumeRequired).map((value) => value.id),
+                  );
+                  entries = fresh.map((value) =>
+                    confirmationRequired.has(value.id) ||
+                    (!seen.has(value.id) && value.id !== (name === 'begin' ? args[0] : null))
+                      ? { ...value, resumeRequired: true }
+                      : value,
+                  );
+                  const result =
+                    current?.state === 'handed' &&
+                    ['creating', 'resume', 'resolve', 'fail'].includes(name)
+                      ? current
+                      : method(...args);
+                  durable = stagedWrite || fresh;
+                  const previous = baseline;
+                  baseline = new Map(entries.map((value) => [value.id, value]));
+                  for (const value of retained) {
+                    if (previous.has(value.id)) baseline.set(value.id, previous.get(value.id));
+                    else baseline.delete(value.id);
+                    entries = entries.filter((item) => item.id !== value.id).concat(value);
+                  }
+                  return { entries: durable, result, persist: stagedWrite !== undefined };
+                },
+              );
+              for (const value of durable) seen.add(value.id);
+              // Optional startup preview only. A stale/failed mirror must never
+              // roll back a committed journal or become the next writer's source.
+              try {
+                storage.setItem(key, JSON.stringify(durable));
+              } catch {}
+              return name === 'hydrate' ? entries : result;
             } catch (e) {
+              entries = before;
+              baseline = previousBaseline;
               for (const value of unsaved)
                 entries = entries.filter((item) => item.id !== value.id).concat(value);
               if (local && name === 'draft') {

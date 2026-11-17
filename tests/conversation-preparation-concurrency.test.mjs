@@ -1,49 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createConversationPreparationJournal } from '../shared/conversation-preparation.mjs';
-let tail = Promise.resolve();
-let abortNext = false;
-const db = {
-  transaction() {
-    let release;
-    const previous = tail;
-    tail = new Promise((resolve) => {
-      release = resolve;
-    });
-    let aborted = false;
-    const tx = {
-      abort() {
-        aborted = true;
-      },
-      objectStore() {
-        return {
-          get() {
-            const request = {};
-            previous.then(() => {
-              if (abortNext) {
-                abortNext = false;
-                aborted = true;
-                tx.error = Error('transaction aborted');
-              } else request.onsuccess();
-              if (aborted) tx.onabort();
-              else tx.oncomplete();
-              release();
-            });
-            return request;
-          },
-        };
-      },
-    };
-    return tx;
-  },
-};
-globalThis.indexedDB = {
-  open() {
-    const request = { result: db };
-    queueMicrotask(() => request.onsuccess());
-    return request;
-  },
-};
+import { preparationIDB } from './helpers/preparation-idb.mjs';
+const idb = preparationIDB();
+globalThis.indexedDB = idb.factory;
+test.beforeEach(() => idb.reset());
 const target = { origin: 'remote', projectId: null };
 const storage = () => {
   const data = new Map();
@@ -105,7 +66,7 @@ test('abort and unavailable IDB preserve input without unlocked writes', async (
     a = createConversationPreparationJournal(s, 'a'),
     id = crypto.randomUUID();
   await a.begin(id, target);
-  abortNext = true;
+  idb.failNext();
   await assert.rejects(a.draft(id, 'aborted input'), /aborted/);
   assert.equal(a.list()[0].draft, 'aborted input');
   const factory = globalThis.indexedDB;
@@ -124,12 +85,8 @@ test('unrelated writes cannot erase a failed in-memory draft', async () => {
   const id = crypto.randomUUID(),
     other = crypto.randomUUID();
   await a.begin(id, target);
-  const write = s.setItem;
-  s.setItem = () => {
-    throw Error('quota');
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(a.draft(id, 'unsaved'), /quota/);
-  s.setItem = write;
   await a.begin(other, target);
   assert.equal(a.list().find((v) => v.id === id).draft, 'unsaved');
   await assert.rejects(
@@ -152,10 +109,9 @@ test('a second failed mutation cannot clear a different unsaved draft', async ()
   const id = crypto.randomUUID(),
     other = crypto.randomUUID();
   await a.begin(id, target);
-  s.setItem = () => {
-    throw Error('quota');
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(a.draft(id, 'unsaved A'), /quota/);
+  idb.failNext(Error('quota'));
   await assert.rejects(a.begin(other, target), /quota/);
   assert.equal(a.list().find((v) => v.id === id).draft, 'unsaved A');
 });
@@ -203,4 +159,89 @@ test('interrupted claimed handoff reopens with complete copyable text and no rep
   assert.equal(await reopened.claim(id), null);
   await reopened.resume(id);
   assert.equal(await reopened.claim(id), null);
+});
+
+test('stale cross-process localStorage views cannot overwrite committed IDs', async () => {
+  // Each browser renderer can briefly see its own stale localStorage snapshot.
+  // The IDB transaction, not either snapshot, must own the read/modify/write.
+  const a = createConversationPreparationJournal(storage(), 'same-account');
+  const b = createConversationPreparationJournal(storage(), 'same-account');
+  const first = crypto.randomUUID(),
+    second = crypto.randomUUID();
+  await a.begin(first, target);
+  await a.draft(first, 'retained A');
+  await b.begin(second, target);
+  await b.draft(second, 'retained B');
+  assert.equal(b.list().length, 2, "a stale preview must not drop the other tab's committed ID");
+  await a.hydrate();
+  assert.equal(a.list().length, 2);
+  assert.equal(a.list().find((v) => v.id === first).draft, 'retained A');
+  assert.equal(a.list().find((v) => v.id === second).draft, 'retained B');
+});
+
+test('IDB restores drafts after a failed or corrupt optional preview cache', async () => {
+  const s = storage();
+  s.setItem = () => {
+    throw Error('localStorage quota');
+  };
+  const a = createConversationPreparationJournal(s, 'cache-optional'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await a.queue(id, 'durable message');
+  await a.draft(id, 'durable supplement');
+  await a.resolve(id, { origin: 'remote', nativeId: crypto.randomUUID() });
+  const corrupted = storage();
+  corrupted.setItem('cache-optional:preparations', '{broken');
+  const b = createConversationPreparationJournal(corrupted, 'cache-optional');
+  assert.deepEqual(b.list(), []);
+  await b.hydrate();
+  assert.equal(b.list()[0].draft, 'durable supplement');
+  assert.equal(b.list()[0].message.text, 'durable message');
+  assert.equal(await b.claim(id), null, 'restoration must require explicit continuation');
+  assert.equal(
+    (await a.claim(id)).message.text,
+    'durable message',
+    'read-only hydration must not alter the original owner intent',
+  );
+});
+
+test('legacy cache migrates once and cannot resurrect removed entries', async () => {
+  const s = storage(),
+    id = crypto.randomUUID();
+  const legacy = [
+    {
+      id,
+      target,
+      draft: 'legacy draft',
+      state: 'creating',
+      error: '',
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  s.setItem('migration:preparations', JSON.stringify(legacy));
+  const a = createConversationPreparationJournal(s, 'migration');
+  await a.hydrate();
+  assert.equal(a.list()[0].draft, 'legacy draft');
+  await a.remove(id);
+  // A delayed old tab writes its pre-migration view back to the preview cache.
+  s.setItem('migration:preparations', JSON.stringify(legacy));
+  const b = createConversationPreparationJournal(s, 'migration');
+  await b.hydrate();
+  assert.deepEqual(b.list(), []);
+});
+
+test('post-write transaction abort leaves the durable journal and preview unchanged', async () => {
+  const s = storage(),
+    a = createConversationPreparationJournal(s, 'abort-commit'),
+    id = crypto.randomUUID();
+  await a.begin(id, target);
+  await a.draft(id, 'committed');
+  const preview = s.getItem('abort-commit:preparations');
+  idb.failNext();
+  await assert.rejects(a.draft(id, 'not committed'), /aborted/);
+  assert.equal(a.list()[0].draft, 'not committed', 'keep failed input in memory');
+  assert.equal(s.getItem('abort-commit:preparations'), preview);
+  const b = createConversationPreparationJournal(s, 'abort-commit');
+  await b.hydrate();
+  assert.equal(b.list()[0].draft, 'committed');
 });

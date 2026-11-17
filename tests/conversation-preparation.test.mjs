@@ -2,45 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConversationPreparationJournal } from '../shared/conversation-preparation.mjs';
 
-// Deterministic IDB transaction scheduling; browser tests exercise the native API.
-let tail = Promise.resolve();
-const db = {
-  transaction() {
-    let release;
-    const previous = tail;
-    tail = new Promise((resolve) => {
-      release = resolve;
-    });
-    let aborted = false;
-    const tx = {
-      abort() {
-        aborted = true;
-      },
-      objectStore() {
-        return {
-          get() {
-            const request = {};
-            previous.then(() => {
-              request.onsuccess();
-              if (aborted) tx.onabort();
-              else tx.oncomplete();
-              release();
-            });
-            return request;
-          },
-        };
-      },
-    };
-    return tx;
-  },
-};
-globalThis.indexedDB = {
-  open() {
-    const request = { result: db };
-    queueMicrotask(() => request.onsuccess());
-    return request;
-  },
-};
+import { preparationIDB } from './helpers/preparation-idb.mjs';
+const idb = preparationIDB();
+globalThis.indexedDB = idb.factory;
+test.beforeEach(() => idb.reset());
 const id = '11111111-1111-4111-8111-111111111111',
   nativeId = '22222222-2222-4222-8222-222222222222';
 const target = { origin: 'remote', projectId: 'work', connectionId: 'remote-a' };
@@ -93,9 +58,7 @@ test('storage failure does not claim and cached permissions are stripped', async
   await j.resolve(id, { origin: 'remote', nativeId });
   assert.equal(j.list()[0].target.allowExecute, undefined);
   assert.equal(j.list()[0].target.authorization, undefined);
-  s.setItem = () => {
-    throw Error('quota');
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(j.claim(id), /quota/);
   assert.equal(j.list()[0].state, 'ready');
 });
@@ -127,9 +90,7 @@ test('failed draft persistence keeps newest input in memory', async () => {
   const s = storage(),
     j = createConversationPreparationJournal(s, 'a');
   await j.begin(id, target);
-  s.setItem = () => {
-    throw Error('quota');
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(j.draft(id, 'latest input'), /quota/);
   assert.equal(j.list()[0].draft, 'latest input');
 });
@@ -140,11 +101,7 @@ test('failed cleanup retains handed intent without replay', async () => {
   await j.queue(id, 'first');
   await j.resolve(id, { origin: 'remote', nativeId });
   await j.claim(id);
-  const write = s.setItem;
-  s.setItem = (k, v) => {
-    if (v === '[]') throw Error('quota');
-    write(k, v);
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(j.remove(id), /quota/);
   assert.equal(await j.claim(id), null);
   assert.equal(j.list()[0].message.text, 'first');
@@ -164,14 +121,10 @@ test('failed claim requires explicit retry after storage returns', async () => {
   await j.begin(id, target);
   await j.queue(id, 'first');
   await j.resolve(id, { origin: 'remote', nativeId });
-  const write = s.setItem;
-  s.setItem = () => {
-    throw Error('quota');
-  };
+  idb.failNext(Error('quota'));
   await assert.rejects(j.claim(id), /quota/);
   assert.equal(j.list()[0].resumeRequired, true);
   assert.match(j.list()[0].error, /消息尚未发送/);
-  s.setItem = write;
   assert.equal(await j.claim(id), null);
   await j.resume(id);
   assert.equal((await j.claim(id)).message.text, 'first');
