@@ -10,6 +10,8 @@
 4. PR/普通构建只使用临时测试证书；完整验收后的独立步骤对已测试 APK 重新签名，对照固定证书指纹并生成与提交绑定的证明。缺原证书时正式发行失败，不能自动换证书。测试 APK 不用于覆盖现有安装，只有最终 Release APK 保持更新签名。
 5. Mac 默认临时签名；当前公共工作流不读取 Apple 签名凭据，正式 Developer ID/公证需另行配置受保护的发行步骤。Windows 默认未正式签名。不得把临时签名称为已公证。
 
+Mac PR 构建使用 `scripts/package-macos-integrity.mjs`：先核对临时签名配置，移除传入的签名／公证凭据并关闭证书自动发现，仅对 PR 的这个独立子进程启用 electron-builder 的 PR 签名开关。两架构在生成 DMG/ZIP 前完成临时签名，随后仍执行原来的严格签名、架构、版本和资产摘要检查。PR 不读取发行 Secrets，也不会发布 Release；Developer ID 入口不经过此临时签名路径。
+
 ## 发版
 
 维护者在默认分支手动运行 Build applications 并选择发布，或推送与 `package.json` 完全一致的正式标签（例如版本为 `0.8.9` 时使用 `v0.8.9`）。普通 main/PR 构建和 `v0.8.9-rc.*` 候选标签只执行验证，不发布稳定版本。发行 job 要求全部原生检查和 Android 最终签名通过，再校验组合资产、创建不可变正式版本标签及 GitHub Release。
