@@ -24,6 +24,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { api, dateLabel } from './data';
+import { peekAPI } from './resource-cache';
 import { useMobilePanels } from './MobilePanels';
 import {
   ConversationDialog,
@@ -95,6 +96,11 @@ type ManagedComputer = {
   hostId?: string;
 };
 type ProjectManagement = { projects: ManagedProject[]; computers: ManagedComputer[] };
+type ConversationCatalogue = {
+  conversations: UnifiedConversation[];
+  targets?: ConversationTarget[];
+  preferences?: { defaultBackend: 'pi' | 'dsh' };
+};
 type Model = {
   conversations: UnifiedConversation[];
   targets: ConversationTarget[];
@@ -193,8 +199,29 @@ export function UnifiedConversationsProvider({
       return {};
     }
   });
-  const [management, setManagement] = useState<ProjectManagement>({ projects: [], computers: [] });
-  const [managementReady, setManagementReady] = useState(false);
+  const [initialCache] = useState(() => {
+    const catalogue = peekAPI<ConversationCatalogue>(settings, endpoint + '?targets=deferred');
+    const directory = peekAPI<{ targets: ConversationTarget[] }>(settings, '/assistant/targets');
+    const piDirectory = peekAPI<{ targets: ConversationTarget[] }>(
+      settings,
+      '/assistant/targets?backend=pi',
+    );
+    return {
+      management: peekAPI<ProjectManagement>(settings, '/assistant/project-management'),
+      catalogue,
+      targets: [
+        ...(piDirectory?.targets || directory?.targets || catalogue?.targets || []).filter(
+          (t) => t.origin !== 'remote',
+        ),
+        ...(directory?.targets || []).filter((t) => t.origin === 'remote'),
+      ],
+      directoryReady: !!(piDirectory || directory),
+    };
+  });
+  const [management, setManagement] = useState<ProjectManagement>(
+    () => initialCache.management || { projects: [], computers: [] },
+  );
+  const [managementReady, setManagementReady] = useState(!!initialCache.management);
   const managementRead = useRef(0);
   const refreshManagement = useCallback(async () => {
     const read = ++managementRead.current;
@@ -227,10 +254,19 @@ export function UnifiedConversationsProvider({
       window.removeEventListener('astral:computer-changed', load);
     };
   }, [refreshManagement]);
-  const [conversations, setConversations] = useState<UnifiedConversation[]>([]);
-  const [targets, setTargets] = useState<ConversationTarget[]>([]);
-  const [defaultBackend, setDefaultBackend] = useState<'pi' | 'dsh'>('pi');
-  const [ready, setReady] = useState(false),
+  const [conversations, setConversations] = useState<UnifiedConversation[]>(() =>
+    (initialCache.catalogue?.conversations || []).map((conversation) => ({
+      ...conversation,
+      // Restored content is readable, but the previous process cannot certify
+      // whether this native session is still running or safe to switch.
+      runState: { busy: true, label: '正在同步最新状态' },
+    })),
+  );
+  const [targets, setTargets] = useState<ConversationTarget[]>(() => initialCache.targets);
+  const [defaultBackend, setDefaultBackend] = useState<'pi' | 'dsh'>(
+    () => initialCache.catalogue?.preferences?.defaultBackend || 'pi',
+  );
+  const [ready, setReady] = useState(!!initialCache.catalogue),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   const [targetsLoading, setTargetsLoading] = useState(true),
@@ -238,20 +274,23 @@ export function UnifiedConversationsProvider({
   const generation = useRef(0),
     historyRead = useRef(0),
     targetGeneration = useRef(0),
-    piDirectoryReady = useRef(false),
+    piDirectoryReady = useRef(initialCache.directoryReady),
     mutationLock = useRef(false);
   const operationIds = useRef(createUnifiedOperationJournal(localStorage, storageKey));
   const refresh = useCallback(async () => {
     const born = generation.current,
       read = ++historyRead.current;
-    const result = await api<{
-      conversations: UnifiedConversation[];
-      targets?: ConversationTarget[];
-      preferences?: { defaultBackend: 'pi' | 'dsh' };
-    }>(settings, endpoint + '?targets=deferred', undefined, undefined, false, {
-      fresh: true,
-      timeout: 12000,
-    });
+    const result = await api<ConversationCatalogue>(
+      settings,
+      endpoint + '?targets=deferred',
+      undefined,
+      undefined,
+      false,
+      {
+        fresh: true,
+        timeout: 12000,
+      },
+    );
     if (generation.current !== born || historyRead.current !== read || mutationLock.current) return;
     setConversations(result.conversations);
     setSelected((old) => {

@@ -164,14 +164,39 @@ export async function api<T>(
   const mutation = verb !== 'GET';
   const prefix = path.startsWith('/relay/')
     ? '/relay/'
-    : path.startsWith('/pi/')
-      ? '/pi/'
-      : path.startsWith('/goals')
-        ? '/goals'
-        : path.startsWith('/learning/')
-          ? '/learning/'
-          : null;
+    : path.startsWith('/assistant/')
+      ? '/assistant/'
+      : path.startsWith('/pi/')
+        ? '/pi/'
+        : path.startsWith('/goals')
+          ? '/goals'
+          : path.startsWith('/learning/')
+            ? '/learning/'
+            : null;
   const invalidate = () => {
+    // A native conversation/project write also changes the unified tree. Never
+    // restore a removed or renamed item from its earlier durable snapshot.
+    if (
+      prefix === '/pi/' ||
+      prefix === '/relay/' ||
+      prefix === '/assistant/' ||
+      path.startsWith('/agent/remote/')
+    )
+      invalidateAPI(s, '/assistant/');
+    const remoteConversation = /^\/agent\/remote\/conversations\/([^/?]+)(?:[/?]|$)/.exec(path);
+    if (remoteConversation) invalidateAPI(s, '/@dsh-display/' + remoteConversation[1], true);
+    if (path.startsWith('/agent/remote/connections')) invalidateAPI(s, '/@dsh-directory', true);
+    // A unified row may contain several native DSH segments. After deleting it
+    // none of those old bodies may reappear from an offline display snapshot.
+    if (verb === 'DELETE' && /^\/assistant\/conversations\/[^/]+$/.test(path))
+      invalidateAPI(s, '/@dsh-display/');
+    if (path === '/assistant/computer-management/remove') {
+      const target = (body as { target?: { origin?: string } } | undefined)?.target;
+      if (target?.origin === 'remote') {
+        invalidateAPI(s, '/@dsh-directory', true);
+        invalidateAPI(s, '/@dsh-display/');
+      }
+    }
     if (prefix === '/relay/') {
       const p = body as
         { deviceId?: string; projectId?: string; operation?: { kind?: string } } | undefined;
@@ -200,7 +225,7 @@ export async function api<T>(
         invalidateAPI(s, '/learning/lessons/' + id, true);
     } else if (prefix) invalidateAPI(s, prefix);
   };
-  if (mutation && !publicRequest && prefix) invalidate();
+  if (mutation && !publicRequest) invalidate();
   const load = async (): Promise<T> => {
     const deadline = AbortSignal.timeout(
       options?.timeout || (path === '/pi/message' ? 210000 : 100000),
@@ -245,7 +270,7 @@ export async function api<T>(
     await warmResourceCache(s);
     return await resourceCache.read(resourceKey(s, path), load, { ttl, force: options?.fresh });
   } finally {
-    if (mutation && !publicRequest && prefix) invalidate();
+    if (mutation && !publicRequest) invalidate();
     if (mutation && !publicRequest && (path.startsWith('/social/') || path.startsWith('/mail/'))) {
       invalidateAPI(s, path.startsWith('/social/') ? '/social/unread' : '/mail/unread');
       if (typeof window !== 'undefined') window.dispatchEvent(new Event('astral:unread-change'));

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { DesktopWindowBar } from './DesktopWindowBar';
 import { MobilePanelsProvider, useMobilePanels } from './MobilePanels';
 import { PiTasksProvider } from './pi-tasks';
-import { resourceScope } from './resource-cache';
+import { resourceScope, warmResourceCache } from './resource-cache';
 import { useBackLayer } from './back-navigation';
 import {
   Sparkles,
@@ -1867,9 +1867,18 @@ function Plugins({
     </>
   );
 }
-createRoot(document.getElementById('root')!).render(
-  <ThemeProvider>
-    <DesktopWindowBar />
-    <App />
-  </ThemeProvider>,
-);
+async function mountApp() {
+  // Hydrate local display data before the first component state initializer
+  // reads it. This performs no network request and restores no authorization.
+  const settings = loadSettings();
+  const session = loadSession(settings);
+  if (session?.token || settings.token)
+    await warmResourceCache({ ...settings, sessionToken: session?.token });
+  createRoot(document.getElementById('root')!).render(
+    <ThemeProvider>
+      <DesktopWindowBar />
+      <App />
+    </ThemeProvider>,
+  );
+}
+void mountApp();

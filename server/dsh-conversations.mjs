@@ -66,6 +66,10 @@ export function createDshConversations(
     owner TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,kind TEXT NOT NULL,
     digest TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created_at TEXT NOT NULL,reference TEXT,
     PRIMARY KEY(owner,id));`);
+  db.exec(`CREATE TABLE IF NOT EXISTS assistant_dsh_tool_preferences(
+    owner TEXT NOT NULL,connection_id TEXT NOT NULL,workspace_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    PRIMARY KEY(owner,connection_id,workspace_id));`);
   db.exec(
     `CREATE TABLE IF NOT EXISTS assistant_dsh_inputs(owner TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,input TEXT NOT NULL,PRIMARY KEY(owner,id));`,
   );
@@ -468,8 +472,16 @@ export function createDshConversations(
             .get(owner, p.connectionId, native)
         )
           throw fail(409, '此原生会话已在星屿中关联。');
+        // Persist only the software-function choice. Native permissions and
+        // short-lived task grants still require their normal host/session checks.
+        const rememberedTools = db
+          .prepare(
+            'SELECT enabled FROM assistant_dsh_tool_preferences WHERE owner=? AND connection_id=? AND workspace_id=?',
+          )
+          .get(owner, p.connectionId, p.workspaceId);
+        const toolsEnabled = software.enabled && (rememberedTools?.enabled ?? 1) === 1;
         db.prepare(
-          'INSERT INTO dsh_conversations(owner,id,connection_id,workspace_id,session_id,state,snapshot,stop_cursor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,?,?)',
+          'INSERT INTO dsh_conversations(owner,id,connection_id,workspace_id,session_id,state,snapshot,stop_cursor,created_at,updated_at,app_tools) VALUES(?,?,?,?,?,?,?,NULL,?,?,?)',
         ).run(
           owner,
           p.id,
@@ -480,6 +492,7 @@ export function createDshConversations(
           JSON.stringify(emptyDshSession()),
           stamp,
           stamp,
+          toolsEnabled ? 1 : 0,
         );
         if (p.sessionId)
           bindings.bind(owner, 'remote', p.id, {
@@ -574,6 +587,9 @@ export function createDshConversations(
           owner,
           id,
         );
+        db.prepare(
+          'INSERT INTO assistant_dsh_tool_preferences(owner,connection_id,workspace_id,enabled) VALUES(?,?,?,?) ON CONFLICT(owner,connection_id,workspace_id) DO UPDATE SET enabled=excluded.enabled',
+        ).run(owner, r.connection_id, r.workspace_id, p.enabled ? 1 : 0);
         if (!p.enabled) software.revoke(owner, id);
         json(200, { conversation: view(row(owner, id)) });
         return true;

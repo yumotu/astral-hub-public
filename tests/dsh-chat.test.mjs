@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { applyDshFrame, emptyDshSession, dshSessionView } from '../shared/dsh-session.mjs';
+import {
+  applyDshFrame,
+  emptyDshSession,
+  dshSessionView,
+  dshMessagePresentation,
+} from '../shared/dsh-session.mjs';
 import { createDshSessionChannel } from '../server/dsh-session-channel.mjs';
 import { createDshConversations } from '../server/dsh-conversations.mjs';
 
@@ -148,6 +153,57 @@ test('Harness injected workspace/runtime/time context is never presented as a hu
     ['human request'],
   );
   assert.equal(JSON.stringify(state).includes('private workspace'), false);
+});
+
+test('reasoning-only DSH steps keep tools and task progress without empty reply shells or copy controls', () => {
+  const state = applyDshFrame(
+    emptyDshSession(),
+    snapshot('s', [
+      record(0, 'turn/start', { turn: 1 }),
+      record(1, 'assistant/message', {
+        message: { content: [{ type: 'reasoning', text: 'Read the next mail.' }] },
+      }),
+      record(2, 'tool/call', { callId: 'mail', name: 'app_functions', arguments: '{}' }),
+      record(3, 'tool/result', {
+        message: { source: { callId: 'mail' }, content: [{ type: 'text', text: 'mail details' }] },
+      }),
+      record(4, 'assistant/message', {
+        message: { content: [{ type: 'text', text: '  \n\t' }] },
+      }),
+      record(5, 'assistant/message', {
+        message: { content: [{ type: 'text', text: '已找到邮件。' }] },
+      }),
+    ]),
+    's',
+  );
+  const view = dshSessionView(state);
+  assert.equal(view.status, 'running');
+  assert.equal(view.tools.length, 1);
+  assert.equal(view.tools[0].output, 'mail details');
+  const hidden = view.messages.filter((m) => dshMessagePresentation(m).visible);
+  assert.deepEqual(
+    hidden.map((m) => m.text),
+    ['已找到邮件。'],
+  );
+  const thoughts = view.messages.filter(
+    (m) => dshMessagePresentation(m, { showThinking: true }).visible,
+  );
+  assert.equal(thoughts.length, 2);
+  assert.equal(thoughts[0].thinking, 'Read the next mail.');
+  assert.equal(dshMessagePresentation(thoughts[0], { showThinking: true }).copy, false);
+  assert.equal(dshMessagePresentation(thoughts[1]).copy, true);
+  assert.deepEqual(dshMessagePresentation({ id: 'live:attempt', text: 'partial', thinking: '' }), {
+    text: true,
+    thinking: false,
+    visible: true,
+    copy: false,
+  });
+  // Old cached snapshots may carry whitespace-only thoughts or lack text fields.
+  for (const message of [{ text: '', thinking: '  \n' }, { text: ' \n', thinking: '' }, {}]) {
+    assert.equal(dshMessagePresentation(message, { showThinking: true }).visible, false);
+  }
+  // Filtering for display never mutates history: toggling thoughts on can recover it.
+  assert.equal(view.messages[0].thinking, 'Read the next mail.');
 });
 
 function queue(first) {

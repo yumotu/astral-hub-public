@@ -40,17 +40,29 @@ test('native handled commands finish without a model-settled event', async () =>
   assert.equal(await promptAndSettle(client, '/cron status', undefined, 100), 'handled');
   assert.equal(client.listeners.size, 0);
 });
-test('normal prompts wait for settlement, including settlement before acceptance', async () => {
+test('normal prompts wait for settlement, including settlement before acceptance', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const client = fixture((p, emit) => {
     emit({ type: 'agent_settled' });
     emit({ type: 'response', id: p.id, success: true, data: { disposition: 'started' } });
   });
   assert.equal(await promptAndSettle(client, 'hello', undefined, 100), 'started');
+  let settle,
+    completed = false;
   const late = fixture((p, emit) => {
     emit({ type: 'response', id: p.id, success: true, data: { disposition: 'started' } });
-    setImmediate(() => emit({ type: 'agent_settled' }));
+    settle = () => emit({ type: 'agent_settled' });
   });
-  assert.equal(await promptAndSettle(late, 'hello', undefined, 100), 'started');
+  const work = promptAndSettle(late, 'hello', undefined, 100).then((disposition) => {
+    completed = true;
+    return disposition;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(completed, false, 'acceptance must not finish work before settlement');
+  settle();
+  assert.equal(await work, 'started');
+  assert.equal(late.listeners.size, 0);
 });
 test('failed acceptance, process exit and deadlines terminate the wait and unsubscribe', async () => {
   const failed = fixture((p, emit) =>

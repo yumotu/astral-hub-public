@@ -10,7 +10,7 @@ import { createAppToolsPlugin } from '../integrations/dsh-app-tools/core.mjs';
 import { dshAppEndpoint } from '../server/dsh-app-tools.mjs';
 
 const endpoint = 'https://astral.test/api/agent/dsh/app-access';
-function fixture(t) {
+function fixture(t, { softwareConfigured = true } = {}) {
   const db = new DatabaseSync(':memory:'),
     id = randomUUID(),
     connectionId = randomUUID(),
@@ -63,11 +63,13 @@ function fixture(t) {
   const chat = {
     async watch(_id, callback) {
       listener = callback;
-      const stored = db.prepare('SELECT snapshot FROM dsh_conversations WHERE id=?').get(id);
+      const stored = db
+        .prepare('SELECT snapshot FROM dsh_conversations WHERE session_id=?')
+        .get(_id);
       const prior = JSON.parse(stored.snapshot);
       callback({
         type: 'snapshot',
-        header: { id: agent.id, version: 3 },
+        header: { id: _id, version: 3 },
         cursor: seq,
         records: prior.events.map((event) => ({ type: 'event', event })),
         projections: { asOfSeq: Math.max(0, seq), values: {} },
@@ -104,11 +106,15 @@ function fixture(t) {
     connection: async () => ({ client, peer: { deviceId: 'device', location: 'computer' } }),
     catalogue: async () => ({
       host: { deviceId: 'device', location: 'computer' },
-      workspaces: [{ id: 'project' }],
-      sessions: [{ id: agent.id, workspaceIds: ['project'] }],
+      workspaces: [{ id: 'project' }, { id: 'another-project' }],
+      sessions: [
+        { id: agent.id, workspaceIds: ['project'] },
+        { id: 'next-native', workspaceIds: ['project'] },
+        { id: 'other-native', workspaceIds: ['another-project'] },
+      ],
     }),
     appTools: {
-      endpoint,
+      endpoint: softwareConfigured ? endpoint : '',
       engine: () => engine,
       sessionActive: (owner, hash) => owner === 'alice' && hash === 'session-a' && sessionLive,
     },
@@ -183,7 +189,7 @@ function fixture(t) {
     plugin,
     async open(enabled = true) {
       await call('', { id, connectionId, workspaceId: 'project', sessionId: agent.id });
-      if (enabled) await call('/' + id + '/tools', { enabled: true });
+      await call('/' + id + '/tools', { enabled });
     },
     async prompt(text = '用户明确说：我喜欢详细讲解') {
       const requestId = randomUUID();
@@ -249,7 +255,7 @@ function fixture(t) {
   };
 }
 
-test('DSH software tools require explicit opt-in, exact account/session and dynamic registry; secrets never enter durable scope records', async (t) => {
+test('DSH software tools honor explicit disable, exact account/session and dynamic registry; secrets never enter durable scope records', async (t) => {
   const f = fixture(t);
   await f.open(false);
   await assert.rejects(f.invoke('example.read'), /未启用/);
@@ -276,6 +282,113 @@ test('DSH software tools require explicit opt-in, exact account/session and dyna
   await assert.rejects(f.raw({ command: { action: 'bind', nonce: f.grant().nonce } }), {
     status: 409,
   });
+});
+test('DSH new conversations default to software tools without granting a task, and remember explicit choices per project', async (t) => {
+  const f = fixture(t);
+  const first = await f.call('', {
+    id: f.id,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'native',
+  });
+  assert.equal(first.conversation.appTools.enabled, true);
+  assert.deepEqual(first.conversation.appTools.tasks, []);
+  assert.equal(
+    first.conversation.capabilities.appFunctions.supported,
+    false,
+    'a preference is not a live grant',
+  );
+  await assert.rejects(f.invoke('example.read'), /未启用/);
+  await f.call('/' + f.id + '/tools', { enabled: false });
+  f.restart();
+  const reopened = await f.call('', {
+    id: f.id,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'native',
+  });
+  assert.equal(
+    reopened.conversation.appTools.enabled,
+    false,
+    'opening cannot undo an explicit disable',
+  );
+  const nextId = randomUUID();
+  const next = await f.call('', {
+    id: nextId,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'next-native',
+  });
+  assert.equal(
+    next.conversation.appTools.enabled,
+    false,
+    'new chats inherit the remembered project preference',
+  );
+  const other = await f.call('', {
+    id: randomUUID(),
+    connectionId: f.connectionId,
+    workspaceId: 'another-project',
+    sessionId: 'other-native',
+  });
+  assert.equal(other.conversation.appTools.enabled, true, 'another project uses its own default');
+  await f.call('/' + f.id + '/tools', { enabled: true });
+  assert.equal(
+    (await f.call('/' + nextId)).conversation.appTools.enabled,
+    false,
+    'other existing conversations retain their own choice',
+  );
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM dsh_app_tasks').get().n, 0);
+  assert.equal(
+    f.db
+      .prepare(
+        'SELECT enabled FROM assistant_dsh_tool_preferences WHERE owner=? AND connection_id=? AND workspace_id=?',
+      )
+      .get('alice', f.connectionId, 'project').enabled,
+    1,
+  );
+});
+test('DSH software default never bypasses a missing server integration or migrates an existing disabled conversation', async (t) => {
+  const f = fixture(t, { softwareConfigured: false });
+  const created = await f.call('', {
+    id: f.id,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'native',
+  });
+  assert.equal(created.conversation.appTools.available, false);
+  assert.equal(created.conversation.appTools.enabled, false);
+  await assert.rejects(f.call('/' + f.id + '/tools', { enabled: true }), { status: 503 });
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM assistant_dsh_tool_preferences').get().n, 0);
+  f.restart();
+  assert.equal((await f.call('/' + f.id)).conversation.appTools.enabled, false);
+});
+test('DSH legacy disabled conversations stay disabled while a distinct account preference cannot disable new chats', async (t) => {
+  const f = fixture(t);
+  await f.call('', {
+    id: f.id,
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'native',
+  });
+  f.db
+    .prepare('UPDATE dsh_conversations SET app_tools=0 WHERE owner=? AND id=?')
+    .run('alice', f.id);
+  f.db
+    .prepare('INSERT INTO assistant_dsh_tool_preferences VALUES(?,?,?,?)')
+    .run('bob', f.connectionId, 'project', 0);
+  f.restart();
+  assert.equal(
+    (await f.call('/' + f.id)).conversation.appTools.enabled,
+    false,
+    'legacy disabled rows are not mass-enabled',
+  );
+  const next = await f.call('', {
+    id: randomUUID(),
+    connectionId: f.connectionId,
+    workspaceId: 'project',
+    sessionId: 'next-native',
+  });
+  assert.equal(next.conversation.appTools.enabled, true, 'defaults remain account scoped');
 });
 function engineFuture(engine) {
   engine.register({

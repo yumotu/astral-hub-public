@@ -3,6 +3,7 @@ export function createReadCache({
   now = Date.now,
   maxEntries = 120,
   maxBytes = 4 * 1024 * 1024,
+  retention = 7 * 24 * 60 * 60 * 1000,
   onChange = () => {},
 } = {}) {
   const entries = new Map(),
@@ -18,21 +19,21 @@ export function createReadCache({
       bytes -= row.bytes;
     }
   }
-  function set(key, value, at = now(), ttl = 30000) {
+  function set(key, value, at = now(), ttl = 30000, stale = false) {
     const serialized = JSON.stringify(value);
     if (!serialized || serialized.length * 2 > maxBytes) return;
     entries.delete(key);
-    entries.set(key, { value: clone(value), at, ttl, bytes: serialized.length * 2 });
+    entries.set(key, { value: clone(value), at, ttl, stale, bytes: serialized.length * 2 });
     trim();
     onChange();
   }
   const peek = (key) => {
     const row = entries.get(key);
-    return row && now() - row.at < 20 * 60 * 1000 ? clone(row.value) : undefined;
+    return row && now() - row.at < retention ? clone(row.value) : undefined;
   };
   async function read(key, load, { ttl = 30000, force = false } = {}) {
     const row = entries.get(key);
-    if (!force && row && now() - row.at < row.ttl) return clone(row.value);
+    if (!force && row && !row.stale && now() - row.at < row.ttl) return clone(row.value);
     if (pending.has(key)) return clone(await pending.get(key));
     const born = epoch,
       version = versions.get(key) || 0;
@@ -73,7 +74,7 @@ export function createReadCache({
     clear,
     snapshot: () =>
       [...entries]
-        .filter(([, row]) => now() - row.at < 20 * 60 * 1000)
+        .filter(([, row]) => now() - row.at < retention)
         .map(([key, row]) => ({ key, at: row.at, ttl: row.ttl, value: clone(row.value) })),
   };
 }

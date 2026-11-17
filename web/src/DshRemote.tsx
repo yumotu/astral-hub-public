@@ -9,6 +9,13 @@ import {
 } from 'react';
 import { Menu, PanelRight, Plus, RefreshCw, Settings2, X } from 'lucide-react';
 import { api, dateLabel } from './data';
+import { peekAPI, setAPICache, invalidateAPI, warmResourceCache } from './resource-cache';
+import {
+  dshDisplayPath,
+  dshDirectoryPath,
+  dshDisplaySnapshot,
+  dshDirectorySnapshot,
+} from '../../shared/dsh-display-cache.mjs';
 import { readAssistantSelection, saveAssistantSelection } from '../../shared/assistant-resume.mjs';
 import type { Settings } from './types';
 import { AssistantComposer } from './AssistantComposer';
@@ -17,7 +24,7 @@ import { ThinkingControl } from './ThinkingControl';
 import { DshPermissions, DshSkills, useDshControls } from './DshControls';
 import { DshExtensions } from './DshExtensions';
 import { AssistantUserMessage } from './AssistantUserMessage';
-import { CopyButton } from './CopyButton';
+import { DshMessage } from './DshMessage';
 import { JumpToLatest } from './JumpToLatest';
 import { RunSummary } from './ExecutionInfo';
 import { ChatFiles, uploadChatFile, type ChatFile } from './ChatFiles';
@@ -44,8 +51,6 @@ import {
   ConversationEngineSettings,
   ConversationSegmentHistory,
 } from './UnifiedConversations';
-const Reply = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })));
-const Markdown = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.PiMarkdown })));
 const Terminal = lazy(() => import('./DshTerminal').then((m) => ({ default: m.DshTerminal })));
 export type RemoteConnection = {
   id: string;
@@ -473,7 +478,10 @@ export function DshRemoteWorkspace({
   const { displayPanel, setPanel } = useMobilePanels();
   const navigationOpen = displayPanel === 'conversations';
   const selectedRef = useRef(selected);
+  const directoryRead = useRef(0);
+  const catalogueRef = useRef(catalogues);
   selectedRef.current = selected;
+  catalogueRef.current = catalogues;
   useEffect(() => {
     saveAssistantSelection(
       localStorage,
@@ -494,10 +502,26 @@ export function DshRemoteWorkspace({
     }
   });
   async function refresh() {
+    const read = ++directoryRead.current;
     const [c, list] = await Promise.all([
-      api<{ connections: RemoteConnection[] }>(settings, remoteBase + '/connections'),
-      api<{ conversations: DshConversation[] }>(settings, remoteBase + '/conversations'),
+      api<{ connections: RemoteConnection[] }>(
+        settings,
+        remoteBase + '/connections',
+        undefined,
+        undefined,
+        false,
+        { fresh: true },
+      ),
+      api<{ conversations: DshConversation[] }>(
+        settings,
+        remoteBase + '/conversations',
+        undefined,
+        undefined,
+        false,
+        { fresh: true },
+      ),
     ]);
+    if (directoryRead.current !== read) return;
     setConnections(c.connections);
     setConversations(list.conversations);
     if (
@@ -507,7 +531,20 @@ export function DshRemoteWorkspace({
     ) {
       setSelected(list.conversations.find((v) => !v.archivedAt)?.id || '');
     }
-    const result: Record<string, Catalogue> = {};
+    const result: Record<string, Catalogue> = Object.fromEntries(
+      Object.entries(catalogueRef.current).filter(([id]) => c.connections.some((v) => v.id === id)),
+    );
+    const publish = () => {
+      if (directoryRead.current !== read) return;
+      catalogueRef.current = { ...result };
+      setCatalogues({ ...result });
+      setAPICache(
+        settings,
+        dshDirectoryPath,
+        dshDirectorySnapshot({ connections: c.connections, catalogues: result }),
+      );
+    };
+    publish();
     await Promise.all(
       c.connections
         .filter((v) => v.host)
@@ -516,16 +553,45 @@ export function DshRemoteWorkspace({
             result[v.id] = await api<Catalogue>(
               settings,
               remoteBase + `/connections/${v.id}/catalogue`,
+              undefined,
+              undefined,
+              false,
+              { fresh: true },
             );
-          } catch {
+            publish();
+          } catch (e) {
+            if ([401, 403, 404].includes((e as Error & { status?: number }).status || 0)) {
+              delete result[v.id];
+              publish();
+            }
             /* Existing imported history remains visible offline. */
           }
         }),
     );
-    setCatalogues(result);
   }
   useEffect(() => {
-    void refresh().catch((e) => setError(e.message));
+    let live = true;
+    void (async () => {
+      await warmResourceCache(settings);
+      if (!live) return;
+      const saved = peekAPI<{
+        connections: RemoteConnection[];
+        catalogues: Record<string, Catalogue>;
+      }>(settings, dshDirectoryPath);
+      if (saved) {
+        const seed = dshDirectorySnapshot(saved);
+        setConnections(seed.connections as RemoteConnection[]);
+        catalogueRef.current = seed.catalogues as Record<string, Catalogue>;
+        setCatalogues(seed.catalogues as Record<string, Catalogue>);
+      }
+      await refresh();
+    })().catch((e) => {
+      if (live) setError(e.message);
+    });
+    return () => {
+      live = false;
+      directoryRead.current++;
+    };
   }, [settings]);
   async function task(work: () => Promise<void>) {
     if (busy) return;
@@ -574,7 +640,7 @@ export function DshRemoteWorkspace({
     let live = true,
       timer: ReturnType<typeof setTimeout>;
     const abort = new AbortController();
-    setConversation(null);
+    setConversation((current) => (current?.id === selected ? current : null));
     setSyncError('');
     const sync = async () => {
       try {
@@ -589,15 +655,32 @@ export function DshRemoteWorkspace({
         if (live) {
           setSyncError('');
           setConversation(r.conversation);
+          setAPICache(settings, dshDisplayPath(selected), dshDisplaySnapshot(r.conversation));
           setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== selected)]);
         }
       } catch (e) {
-        if (live) setSyncError((e as Error).message);
+        if (live) {
+          if ([401, 403, 404].includes((e as Error & { status?: number }).status || 0)) {
+            invalidateAPI(settings, dshDisplayPath(selected), true);
+            setConversation(null);
+          }
+          setSyncError((e as Error).message);
+        }
       } finally {
         if (live) timer = setTimeout(sync, document.hidden ? 12000 : 650);
       }
     };
-    void sync();
+    void (async () => {
+      await warmResourceCache(settings);
+      if (!live) return;
+      const saved = peekAPI(settings, dshDisplayPath(selected));
+      const snapshot = dshDisplaySnapshot(saved);
+      if (snapshot?.id === selected)
+        setConversation((current) =>
+          current?.id === selected ? current : (snapshot as DshConversation),
+        );
+      await sync();
+    })();
     return () => {
       live = false;
       abort.abort();
@@ -820,7 +903,10 @@ export function DshRemoteWorkspace({
             owner={owner}
             conversation={conversation}
             update={(c) => {
-              if (selectedRef.current === c.id) setConversation(c);
+              if (selectedRef.current === c.id) {
+                setConversation(c);
+                setAPICache(settings, dshDisplayPath(c.id), dshDisplaySnapshot(c));
+              }
             }}
           />
         ) : (
@@ -1203,7 +1289,7 @@ function DshChat({
           </label>
           <p className="field-help">
             {c.appTools.available
-              ? '启用后，新消息可使用附件、文件交付，以及当前账号的邮件、联系人、学习和记忆。指定主机需安装星屿工具插件；发送邮件或消息时在这里确认。关闭后撤销正在使用的工具授权。'
+              ? '新对话默认开启，并记住此项目的选择。新消息可使用附件、文件交付，以及当前账号的邮件、联系人、学习和记忆。指定主机需安装星屿工具插件；发送邮件或消息时在这里确认。关闭后撤销正在使用的工具授权。'
               : '服务器尚未配置软件工具入口。'}
           </p>
         </details>
@@ -1225,7 +1311,7 @@ function DshChat({
               {c.hasMore && (
                 <button
                   className="load-history text-link"
-                  disabled={busy}
+                  disabled={busy || c.connection !== 'connected'}
                   onClick={() => {
                     setBusy(true);
                     follow.current = false;
@@ -1248,24 +1334,11 @@ function DshChat({
                     files={c.inputs?.[m.rpcId || ''] || []}
                   />
                 ) : (
-                  <div className="message assistant" key={m.id}>
-                    {m.thinking && showThinking && (
-                      <details className="pi-thinking">
-                        <summary>思考过程</summary>
-                        <Suspense fallback={<pre>{m.thinking}</pre>}>
-                          <Markdown text={m.thinking} />
-                        </Suspense>
-                      </details>
-                    )}
-                    <Suspense fallback={<pre>{m.text}</pre>}>
-                      <Reply text={m.text} />
-                    </Suspense>
-                    {!m.id.startsWith('live:') && <CopyButton text={m.text} assistant />}
-                  </div>
+                  <DshMessage key={m.id} message={m} showThinking={showThinking} />
                 ),
               )}
               <ToolLog
-                tools={c.tools.map((t) => ({
+                tools={(c.state === 'cached' ? [] : c.tools).map((t) => ({
                   ...t,
                   path: '.',
                   command: t.name === 'bash' ? t.arguments : undefined,
@@ -1280,14 +1353,20 @@ function DshChat({
                   />
                 </section>
               )}
-              <RunSummary
-                backend="dsh"
-                status={c.status}
-                phase={c.phase}
-                stopPending={c.stopPending}
-                uiRequests={c.uiRequests}
-                connection={c.connection}
-              />
+              {c.state === 'cached' ? (
+                <p className="field-help" role="status">
+                  正在同步最新状态…
+                </p>
+              ) : (
+                <RunSummary
+                  backend="dsh"
+                  status={c.status}
+                  phase={c.phase}
+                  stopPending={c.stopPending}
+                  uiRequests={c.uiRequests}
+                  connection={c.connection}
+                />
+              )}
               {c.error && <p className="error">{c.error}</p>}
               {c.interactions.map((item) => (
                 <DshInteraction

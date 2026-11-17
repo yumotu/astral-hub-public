@@ -7,6 +7,8 @@ import { ToolLog, type ToolRun } from './ToolLog';
 import { PiTimeline } from './PiTimeline';
 import { RunMetrics, RunSummary } from './ExecutionInfo';
 import { CopyButton } from './CopyButton';
+import { DshMessage } from './DshMessage';
+import { useAssistantPreferences } from './assistant-preferences';
 import type { NativeConversationRef } from './UnifiedConversations';
 const Reply = lazy(() => import('./PiMarkdown').then((m) => ({ default: m.AssistantReply })));
 type HistoryMessage = {
@@ -38,6 +40,7 @@ export function NativeSegmentHistory({
   settings: Settings;
   segment: NativeConversationRef;
 }) {
+  const { showThinking } = useAssistantPreferences();
   const [data, setData] = useState<{
     turns?: PiTurn[];
     jobs?: HistoryJob[];
@@ -254,12 +257,7 @@ export function NativeSegmentHistory({
               files={data.conversation?.inputs?.[m.rpcId || ''] || []}
             />
           ) : (
-            <div className="message assistant" key={m.id}>
-              <Suspense fallback={<pre>{m.text}</pre>}>
-                <Reply text={m.text} />
-              </Suspense>
-              <CopyButton text={m.text} assistant />
-            </div>
+            <DshMessage key={m.id} message={m} showThinking={showThinking} />
           ),
         )}
       {segment.origin === 'remote' && data?.conversation && (

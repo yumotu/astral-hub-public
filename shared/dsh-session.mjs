@@ -320,6 +320,19 @@ export function applyDshFrame(previous, frame, sessionId, now = Date.now()) {
   bounded(state);
   return state;
 }
+/** Reasoning stays in history, but hidden thoughts must not create empty reply bubbles. */
+export function dshMessagePresentation(message, { showThinking = false } = {}) {
+  const hasText = typeof message.text === 'string' && message.text.trim().length > 0;
+  const hasThinking =
+    showThinking && typeof message.thinking === 'string' && message.thinking.trim().length > 0;
+  return {
+    text: hasText,
+    thinking: hasThinking,
+    visible: hasText || hasThinking,
+    copy: hasText && !String(message.id || '').startsWith('live:'),
+  };
+}
+
 export function dshSessionView(state, { stopPending = false } = {}) {
   const messages = [],
     tools = [];
@@ -335,7 +348,7 @@ export function dshSessionView(state, { stopPending = false } = {}) {
       .filter((b) => b.type === 'reasoning')
       .map((b) => b.text)
       .join('\n');
-    if (output || thinking)
+    if (output.trim() || thinking.trim())
       messages.push({
         id: String(e.seq),
         role,

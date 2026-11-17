@@ -1,12 +1,6 @@
 # 星屿 Astral Hub
 
-0.8.17 将电脑连接复用、原对话快速恢复、新建加速及每对话 Pi／DPH 选择同步到所有原生安装包。保留服务器／电脑 → 项目 → 对话的统一管理方式；远程 DPH 需要单独可信的 DSH Remote 配置。详见 [0.8.17 发行说明](docs/release-0.8.17.md)。
-
-# Astral Hub 0.8.15.r1
-
-Server/computer → project folders → conversations, with unified Pi/DPH navigation, full-title search and responsive layouts. Installer/update version **0.8.16** (Android code60) identifies this same revision for compatibility. [Release notes](docs/release-0.8.16.md); publication status is determined by the matching Release and successful signing workflow.
-
-# 星屿 Astral Hub
+0.8.19 增加重开后先显示历史的缓存、DSH软件功能偏好记忆，并修复隐藏思考后的空白消息和孤立复制按钮。缓存仅供显示，执行及权限由实时服务核实。详见 [0.8.19 发行说明](docs/release-0.8.19.md)；实际发布状态以对应 Release 和成功CI为准。
 
 可自托管的多平台 AI 工作空间。通过同一聊天界面使用服务器项目、明确授权的电脑项目、邮件、学习资料与应用工具。
 
@@ -43,7 +37,7 @@ npm run dev
 
 公开 Actions 使用标准 Ubuntu/macOS/Windows 托管 runner 构建本仓库源码。完整原生检查通过后才发布 Release；Android 签名材料由受限发行步骤读取 Secrets，不进入源码、普通构建或公共缓存。GitHub 的大规格 runner、存储及其他服务按各自规则处理。
 
-当前源码版本为 0.8.15；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
+当前源码版本为 0.8.19；是否已发行以对应 Release 与成功 CI 为准。macOS 默认临时签名，正式 Developer ID/公证需维护者配置；不能将资源完整性检查当作 Apple 公证。
 
 ## 权限与数据
 
