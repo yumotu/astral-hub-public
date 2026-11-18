@@ -5,12 +5,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fail } from './accounts.mjs';
 import { attachmentMaxBytes, attachmentSizeMessage } from '../deploy/pi/attachment-limits.mjs';
 export const maxFileBytes = attachmentMaxBytes;
-export function createChatFiles(db, { root, piRoot = root }) {
+export function createChatFiles(db, { root, piRoot = root, removeFile = rm }) {
   root = resolve(root);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   db.exec(
     'CREATE TABLE IF NOT EXISTS pi_files(id TEXT PRIMARY KEY,owner TEXT NOT NULL,conversation_id TEXT NOT NULL,name TEXT NOT NULL,bytes INTEGER NOT NULL,sha256 TEXT NOT NULL,created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS pi_files_owner ON pi_files(owner,conversation_id)',
   );
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS pi_file_deletions(owner TEXT NOT NULL,file_id TEXT NOT NULL,PRIMARY KEY(owner,file_id));',
+  );
+  const deleting = new Set();
   const prefix = (owner, conversation) =>
     join(createHash('sha256').update(owner).digest('hex'), conversation);
   const publicFile = (row) => ({
@@ -25,11 +29,16 @@ export function createChatFiles(db, { root, piRoot = root }) {
       .prepare('SELECT * FROM pi_files WHERE owner=? AND conversation_id=? ORDER BY created_at')
       .all(owner, conversation);
   }
-  function get(owner, conversation, id) {
+  function get(owner, conversation, id, removing = false) {
     const row = db
       .prepare('SELECT * FROM pi_files WHERE owner=? AND conversation_id=? AND id=?')
       .get(owner, conversation, id);
     if (!row) throw fail(404, '附件不存在。');
+    if (
+      !removing &&
+      db.prepare('SELECT 1 FROM pi_file_deletions WHERE owner=? AND file_id=?').get(owner, id)
+    )
+      throw fail(409, '附件正在删除或删除结果待核对；不能提交，可重试删除以完成清理。');
     return row;
   }
   const assertConversationOpen = (owner, id) => {
@@ -45,8 +54,15 @@ export function createChatFiles(db, { root, piRoot = root }) {
   };
   let uploading = new Set();
   const delivered = (owner, conversation, id) =>
-    (!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_task_files'").get() &&
-      !!db.prepare('SELECT 1 FROM dsh_task_files d JOIN pi_files f ON f.id=d.file_id AND f.owner=d.owner WHERE d.owner=? AND f.conversation_id=?' + (id ? ' AND f.id=?' : '')).get(...(id ? [owner, conversation, id] : [owner, conversation]))) ||
+    (!!db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_task_files'")
+      .get() &&
+      !!db
+        .prepare(
+          'SELECT 1 FROM dsh_task_files d JOIN pi_files f ON f.id=d.file_id AND f.owner=d.owner WHERE d.owner=? AND f.conversation_id=?' +
+            (id ? ' AND f.id=?' : ''),
+        )
+        .get(...(id ? [owner, conversation, id] : [owner, conversation]))) ||
     (!!db
       .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_job_files'")
       .get() &&
@@ -177,7 +193,9 @@ export function createChatFiles(db, { root, piRoot = root }) {
         if (createHash('sha256').update(bytes).digest('hex') !== row.sha256)
           throw fail(409, '附件摘要校验失败。');
         return bytes;
-      } finally { await handle.close(); }
+      } finally {
+        await handle.close();
+      }
     },
     async download(owner, conversation, id, res) {
       const row = get(owner, conversation, id),
@@ -206,22 +224,46 @@ export function createChatFiles(db, { root, piRoot = root }) {
       );
     },
     async remove(owner, conversation, id) {
-      get(owner, conversation, id);
-      if (delivered(owner, conversation, id)) throw fail(409, '已发送的电脑文件随对话保留。');
-      if (
-        db
-          .prepare(
-            "SELECT 1 FROM pi_turns WHERE owner=? AND conversation_id=? AND (instr(COALESCE(attachments,''),?)>0 OR instr(COALESCE(artifacts,''),?)>0)",
-          )
-          .get(owner, conversation, id, id)
-      )
-        throw fail(409, '已发送的附件随对话保留；删除对话时一起删除。');
-      await rm(join(root, prefix(owner, conversation), id), { force: true });
-      db.prepare('DELETE FROM pi_files WHERE id=? AND owner=? AND conversation_id=?').run(
-        id,
-        owner,
-        conversation,
-      );
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        get(owner, conversation, id, true);
+        if (deleting.has(id)) throw fail(409, '附件正在删除，请等待完成后重试。');
+        if (delivered(owner, conversation, id)) throw fail(409, '已发送的电脑文件随对话保留。');
+        if (
+          db
+            .prepare(
+              "SELECT 1 FROM pi_turns WHERE owner=? AND conversation_id=? AND (instr(COALESCE(attachments,''),?)>0 OR instr(COALESCE(artifacts,''),?)>0)",
+            )
+            .get(owner, conversation, id, id)
+        )
+          throw fail(409, '已发送的附件随对话保留；删除对话时一起删除。');
+        db.prepare('INSERT OR IGNORE INTO pi_file_deletions VALUES(?,?)').run(owner, id);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      deleting.add(id);
+      try {
+        await removeFile(join(root, prefix(owner, conversation), id), { force: true });
+      } catch {
+        throw fail(409, '附件删除未完成，结果待核对；请重试删除以完成清理，不能重新绑定。');
+      } finally {
+        deleting.delete(id);
+      }
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('DELETE FROM pi_files WHERE id=? AND owner=? AND conversation_id=?').run(
+          id,
+          owner,
+          conversation,
+        );
+        db.prepare('DELETE FROM pi_file_deletions WHERE owner=? AND file_id=?').run(owner, id);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
   };
 }
@@ -233,7 +275,12 @@ export function reserveDocumentRead() {
   if (activeUploads || activeDocumentReads) throw fail(429, '附件正在上传或解析，请稍后重试。');
   activeDocumentReads++;
   let released = false;
-  return () => { if (!released) { released = true; activeDocumentReads--; } };
+  return () => {
+    if (!released) {
+      released = true;
+      activeDocumentReads--;
+    }
+  };
 }
 export async function readUpload(req, maxBytes = maxFileBytes) {
   const sizeMessage = `单个文件最多${maxBytes / 1024 / 1024} MiB。`;

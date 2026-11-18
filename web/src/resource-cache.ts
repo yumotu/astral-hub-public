@@ -190,6 +190,7 @@ export async function warmResourceCache(s: Settings) {
 }
 export const peekAPI = <T>(s: Settings, path: string): T | undefined =>
   resourceCache.peek(resourceKey(s, path)) as T | undefined;
+export const guardAPI = (s: Settings, path: string) => resourceCache.guard(resourceKey(s, path));
 export function setAPICache(s: Settings, path: string, value: unknown) {
   resourceCache.set(resourceKey(s, path), value, Date.now(), cacheTTL(path) || 30000);
 }
