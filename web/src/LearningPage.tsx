@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, CheckCircle2, GraduationCap, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api, dateLabel } from './data';
 import { serverIdentity } from './session';
-import { peekAPI, setAPICache } from './resource-cache';
+import { invalidateAPI, peekAPI, setAPICache } from './resource-cache';
 import { PiMarkdown } from './PiMarkdown';
 import { useBackLayer } from './back-navigation';
 import type { AuthSession, Settings } from './types';
@@ -96,7 +96,8 @@ function Exercise({
     [text, setText] = useState<string>(draft.text || ''),
     [result, setResult] = useState(latest),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [answerOpen, setAnswerOpen] = useState(false);
   const attempt = useRef<{ signature: string; id: string } | null>(draft.attempt || null),
     group = useId();
   useEffect(() => {
@@ -212,22 +213,31 @@ function Exercise({
               版；历史分数保留，重新作答使用新版。
             </p>
           )}
-          <details>
+          <details
+            open={answerOpen}
+            onToggle={(event) => {
+              if (event.target === event.currentTarget) setAnswerOpen(event.currentTarget.open);
+            }}
+          >
             <summary>答案与解析</summary>
-            {result.correctIndex !== undefined && (
-              <p>
-                正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
-                {(result.question?.options || question.options)?.[result.correctIndex]}
-              </p>
-            )}
-            {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
-            <PiMarkdown text={result.explanation} />
-            {result.rubric && (
-              <ul>
-                {result.rubric.map((r) => (
-                  <li key={r}>{r}</li>
-                ))}
-              </ul>
+            {answerOpen && (
+              <>
+                {result.correctIndex !== undefined && (
+                  <p>
+                    正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
+                    {(result.question?.options || question.options)?.[result.correctIndex]}
+                  </p>
+                )}
+                {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
+                <PiMarkdown text={result.explanation} />
+                {result.rubric && (
+                  <ul>
+                    {result.rubric.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </details>
           {result.method === 'ai' && (
@@ -306,6 +316,12 @@ export function LearningPage({
     [wrongLoading, setWrongLoading] = useState(true),
     [lessonsError, setLessonsError] = useState(''),
     [wrongError, setWrongError] = useState('');
+  const [detailLoading, setDetailLoading] = useState(false),
+    [detailError, setDetailError] = useState(''),
+    [generationError, setGenerationError] = useState('');
+  const detailVersion = useRef(0),
+    detailReload = useRef<(() => void) | null>(null),
+    loadedPages = useRef({ lessons: 1, wrong: 1 });
   const [maximum, setMaximum] = useState(40),
     [maximumDraft, setMaximumDraft] = useState('40');
   const total = Number(choiceCount) + Number(shortCount);
@@ -385,7 +401,7 @@ export function LearningPage({
     },
     30,
   );
-  async function refresh() {
+  async function refresh(fresh = false) {
     if (
       !alive.current ||
       context.current.settings !== settings ||
@@ -404,12 +420,40 @@ export function LearningPage({
     setWrongLoading(true);
     setLessonsError('');
     setWrongError('');
+    if (fresh) {
+      invalidateAPI(settings, '/learning/lessons', true);
+      invalidateAPI(settings, '/learning/lessons?');
+      invalidateAPI(settings, '/learning/wrong');
+      detailReload.current?.();
+    }
+    async function pages(kind: 'lessons' | 'wrong') {
+      const items: (Lesson | Wrong)[] = [];
+      let next: string | null = null;
+      for (let page = 0; page < loadedPages.current[kind]; page++) {
+        const query = new URLSearchParams();
+        if (next) query.set('before', next);
+        if (kind === 'wrong' && filter) query.set('resolved', 'include');
+        const r = await api<{ lessons?: Lesson[]; items?: Wrong[]; next?: string | null }>(
+          settings,
+          `/learning/${kind}` + (query.size ? '?' + query : ''),
+          undefined,
+          undefined,
+          false,
+          { fresh: fresh || page > 0 },
+        );
+        if (!current()) return null;
+        items.push(...(kind === 'lessons' ? r.lessons || [] : r.items || []));
+        next = r.next || null;
+        if (!next) break;
+      }
+      return { items, next };
+    }
     await Promise.all([
-      api<{ lessons: Lesson[]; next?: string | null }>(settings, '/learning/lessons')
+      pages('lessons')
         .then((l) => {
-          if (!current()) return;
-          setLessons(l.lessons);
-          setLessonsNext(l.next || null);
+          if (!current() || !l) return;
+          setLessons(l.items as Lesson[]);
+          setLessonsNext(l.next);
         })
         .catch((e) => {
           if (current()) setLessonsError(e.message);
@@ -417,14 +461,11 @@ export function LearningPage({
         .finally(() => {
           if (current()) setLessonsLoading(false);
         }),
-      api<{ items: Wrong[]; next?: string | null }>(
-        settings,
-        '/learning/wrong' + (filter ? '?resolved=include' : ''),
-      )
+      pages('wrong')
         .then((w) => {
-          if (!current()) return;
-          setWrong(w.items);
-          setWrongNext(w.next || null);
+          if (!current() || !w) return;
+          setWrong(w.items as Wrong[]);
+          setWrongNext(w.next);
         })
         .catch((e) => {
           if (current()) setWrongError(e.message);
@@ -453,6 +494,7 @@ export function LearningPage({
         version === refreshVersion.current &&
         (kind === 'lessons' || filter === currentFilter.current)
       ) {
+        loadedPages.current[kind]++;
         if (kind === 'lessons') {
           setLessons((old) => [
             ...new Map([...old, ...(r.lessons || [])].map((l) => [l.id, l])).values(),
@@ -474,18 +516,36 @@ export function LearningPage({
     }
   }
   useEffect(() => {
+    loadedPages.current = { lessons: 1, wrong: 1 };
+  }, [settings, session]);
+  useEffect(() => {
     if (session)
       void refresh().catch((e) => {
         if (alive.current) setError(e.message);
       });
   }, [settings, session, resolved]);
   useEffect(() => {
-    if (!selected || !session) return;
+    if (!selected || !session) {
+      detailReload.current = null;
+      setDetailLoading(false);
+      setDetailError('');
+      return;
+    }
     let live = true;
     const cached = peekAPI<{ lesson: Lesson }>(settings, '/learning/lessons/' + selected);
     setLesson(cached?.lesson || null);
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function load(fresh = false) {
+      clearTimeout(timer);
+      const version = ++detailVersion.current;
+      const current = () =>
+        live &&
+        version === detailVersion.current &&
+        selection.current === selected &&
+        context.current.settings === settings &&
+        context.current.session === session;
+      setDetailLoading(true);
+      setDetailError('');
       try {
         const r = await api<{ lesson: Lesson }>(
           settings,
@@ -495,7 +555,7 @@ export function LearningPage({
           false,
           { fresh },
         );
-        if (!live) return;
+        if (!current()) return;
         setLesson(r.lesson);
         setLessons((old) =>
           old.map((l) =>
@@ -513,13 +573,20 @@ export function LearningPage({
         );
         if (r.lesson.status === 'generating') timer = setTimeout(() => void load(true), 3000);
       } catch (e) {
-        if (live) setError((e as Error).message);
+        if (current()) setDetailError((e as Error).message);
+      } finally {
+        if (current()) setDetailLoading(false);
       }
     }
+    detailReload.current = () => {
+      invalidateAPI(settings, '/learning/lessons/' + selected, true);
+      void load(true);
+    };
     void load(cached?.lesson.status === 'generating');
     return () => {
       live = false;
       clearTimeout(timer);
+      detailReload.current = null;
     };
   }, [settings, session, selected, resumeEpoch]);
   async function addFiles(files: File[]) {
@@ -592,8 +659,10 @@ export function LearningPage({
         context.current.settings === settings &&
         context.current.session === session
       ) {
+        invalidateAPI(settings, '/learning/lessons/' + r.lesson.id, true);
         setAPICache(settings, '/learning/lessons/' + r.lesson.id, r);
         if (selection.current === lesson.id) {
+          detailVersion.current++;
           setLesson(r.lesson);
           setResumeConfirmed(false);
           resumeOperation.current = null;
@@ -621,7 +690,7 @@ export function LearningPage({
   }
   async function generate() {
     if (!validCounts) {
-      setError('请填写有效题量，总数须在1至' + maximum + '之间。');
+      setGenerationError('请填写有效题量，总数须在1至' + maximum + '之间。');
       return;
     }
     const payload = {
@@ -636,7 +705,7 @@ export function LearningPage({
     if (generation.current?.signature !== signature)
       generation.current = { signature, id: crypto.randomUUID() };
     setBusy('generate');
-    setError('');
+    setGenerationError('');
     try {
       const r = await api<{ lesson: Lesson }>(
         settings,
@@ -656,7 +725,7 @@ export function LearningPage({
         await refresh();
       }
     } catch (e) {
-      if (alive.current) setError((e as Error).message);
+      if (alive.current) setGenerationError((e as Error).message);
     } finally {
       if (alive.current) setBusy('');
     }
@@ -709,6 +778,8 @@ export function LearningPage({
     void refresh();
     return r.attempt;
   }
+  const latestAttempts = new Map<string, Attempt>();
+  for (const attempt of lesson?.attempts || []) latestAttempts.set(attempt.questionId, attempt);
   if (!session)
     return (
       <section className="surface">
@@ -748,7 +819,7 @@ export function LearningPage({
         <button
           className="icon-btn"
           aria-label="刷新学习记录"
-          onClick={() => void refresh().catch((e) => setError(e.message))}
+          onClick={() => void refresh(true).catch((e) => setError(e.message))}
         >
           <RefreshCw size={16} />
         </button>
@@ -907,7 +978,12 @@ export function LearningPage({
                 {busy ? <LoaderCircle size={16} className="spin" /> : <GraduationCap size={16} />}{' '}
                 {busy ? '正在准备讲解和题目' : '生成讲解与练习'}
               </button>
-              {error && (
+              {generationError && (
+                <p className="error" role="alert">
+                  {generationError}
+                </p>
+              )}
+              {generationError && (
                 <button
                   type="button"
                   className="secondary"
@@ -956,6 +1032,19 @@ export function LearningPage({
                 </button>
               </div>
             </details>
+          )}
+          {selected && (
+            <section aria-label="课程读取状态" aria-busy={detailLoading}>
+              {detailLoading && <p role="status">正在读取课程详情…</p>}
+              {detailError && (
+                <p className="error" role="alert">
+                  课程详情读取失败：{detailError}{' '}
+                  <button className="text-link" onClick={() => detailReload.current?.()}>
+                    重试读取课程
+                  </button>
+                </p>
+              )}
+            </section>
           )}
           {lesson && (
             <section className="learning-lesson">
@@ -1066,7 +1155,7 @@ export function LearningPage({
                   key={lesson.id + q.id + ':' + (q.revision || 1)}
                   draftKey={viewKey + lesson.id + q.id + ':' + (q.revision || 1)}
                   question={q}
-                  latest={lesson.attempts?.filter((a) => a.questionId === q.id).at(-1)}
+                  latest={latestAttempts.get(q.id)}
                   onGrade={(answer, id) => grade(lesson.id, q.id, answer, id, q.revision || 1)}
                 />
               ))}
@@ -1078,7 +1167,7 @@ export function LearningPage({
             {lessonsError && (
               <p role="alert" className="error">
                 学习记录读取失败：{lessonsError}{' '}
-                <button className="text-link" onClick={() => void refresh()}>
+                <button className="text-link" onClick={() => void refresh(true)}>
                   重试读取
                 </button>
               </p>
@@ -1132,7 +1221,7 @@ export function LearningPage({
           {wrongError && (
             <p role="alert" className="error">
               错题记录读取失败：{wrongError}{' '}
-              <button className="text-link" onClick={() => void refresh()}>
+              <button className="text-link" onClick={() => void refresh(true)}>
                 重试读取
               </button>
             </p>

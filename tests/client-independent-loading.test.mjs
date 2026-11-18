@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+import { createReadCache } from '../shared/read-cache.mjs';
 
 function source(file) {
   return fs.readFileSync(new URL('../web/src/' + file, import.meta.url), 'utf8');
@@ -160,6 +161,9 @@ function learning() {
     resolved: false,
     alive: { current: true },
     refreshVersion: { current: 0 },
+    detailReload: { current: null },
+    invalidateAPI() {},
+    loadedPages: { current: { lessons: 1, wrong: 1 } },
     currentFilter: { current: false },
     context: { current: { settings, session } },
     selection: { current: 'lesson' },
@@ -179,9 +183,9 @@ function learning() {
     values['set' + key] = (v) => {
       state[key] = v;
     };
-  values.api = (_s, path) => {
+  values.api = (_s, path, _body, _method, _public, options) => {
     const d = deferred();
-    requests.push({ path, ...d });
+    requests.push({ path, options, ...d });
     return d.promise;
   };
   const refresh = compile(named('LearningPage.tsx', 'refresh'), values);
@@ -375,6 +379,8 @@ test('resume handler preserves unknown UUID, rejects rapid duplicates and releas
     setLesson() {},
     setResumeConfirmed() {},
     setResumeEpoch() {},
+    detailVersion: { current: 0 },
+    invalidateAPI() {},
     setAPICache() {},
     refresh() {},
     api: (_s, _path, input) => {
@@ -433,6 +439,8 @@ test('resume receipt cannot replace a different selected course or restore a clo
       setBusy() {},
       setError() {},
       setAPICache() {},
+      invalidateAPI() {},
+      detailVersion: { current: 0 },
       refresh() {},
       setLesson: (value) => updates.push(['lesson', value]),
       setResumeConfirmed: (value) => updates.push(['confirm', value]),
@@ -586,4 +594,157 @@ test('completed grading after scope change does not start obsolete refresh', asy
   h.requests[0].resolve({ attempt: { id: 'id' } });
   await run;
   assert.equal(h.requests.length, 1);
+});
+
+function detail() {
+  const h = learning();
+  const state = h.state;
+  state.Lessons = [];
+  const values = {
+    ...h.values,
+    selected: 'lesson',
+    resumeEpoch: 0,
+    detailVersion: { current: 0 },
+    peekAPI: () => undefined,
+    invalidateAPI() {},
+    setDetailLoading: (v) => {
+      state.DetailLoading = v;
+    },
+    setDetailError: (v) => {
+      state.DetailError = v;
+    },
+    setLessons: (v) => {
+      state.Lessons = typeof v === 'function' ? v(state.Lessons) : v;
+    },
+    setTimeout: () => 1,
+    clearTimeout() {},
+  };
+  const code = extract(
+    'LearningPage.tsx',
+    (n, ast) =>
+      ts.isCallExpression(n) &&
+      n.expression.getText(ast) === 'useEffect' &&
+      n.arguments[0]?.getText(ast).includes('async function load(fresh = false)'),
+  );
+  let cleanup;
+  const js = ts.transpileModule(code, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  function start() {
+    new Function('useEffect', ...Object.keys(values), js)(
+      (fn) => {
+        cleanup = fn();
+      },
+      ...Object.values(values),
+    );
+  }
+  return { ...h, values, start, cleanup: () => cleanup() };
+}
+
+test('failed detail can recover through explicit fresh refresh without replaying writes', async () => {
+  const h = detail();
+  h.start();
+  assert.equal(h.state.DetailLoading, true);
+  h.requests[0].reject(Error('read down'));
+  await tick();
+  assert.match(h.state.DetailError, /read down/);
+  assert.equal(h.state.Error, undefined);
+  assert.equal(h.state.DetailLoading, false);
+  const refresh = compile(named('LearningPage.tsx', 'refresh'), h.values);
+  const pending = refresh(true);
+  assert.equal(h.requests[1].path, '/learning/lessons/lesson');
+  assert.ok(h.requests.slice(1).every((r) => r.options.fresh));
+  h.requests[1].resolve({ lesson: { id: 'lesson', status: 'ready' } });
+  h.requests[2].resolve({ lessons: [] });
+  h.requests[3].resolve({ items: [] });
+  await pending;
+  await tick();
+  assert.equal(h.state.Lesson.status, 'ready');
+  assert.equal(h.state.DetailError, '');
+  h.cleanup();
+});
+
+test('detail repeated refresh and switch ignore obsolete results', async () => {
+  const h = detail();
+  h.start();
+  h.values.detailReload.current();
+  h.requests[1].resolve({ lesson: { id: 'lesson', status: 'ready' } });
+  await tick();
+  h.requests[0].resolve({ lesson: { id: 'lesson', status: 'error' } });
+  await tick();
+  assert.equal(h.state.Lesson.status, 'ready');
+  h.values.detailReload.current();
+  h.cleanup();
+  h.requests[2].reject(Error('late'));
+  await tick();
+  assert.equal(h.state.DetailError, '');
+});
+
+test('detail read errors never select the new-generation retry entry', () => {
+  const text = source('LearningPage.tsx');
+  assert.match(text, /\{generationError && \(\s*<button/);
+  assert.match(text, /课程详情读取失败：\{detailError\}/);
+  assert.match(text, /重试读取课程/);
+});
+
+for (const filter of [false, true])
+  test('refresh rebuilds all loaded pages using new cursors: ' + filter, async () => {
+    const h = learning();
+    h.values.loadedPages.current = { lessons: 2, wrong: 2 };
+    h.values.currentFilter.current = filter;
+    const refresh = compile(named('LearningPage.tsx', 'refresh'), h.values);
+    const pending = refresh(true);
+    h.requests[0].resolve({ lessons: [{ id: 'new' }], next: 'new-cursor' });
+    h.requests[1].resolve({ items: [{ lessonId: 'x', questionId: 'q' }], next: 'wrong-cursor' });
+    await tick();
+    assert.equal(h.requests[2].path, '/learning/lessons?before=new-cursor');
+    assert.equal(
+      h.requests[3].path,
+      '/learning/wrong?before=wrong-cursor' + (filter ? '&resolved=include' : ''),
+    );
+    h.requests[2].resolve({ lessons: [{ id: 'older' }], next: 'last' });
+    h.requests[3].resolve({ items: [{ lessonId: 'older', questionId: 'q' }], next: null });
+    await pending;
+    assert.deepEqual(
+      h.state.Lessons.map((l) => l.id),
+      ['new', 'older'],
+    );
+    assert.equal(h.state.Wrong.length, 2);
+    assert.equal(h.state.LessonsNext, 'last');
+  });
+
+test('resume invalidates old pending detail before caching its accepted receipt', async () => {
+  const h = detail(),
+    cache = createReadCache(),
+    old = deferred();
+  h.values.api = (_s, path) => cache.read(path, () => old.promise, { force: true });
+  h.values.peekAPI = (_s, path) => cache.peek(path);
+  h.values.invalidateAPI = (_s, path) => cache.invalidate((key) => key === path);
+  h.start();
+  await tick();
+  const request = deferred();
+  const receipt = { lesson: { id: 'lesson', status: 'generating' } };
+  const resume = compile(named('LearningPage.tsx', 'resumeLesson'), {
+    ...h.values,
+    lesson: { id: 'lesson' },
+    resumeConfirmed: true,
+    busy: '',
+    resuming: { current: false },
+    resumeOperation: { current: null },
+    crypto: { randomUUID: () => 'same-operation' },
+    api: () => request.promise,
+    setBusy() {},
+    setResumeConfirmed() {},
+    setResumeEpoch() {},
+    refresh() {},
+    setAPICache: (_s, path, value) => cache.set(path, value),
+  });
+  const pending = resume();
+  request.resolve(receipt);
+  await pending;
+  old.resolve({ lesson: { id: 'lesson', status: 'error' } });
+  await tick();
+  assert.equal(cache.peek('/learning/lessons/lesson').lesson.status, 'generating');
+  assert.equal(h.state.Lesson.status, 'generating');
+  h.cleanup();
 });
