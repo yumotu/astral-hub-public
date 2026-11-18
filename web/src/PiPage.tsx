@@ -1085,6 +1085,53 @@ function ServerPiPage({
     };
   }, [session, settings]);
   useEffect(() => {
+    if (!session || status?.available) return;
+    let live = true,
+      busy = false,
+      attempts = 0;
+    let nextAt = Date.now() + 2000;
+    let timer: ReturnType<typeof setTimeout>;
+    const retry = async () => {
+      if (!live || busy || attempts >= 5) return;
+      clearTimeout(timer);
+      if (document.hidden) return;
+      if (Date.now() < nextAt) {
+        timer = setTimeout(() => void retry(), Math.max(1000, nextAt - Date.now()));
+        return;
+      }
+      busy = true;
+      attempts++;
+      try {
+        const value = await api<Status>(settings, '/pi/status', undefined, undefined, false, {
+          fresh: true,
+        });
+        if (live) setStatus(value);
+        if (value.available) return;
+      } catch (e) {
+        if (live) setError((e as Error).message);
+      } finally {
+        busy = false;
+      }
+      nextAt = Date.now() + Math.min(30000, 2000 * 2 ** attempts);
+      if (live && attempts < 5) timer = setTimeout(() => void retry(), nextAt - Date.now());
+    };
+    const wake = () => {
+      if (!busy && !document.hidden && attempts >= 5) attempts = 0;
+      void retry();
+    };
+    timer = setTimeout(() => void retry(), 2000);
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [session, settings, status?.available]);
+  useEffect(() => {
     if (!session) return;
     let live = true;
     const sync = () => {
@@ -1137,57 +1184,75 @@ function ServerPiPage({
     setCompacting(false);
     setFailedTools([]);
     setEmptyConversation(false);
-    api<{
-      turns: PiTurn[];
-      conversation?: Conversation | null;
-      sessionContext?: PiSessionContext | null;
-    }>(settings, `/pi/conversations/${conversation}`)
-      .then((r) => {
-        if (live) {
-          setTurns((old) =>
-            [...new Map([...old, ...r.turns].map((t) => [t.id, t])).values()].sort(
-              (a, b) => (a.seq || 0) - (b.seq || 0),
-            ),
-          );
-          setMore(r.turns.length === 50);
-          if (r.conversation) {
-            setConversations((old) => [
-              ...old.filter((c) => c.id !== r.conversation!.id),
-              r.conversation!,
-            ]);
-            setProjectId(r.conversation.projectId || '');
-            if (!r.turns.length)
-              setAccess(savedOperation(conversation).access || r.conversation.access || 'read');
-          }
-          setEmptyConversation(
-            !r.turns.length &&
-              !r.conversation &&
-              !tasksRef.current.some((t) => t.conversationId === conversation),
-          );
-          setSessionContext((old) => mergeSessionContext(old, r.sessionContext, conversation));
-          if (r.turns.length) {
-            setProjectId(r.turns[0].projectId || '');
-            const running = tasksRef.current.find(
-              (t) => t.conversationId === conversation && taskPending(t) && !t.parentId,
-            );
-            setAccess(
-              running?.access ||
-                drafts.current.get(conversation)?.access ||
-                savedOperation(conversation).access ||
-                r.turns.at(-1)?.access ||
-                'read',
-            );
-          }
-        }
+    let retries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = () =>
+      api<{
+        turns: PiTurn[];
+        conversation?: Conversation | null;
+        sessionContext?: PiSessionContext | null;
+      }>(settings, `/pi/conversations/${conversation}`, undefined, undefined, false, {
+        fresh: retries > 0,
       })
-      .catch((e) => {
-        if (live) setError(e.message);
-      })
-      .finally(() => {
-        if (live) setLoadingHistory(false);
-      });
+        .then((r) => {
+          if (live) {
+            setTurns((old) =>
+              [...new Map([...old, ...r.turns].map((t) => [t.id, t])).values()].sort(
+                (a, b) => (a.seq || 0) - (b.seq || 0),
+              ),
+            );
+            setMore(r.turns.length === 50);
+            if (r.conversation) {
+              setConversations((old) => [
+                ...old.filter((c) => c.id !== r.conversation!.id),
+                r.conversation!,
+              ]);
+              setProjectId(r.conversation.projectId || '');
+              if (!r.turns.length)
+                setAccess(savedOperation(conversation).access || r.conversation.access || 'read');
+            }
+            setEmptyConversation(
+              !r.turns.length &&
+                !r.conversation &&
+                !tasksRef.current.some((t) => t.conversationId === conversation),
+            );
+            setSessionContext((old) => mergeSessionContext(old, r.sessionContext, conversation));
+            if (r.turns.length) {
+              setProjectId(r.turns[0].projectId || '');
+              const running = tasksRef.current.find(
+                (t) => t.conversationId === conversation && taskPending(t) && !t.parentId,
+              );
+              setAccess(
+                running?.access ||
+                  drafts.current.get(conversation)?.access ||
+                  savedOperation(conversation).access ||
+                  r.turns.at(-1)?.access ||
+                  'read',
+              );
+            }
+          }
+        })
+        .catch((e) => {
+          if (live) {
+            setError(e.message);
+            if (retries < 3) {
+              retries++;
+              timer = setTimeout(
+                () => {
+                  if (live) void load();
+                },
+                2000 * 2 ** (retries - 1),
+              );
+            }
+          }
+        })
+        .finally(() => {
+          if (live) setLoadingHistory(false);
+        });
+    void load();
     return () => {
       live = false;
+      clearTimeout(timer);
     };
   }, [conversation, session, settings]);
   const settledKey = currentTasks

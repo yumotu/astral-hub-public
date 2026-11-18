@@ -16,13 +16,19 @@ export function useUnread(settings: Settings, signedIn: boolean) {
   useEffect(() => {
     let live = true,
       socialBusy = false,
-      mailBusy = false;
+      mailBusy = false,
+      socialVersion = 0,
+      mailVersion = 0,
+      socialDirty = false,
+      mailDirty = false;
     const controller = new AbortController();
     setSnapshot(initial());
     if (!signedIn) return () => controller.abort();
     const social = async () => {
       if (socialBusy || document.visibilityState === 'hidden') return;
       socialBusy = true;
+      socialDirty = false;
+      const version = socialVersion;
       try {
         const value = await api<SocialUnread>(
           settings,
@@ -32,24 +38,27 @@ export function useUnread(settings: Settings, signedIn: boolean) {
           false,
           { signal: controller.signal, timeout: 15000 },
         );
-        if (live) {
+        if (live && version === socialVersion) {
           setAPICache(settings, '/social/unread', value);
           setSnapshot((s) => ({ ...s, scope, social: value }));
         }
       } catch {
       } finally {
         socialBusy = false;
+        if (live && socialDirty) void social();
       }
     };
     const mail = async () => {
       if (mailBusy || document.visibilityState === 'hidden') return;
       mailBusy = true;
+      mailDirty = false;
+      const version = mailVersion;
       try {
         const value = await api<MailUnread>(settings, '/mail/unread', undefined, undefined, false, {
           signal: controller.signal,
           timeout: 45000,
         });
-        if (live) {
+        if (live && version === mailVersion) {
           if (value.available) setAPICache(settings, '/mail/unread', value);
           setSnapshot((s) => ({
             ...s,
@@ -58,7 +67,7 @@ export function useUnread(settings: Settings, signedIn: boolean) {
           }));
         }
       } catch {
-        if (live)
+        if (live && version === mailVersion)
           setSnapshot((s) => ({
             ...s,
             scope,
@@ -66,6 +75,7 @@ export function useUnread(settings: Settings, signedIn: boolean) {
           }));
       } finally {
         mailBusy = false;
+        if (live && mailDirty) void mail();
       }
     };
     const refresh = () => {
@@ -75,7 +85,14 @@ export function useUnread(settings: Settings, signedIn: boolean) {
     refresh();
     const st = setInterval(() => void social(), 10000),
       mt = setInterval(() => void mail(), 60000);
-    window.addEventListener('astral:unread-change', refresh);
+    const changed = () => {
+      socialVersion++;
+      mailVersion++;
+      socialDirty = true;
+      mailDirty = true;
+      refresh();
+    };
+    window.addEventListener('astral:unread-change', changed);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => {
@@ -83,7 +100,7 @@ export function useUnread(settings: Settings, signedIn: boolean) {
       controller.abort();
       clearInterval(st);
       clearInterval(mt);
-      window.removeEventListener('astral:unread-change', refresh);
+      window.removeEventListener('astral:unread-change', changed);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
