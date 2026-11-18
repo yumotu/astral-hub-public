@@ -445,17 +445,20 @@ export function registerAppFeatures(
   engine.register({
     name: 'learning.generate',
     description:
-      '根据知识点生成详细讲解、选择题及问答题并保存到学习页。直接生成无需确认。返回generating时按lesson.id查询进度，不重复新建。',
+      '根据知识点生成详细讲解、选择题及问答题并保存到学习页。直接生成无需确认。未指定题量时默认5道选择题、2道问答题；显式题量合计必须至少1题且不超过learning.settings上限。返回generating时表示生成中，未完成，按lesson.id调用learning.read查询进度，不重复新建。',
     schema: z
       .object({
         topic: z.string().trim().min(2).max(2000),
         level: z.enum(['beginner', 'intermediate', 'advanced']).default('intermediate'),
-        choiceCount: z.number().int().min(0).max(200),
-        shortCount: z.number().int().min(0).max(200),
+        choiceCount: z.number().int().min(0).max(200).default(5),
+        shortCount: z.number().int().min(0).max(200).default(2),
         materials: learningMaterialsSchema.optional(),
       })
       .strict(),
-    execute: (ctx, p, id) => study(ctx, '/api/learning/lessons', { ...p, id, background: true }),
+    execute: (ctx, p, id) => {
+      if (p.choiceCount + p.shortCount < 1) throw fail(400, '选择题与问答题合计至少1题。');
+      return study(ctx, '/api/learning/lessons', { ...p, id, background: true });
+    },
   });
   const resumeCheckpoint = (lesson) =>
     createHash('sha256').update(JSON.stringify(lesson)).digest('hex');
