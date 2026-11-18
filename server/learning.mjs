@@ -4,6 +4,30 @@ import {
   questionsPrompt,
   questionPlanPrompt,
 } from '../shared/learning-prompts.mjs';
+import {
+  materialLimits,
+  materialSections,
+  assertLearningMessageBudget,
+  sectionPrompt,
+} from '../shared/learning-materials.mjs';
+export const learningMaterialsSchema = z
+  .array(
+    z
+      .object({
+        name: z.string().min(1).max(160),
+        content: z.string().min(1).max(materialLimits.maxFileCharacters),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(materialLimits.maxMaterials);
+const sectionSchema = z
+  .object({
+    title: z.string().trim().min(1).max(160),
+    content: z.string().trim().min(600).max(materialLimits.sectionMaxCharacters),
+    summary: z.string().trim().min(20).max(240),
+  })
+  .strict();
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const uuid = z.string().uuid();
 const label = z.string().trim().min(1).max(2000);
@@ -49,10 +73,14 @@ const planSchema = z
             slot: z.number().int().min(1).max(200),
             kind: z.enum(['choice', 'short']),
             objective: z.string().trim().min(8).max(240),
+            sectionId: z
+              .string()
+              .regex(/^s[1-9][0-9]?$/)
+              .optional(),
           })
           .strict(),
       )
-      .min(9)
+      .min(1)
       .max(200),
   })
   .strict();
@@ -65,6 +93,7 @@ const generation = z
     choiceCount: z.number().int().min(0).max(200),
     shortCount: z.number().int().min(0).max(200),
     background: z.boolean().optional(),
+    materials: learningMaterialsSchema.optional(),
   })
   .strict()
   .refine((p) => p.choiceCount + p.shortCount >= 1);
@@ -107,6 +136,7 @@ export function createLearning(db, { complete }) {
     CREATE TABLE IF NOT EXISTS learning_wrong(owner TEXT NOT NULL,lesson_id TEXT NOT NULL,question_id TEXT NOT NULL,attempt_id TEXT NOT NULL,wrong_count INTEGER NOT NULL,review_count INTEGER NOT NULL,resolved INTEGER NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(owner,lesson_id,question_id));
     CREATE TABLE IF NOT EXISTS learning_settings(id INTEGER PRIMARY KEY CHECK(id=1),max_questions INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS learning_question_revisions(owner TEXT NOT NULL,lesson_id TEXT NOT NULL,question_id TEXT NOT NULL,revision INTEGER NOT NULL,question TEXT NOT NULL,source TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner,lesson_id,question_id,revision));
+    CREATE TABLE IF NOT EXISTS learning_resumes(owner TEXT NOT NULL,lesson_id TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(owner,lesson_id,id));
     INSERT OR IGNORE INTO learning_settings VALUES(1,40);
     CREATE INDEX IF NOT EXISTS learning_owner_lessons ON learning_lessons(owner,created_at);
     CREATE INDEX IF NOT EXISTS learning_owner_attempts ON learning_attempts(owner,lesson_id,created_at);
@@ -121,9 +151,10 @@ export function createLearning(db, { complete }) {
   }
   function view(row, detail = false) {
     const data = row.data ? JSON.parse(row.data) : null;
+    const { materials, ...publicInput } = JSON.parse(row.input);
     const result = {
       id: row.id,
-      ...JSON.parse(row.input),
+      ...publicInput,
       status: row.status,
       title: data?.title || JSON.parse(row.input).topic,
       createdAt: row.created_at,
@@ -134,7 +165,16 @@ export function createLearning(db, { complete }) {
         total: JSON.parse(row.input).choiceCount + JSON.parse(row.input).shortCount,
       },
     };
+    if (data?.sections) {
+      result.coverage = {
+        materials: materials.length,
+        chunks: data.sections.length,
+        completed: data.sections.filter((section) => section.status === 'ready').length,
+      };
+      result.resumable = row.status === 'error';
+    }
     if (detail && data) {
+      if (data.sections) result.sections = data.sections;
       result.explanation = data.explanation;
       result.questions = (row.status === 'ready' ? data.questions : []).map(
         ({ kind, prompt, options, revision }, i) => ({
@@ -157,7 +197,8 @@ export function createLearning(db, { complete }) {
     }
     return result;
   }
-  async function aiJSON(messages, schema, maxTokens = 8192, owner) {
+  async function aiJSON(messages, schema, maxTokens = 8192, owner, bounded = false) {
+    if (bounded) assertLearningMessageBudget(messages);
     try {
       return schema.parse(
         JSON.parse(
@@ -176,18 +217,61 @@ export function createLearning(db, { complete }) {
       throw fail(502, 'AI返回格式不完整，本次未保存为已完成结果。请明确重试。');
     }
   }
-  function enqueue(owner, p) {
+  async function generateSections(owner, p, data, save) {
+    data.sections ||= materialSections(p.materials);
+    data.progress.stage = 'sections';
+    data.progress.totalSections = data.sections.length;
+    data.progress.completedSections = data.sections.filter((s) => s.status === 'ready').length;
+    save();
+    const outline = data.sections.map(({ id, title, source }) => ({ id, title, source }));
+    for (const section of data.sections) {
+      if (section.status === 'ready') continue;
+      const index = Number(section.source.materialId.slice(1)) - 1;
+      const messages = [
+        { role: 'system', content: sectionPrompt },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            topic: p.topic,
+            level: p.level,
+            outline,
+            section,
+            original: p.materials[index].content.slice(section.source.start, section.source.end),
+          }),
+        },
+      ];
+      assertLearningMessageBudget(messages);
+      const generated = await aiJSON(
+        messages,
+        sectionSchema,
+        materialLimits.sectionMaxTokens,
+        owner,
+      );
+      Object.assign(section, generated, { status: 'ready' });
+      data.progress.completedSections++;
+      save();
+    }
+    if (data.sections.some((s) => s.status !== 'ready')) throw fail(502, '教案章节尚未完整。');
+    // The legacy field is a bounded overview, not a silently truncated full document.
+    data.explanation = data.sections.map((s) => `## ${s.title}\n${s.summary}`).join('\n\n');
+    save();
+  }
+  function enqueue(owner, p, resume = false) {
     const key = owner + ':' + p.id;
+    if (jobs.has(key)) throw fail(409, '本课正在生成，请查询原课程进度。');
     jobs.add(key);
     const work = tail.then(async () => {
       if (closed) return;
       const total = p.choiceCount + p.shortCount;
-      let data = {
-        title: p.topic,
-        explanation: '',
-        questions: [],
-        progress: { stage: 'explanation', completed: 0, total },
-      };
+      let data = resume
+        ? JSON.parse(rowFor(owner, p.id).data)
+        : {
+            title: p.topic,
+            explanation: '',
+            questions: [],
+            ...(p.materials ? { sections: materialSections(p.materials) } : {}),
+            progress: { stage: 'explanation', completed: 0, total },
+          };
       const save = () => {
         if (closed) throw fail(503, '服务正在关闭，未重放生成请求。');
         db.prepare('UPDATE learning_lessons SET data=? WHERE owner=? AND id=?').run(
@@ -198,30 +282,49 @@ export function createLearning(db, { complete }) {
       };
       try {
         save();
-        const explanation = await aiJSON(
-          [
-            { role: 'system', content: explanationPrompt },
-            { role: 'user', content: JSON.stringify({ topic: p.topic, level: p.level }) },
-          ],
-          explanationSchema,
-          16384,
-          owner,
-        );
-        data = { ...data, ...explanation };
-        let plan = [];
-        if (total > 8) {
+        if (p.materials) await generateSections(owner, p, data, save);
+        else {
+          const explanation = await aiJSON(
+            [
+              { role: 'system', content: explanationPrompt },
+              { role: 'user', content: JSON.stringify({ topic: p.topic, level: p.level }) },
+            ],
+            explanationSchema,
+            16384,
+            owner,
+          );
+          data = { ...data, ...explanation };
+        }
+        let plan = data.plan || [];
+        if ((total > 8 || p.materials) && !plan.length) {
           data.progress.stage = 'planning';
           save();
           plan = (
             await aiJSON(
               [
-                { role: 'system', content: questionPlanPrompt },
+                {
+                  role: 'system',
+                  content:
+                    questionPlanPrompt +
+                    (p.materials
+                      ? '\n输入sections为教案章节索引。每个目标额外返回sectionId，必须选择已给出的章节id作为本题依据，覆盖不同章节。'
+                      : ''),
+                },
                 {
                   role: 'user',
                   content: JSON.stringify({
                     topic: p.topic,
                     level: p.level,
-                    explanation: data.explanation,
+                    ...(!data.sections ? { explanation: data.explanation } : {}),
+                    ...(data.sections
+                      ? {
+                          sections: data.sections.map(({ id, title, summary }) => ({
+                            id,
+                            title,
+                            summary,
+                          })),
+                        }
+                      : {}),
                     choiceCount: p.choiceCount,
                     shortCount: p.shortCount,
                   }),
@@ -230,6 +333,7 @@ export function createLearning(db, { complete }) {
               planSchema,
               8192,
               owner,
+              !!p.materials,
             )
           ).plan;
           if (
@@ -237,22 +341,30 @@ export function createLearning(db, { complete }) {
             plan.some(
               (v, i) => v.slot !== i + 1 || v.kind !== (i < p.choiceCount ? 'choice' : 'short'),
             ) ||
+            (data.sections && plan.some((v) => !data.sections.some((s) => s.id === v.sectionId))) ||
             new Set(plan.map((v) => normalized(v.objective))).size !== total
           )
             throw fail(502, 'AI出题蓝图数量、类型或覆盖目标不符，未保存为已完成。');
           data.plan = plan;
         }
-        let choices = p.choiceCount,
-          shorts = p.shortCount;
-        const seen = new Set();
-        const assigned = new Set();
+        let choices = p.choiceCount - data.questions.filter((q) => q.kind === 'choice').length,
+          shorts = p.shortCount - data.questions.filter((q) => q.kind === 'short').length;
+        const seen = new Set(data.questions.map((q) => normalized(q.prompt)));
+        const assigned = new Set(data.questions.map((q) => q.slot).filter(Boolean));
         let rejectedPrompts = [];
         let repairs = 0;
         while (choices || shorts) {
           data.progress.stage = 'questions';
           save();
           const remaining = plan.filter((v) => !assigned.has(v.slot));
-          const targets = remaining.filter((v) => v.kind === remaining[0]?.kind).slice(0, 8);
+          const targets = remaining
+            .filter(
+              (v) =>
+                v.kind === remaining[0]?.kind &&
+                (!data.sections || v.sectionId === remaining[0]?.sectionId),
+            )
+            .slice(0, 8);
+          const selectedSection = data.sections?.find((s) => s.id === targets[0]?.sectionId);
           const choiceCount = plan.length
               ? targets.filter((v) => v.kind === 'choice').length
               : Math.min(8, choices),
@@ -275,7 +387,10 @@ export function createLearning(db, { complete }) {
                 content: JSON.stringify({
                   topic: p.topic,
                   level: p.level,
-                  explanation: data.explanation,
+                  explanation: selectedSection?.content || data.explanation,
+                  ...(selectedSection
+                    ? { sectionId: selectedSection.id, source: selectedSection.source }
+                    : {}),
                   choiceCount,
                   shortCount,
                   previousPrompts: plan.length ? [] : data.questions.map((q) => q.prompt),
@@ -295,6 +410,7 @@ export function createLearning(db, { complete }) {
             batchSchema,
             8192,
             owner,
+            !!p.materials,
           );
           if (
             batch.questions.filter((q) => q.kind === 'choice').length !== choiceCount ||
@@ -378,6 +494,7 @@ export function createLearning(db, { complete }) {
           db.prepare('UPDATE learning_settings SET max_questions=? WHERE id=1').run(p.maxQuestions);
         } else if (req.method !== 'GET') throw fail(405, '请求方法不支持。');
         json(200, {
+          materialLimits,
           maxQuestions: db.prepare('SELECT max_questions FROM learning_settings WHERE id=1').get()
             .max_questions,
         });
@@ -409,6 +526,7 @@ export function createLearning(db, { complete }) {
           json(old.status === 'ready' ? 200 : 202, { lesson: view(old, true) });
           return true;
         }
+        const initialSections = p.materials ? materialSections(p.materials) : null;
         const maximum = db
           .prepare('SELECT max_questions FROM learning_settings WHERE id=1')
           .get().max_questions;
@@ -418,6 +536,25 @@ export function createLearning(db, { complete }) {
         db.prepare(
           "INSERT INTO learning_lessons(owner,id,input,status,created_at) VALUES(?,?,?,'generating',?)",
         ).run(owner, p.id, input, new Date().toISOString());
+        if (initialSections) {
+          db.prepare('UPDATE learning_lessons SET data=? WHERE owner=? AND id=?').run(
+            JSON.stringify({
+              title: p.topic,
+              explanation: '',
+              questions: [],
+              sections: initialSections,
+              progress: {
+                stage: 'sections',
+                completed: 0,
+                total: p.choiceCount + p.shortCount,
+                completedSections: 0,
+                totalSections: initialSections.length,
+              },
+            }),
+            owner,
+            p.id,
+          );
+        }
         const work = enqueue(owner, p);
         if (p.background) {
           void work.catch(() => {});
@@ -425,6 +562,53 @@ export function createLearning(db, { complete }) {
         } else {
           await work;
           json(201, { lesson: view(rowFor(owner, p.id), true) });
+        }
+        return true;
+      }
+      const resumeRoute = path.match(/^\/api\/learning\/lessons\/([^/]+)\/resume$/);
+      if (resumeRoute && req.method === 'POST') {
+        const lessonId = uuid.parse(resumeRoute[1]);
+        const p = z
+          .object({ id: uuid, confirm: z.literal(true), background: z.boolean().optional() })
+          .strict()
+          .parse(await body(req));
+        const row = rowFor(owner, lessonId);
+        if (!row) throw fail(404, '学习记录不存在。');
+        const input = JSON.parse(row.input);
+        if (!input.materials || !row.data) throw fail(409, '此课程不支持分章恢复，请明确新建。');
+        const known = db
+          .prepare('SELECT 1 FROM learning_resumes WHERE owner=? AND lesson_id=? AND id=?')
+          .get(owner, lessonId, p.id);
+        if (known) {
+          json(row.status === 'generating' ? 202 : 200, { lesson: view(row, true) });
+          return true;
+        }
+        if (row.status !== 'error' || jobs.has(owner + ':' + lessonId))
+          throw fail(409, '仅可明确恢复未完成课程；正在生成时请查询原进度。');
+        if (jobs.size >= 32) throw fail(429, '学习生成队列已满，请稍后继续。');
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (
+            !db
+              .prepare(
+                "UPDATE learning_lessons SET status='generating',error=NULL WHERE owner=? AND id=? AND status='error'",
+              )
+              .run(owner, lessonId).changes
+          )
+            throw fail(409, '课程状态已变化，请刷新后继续。');
+          db.prepare('INSERT INTO learning_resumes VALUES(?,?,?)').run(owner, lessonId, p.id);
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+        const work = enqueue(owner, input, true);
+        if (p.background) {
+          void work.catch(() => {});
+          json(202, { lesson: view(rowFor(owner, lessonId), true) });
+        } else {
+          await work;
+          json(200, { lesson: view(rowFor(owner, lessonId), true) });
         }
         return true;
       }

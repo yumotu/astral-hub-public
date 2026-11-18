@@ -351,6 +351,64 @@ test('exercise single-flight prevents rapid duplicate grading and ignores comple
   assert.deepEqual(updates, before);
   assert.equal(submitting.current, false);
 });
+test('resume handler preserves unknown UUID, rejects rapid duplicates and releases accepted operations', async () => {
+  const settings = {},
+    session = {},
+    operation = { current: null },
+    resuming = { current: false };
+  const requests = [];
+  let sequence = 0;
+  const values = {
+    settings,
+    session,
+    lesson: { id: 'lesson', status: 'error' },
+    resumeConfirmed: true,
+    busy: '',
+    resumeOperation: operation,
+    resuming,
+    alive: { current: true },
+    context: { current: { settings, session } },
+    crypto: { randomUUID: () => 'operation-' + ++sequence },
+    setBusy() {},
+    setError() {},
+    setLesson() {},
+    setResumeConfirmed() {},
+    setResumeEpoch() {},
+    setAPICache() {},
+    refresh() {},
+    api: (_s, _path, input) => {
+      const request = deferred();
+      requests.push({ ...request, input });
+      return request.promise;
+    },
+  };
+  const invoke = () => compile(named('LearningPage.tsx', 'resumeLesson'), values)();
+  const first = invoke();
+  await invoke();
+  assert.equal(requests.length, 1);
+  requests[0].reject(Error('unknown network outcome'));
+  await first;
+  assert.equal(operation.current.id, 'operation-1');
+  const retry = invoke();
+  assert.equal(requests[1].input.id, 'operation-1');
+  requests[1].resolve({ lesson: { id: 'lesson', status: 'generating' } });
+  await retry;
+  assert.equal(operation.current, null);
+  // The same course later fails in a different chapter; explicit confirmation starts a new operation.
+  const next = invoke();
+  await invoke();
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].input.id, 'operation-2');
+  requests[2].resolve({ lesson: { id: 'lesson', status: 'ready' } });
+  await next;
+  assert.equal(operation.current, null);
+  assert.equal(resuming.current, false);
+  assert.doesNotMatch(
+    source('LearningPage.tsx'),
+    /if \(e.target.checked\) resumeOperation.current = null/,
+  );
+});
+
 test('completed grading after scope change does not start obsolete refresh', async () => {
   const h = learning();
   const run = h.grade('lesson', 'q', {}, 'id');

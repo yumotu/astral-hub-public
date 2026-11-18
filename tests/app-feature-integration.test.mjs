@@ -52,9 +52,27 @@ async function fixture(t) {
       fetch: async (_url, options) => {
         const p = JSON.parse(options.body),
           system = p.messages[0].content;
-        const value = system.includes('课程设计者')
-          ? { title: lesson.title, explanation: lesson.explanation }
-          : { questions: [lesson.questions[0]] };
+        const input = JSON.parse(p.messages[1].content);
+        const value = input.section
+          ? {
+              title: '合成资料章节',
+              content: '学习目标与定义、原理、完整示例和小结。'.repeat(70),
+              summary: '本章掌握资料概念并通过完整示例核验原理与边界条件。',
+            }
+          : system.includes('出题规划者')
+            ? {
+                plan: [
+                  {
+                    slot: 1,
+                    kind: 'choice',
+                    objective: '根据合成资料情境判断定义适用条件',
+                    sectionId: 's1',
+                  },
+                ],
+              }
+            : system.includes('课程设计者')
+              ? { title: lesson.title, explanation: lesson.explanation }
+              : { questions: [lesson.questions[0]] };
         return Response.json({
           choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }],
         });
@@ -390,6 +408,40 @@ test('learning generation from ordinary chat persists real service results, enfo
       })
     ).result.attempt.score,
     100,
+  );
+});
+
+test('learning tools accept complete material input and reuse the scoped explicit resume service', async (t) => {
+  const f = await fixture(t);
+  const limits = await f.invoke('learning.settings');
+  assert.equal(limits.result.materialLimits.maxMaterials, 16);
+  const p = await f.invoke('learning.generate', {
+    topic: '合成资料',
+    level: 'beginner',
+    choiceCount: 1,
+    shortCount: 0,
+    materials: [{ name: 'lesson.md', content: '# 合成资料\n资料末尾关键点' }],
+  });
+  assert.equal(p.state, 'done');
+  let lesson;
+  for (let i = 0; i < 100; i++) {
+    lesson = (await f.req('/learning/lessons/' + p.result.lesson.id, undefined, f.owner.token))
+      .lesson;
+    if (lesson.status !== 'generating') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(lesson.status, 'ready', lesson.error);
+  assert.equal(lesson.coverage.completed, 1);
+  assert.equal(
+    (await f.invoke('learning.resume', { lessonId: lesson.id, confirm: false })).status,
+    400,
+  );
+  f.store.db
+    .prepare("UPDATE learning_lessons SET status='error' WHERE owner=? AND id=?")
+    .run(f.owner.user.id, lesson.id);
+  assert.equal(
+    (await f.invoke('learning.resume', { lessonId: lesson.id, confirm: true })).state,
+    'done',
   );
 });
 

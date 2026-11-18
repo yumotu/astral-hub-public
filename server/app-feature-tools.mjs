@@ -5,7 +5,7 @@ import { mailHistorySchema } from '../shared/mail-history.mjs';
 import { mailOperationSchema } from '../shared/mail-actions.mjs';
 import { scheduleActionSchema } from './schedule-actions.mjs';
 import { memoryFields, memoryWrite, memoryRevision } from './memories.mjs';
-import { questionEditSchema } from './learning.mjs';
+import { questionEditSchema, learningMaterialsSchema } from './learning.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
 import { dshExtensionChatChange } from '../shared/dsh-extensions.mjs';
 import { assistanceSourceSchema } from './assistance-context.mjs';
@@ -451,9 +451,22 @@ export function registerAppFeatures(
         level: z.enum(['beginner', 'intermediate', 'advanced']).default('intermediate'),
         choiceCount: z.number().int().min(0).max(200),
         shortCount: z.number().int().min(0).max(200),
+        materials: learningMaterialsSchema.optional(),
       })
       .strict(),
     execute: (ctx, p, id) => study(ctx, '/api/learning/lessons', { ...p, id, background: true }),
+  });
+  engine.register({
+    name: 'learning.resume',
+    description:
+      '仅在用户明确同意可能重新计费后继续未完成课程。先learning.read核对状态；成功章节不会重算。未知结果查询原课程，不自动重放。',
+    schema: z.object({ lessonId: uuid, confirm: z.literal(true) }).strict(),
+    execute: (ctx, p, id) =>
+      study(ctx, '/api/learning/lessons/' + p.lessonId + '/resume', {
+        id,
+        confirm: p.confirm,
+        background: true,
+      }),
   });
   engine.register({
     name: 'learning.list',
