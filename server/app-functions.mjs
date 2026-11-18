@@ -291,6 +291,14 @@ export function createAppFunctions(
     execute,
     respond,
     pending,
+    generatedLesson(owner, task, conversation) {
+      return db
+        .prepare(
+          "SELECT * FROM app_function_calls WHERE owner=? AND task=? AND conversation=? AND origin='pi' AND name='learning.generate' AND state='done'",
+        )
+        .all(owner, task, conversation)
+        .some((row) => !!open(row, 'result')?.lesson?.id);
+    },
     scope(owner, p) {
       const secret = randomBytes(32).toString('hex'),
         digest = hash(secret);

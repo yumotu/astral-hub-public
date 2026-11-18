@@ -166,6 +166,7 @@ export async function createApp(options = {}) {
       appFunctions: {
         scope: (...a) => appFunctions?.scope(...a),
         revoke: (...a) => appFunctions?.revoke(...a),
+        generatedLesson: (...a) => appFunctions?.generatedLesson(...a),
       },
       scheduleComputer: (run) => relay?.schedule(run),
       mailAgent: {
