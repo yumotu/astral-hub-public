@@ -90,7 +90,17 @@ function Exercise({
   }, [draftKey, choice, text]);
   const answer: Answer = question.kind === 'choice' ? { choiceIndex: choice ?? -1 } : { text };
   const valid = question.kind === 'choice' ? choice !== null : !!text.trim();
+  const submitting = useRef(false),
+    mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   async function submit() {
+    if (submitting.current) return;
+    submitting.current = true;
     const signature = JSON.stringify(answer);
     if (attempt.current?.signature !== signature)
       attempt.current = { signature, id: crypto.randomUUID() };
@@ -100,11 +110,13 @@ function Exercise({
     setBusy(true);
     setError('');
     try {
-      setResult(await onGrade(answer, attempt.current!.id));
+      const result = await onGrade(answer, attempt.current!.id);
+      if (mounted.current) setResult(result);
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      submitting.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -253,6 +265,10 @@ export function LearningPage({
   const [lessonsNext, setLessonsNext] = useState<string | null>(null),
     [wrongNext, setWrongNext] = useState<string | null>(null),
     [moreBusy, setMoreBusy] = useState(false);
+  const [lessonsLoading, setLessonsLoading] = useState(true),
+    [wrongLoading, setWrongLoading] = useState(true),
+    [lessonsError, setLessonsError] = useState(''),
+    [wrongError, setWrongError] = useState('');
   const [maximum, setMaximum] = useState(40),
     [maximumDraft, setMaximumDraft] = useState('40');
   const total = Number(choiceCount) + Number(shortCount);
@@ -267,6 +283,8 @@ export function LearningPage({
     currentFilter = useRef(resolved),
     selection = useRef(selected),
     generation = useRef<{ signature: string; id: string } | null>(null);
+  const context = useRef({ settings, session });
+  context.current = { settings, session };
   selection.current = selected;
   currentFilter.current = resolved;
   useEffect(() => {
@@ -332,25 +350,51 @@ export function LearningPage({
   );
   async function refresh() {
     const version = ++refreshVersion.current;
-    const [l, w] = await Promise.all([
-      api<{ lessons: Lesson[]; next?: string | null }>(settings, '/learning/lessons'),
+    const current = () =>
+      alive.current &&
+      version === refreshVersion.current &&
+      context.current.settings === settings &&
+      context.current.session === session &&
+      currentFilter.current === resolved;
+    setLessonsLoading(true);
+    setWrongLoading(true);
+    setLessonsError('');
+    setWrongError('');
+    await Promise.all([
+      api<{ lessons: Lesson[]; next?: string | null }>(settings, '/learning/lessons')
+        .then((l) => {
+          if (!current()) return;
+          setLessons(l.lessons);
+          setLessonsNext(l.next || null);
+        })
+        .catch((e) => {
+          if (current()) setLessonsError(e.message);
+        })
+        .finally(() => {
+          if (current()) setLessonsLoading(false);
+        }),
       api<{ items: Wrong[]; next?: string | null }>(
         settings,
         '/learning/wrong' + (resolved ? '?resolved=include' : ''),
-      ),
+      )
+        .then((w) => {
+          if (!current()) return;
+          setWrong(w.items);
+          setWrongNext(w.next || null);
+        })
+        .catch((e) => {
+          if (current()) setWrongError(e.message);
+        })
+        .finally(() => {
+          if (current()) setWrongLoading(false);
+        }),
     ]);
-    if (alive.current && version === refreshVersion.current) {
-      setLessons(l.lessons);
-      setWrong(w.items);
-      setLessonsNext(l.next || null);
-      setWrongNext(w.next || null);
-    }
   }
   async function older(kind: 'lessons' | 'wrong') {
     const version = refreshVersion.current,
       filter = resolved;
     const cursor = kind === 'lessons' ? lessonsNext : wrongNext;
-    if (!cursor || moreBusy) return;
+    if (!cursor || moreBusy || (kind === 'lessons' ? lessonsLoading : wrongLoading)) return;
     setMoreBusy(true);
     setError('');
     try {
@@ -495,16 +539,31 @@ export function LearningPage({
       false,
       { timeout: 210000 },
     );
+    if (
+      !alive.current ||
+      context.current.settings !== settings ||
+      context.current.session !== session
+    )
+      return r.attempt;
     void api<{ lesson: Lesson }>(settings, '/learning/lessons/' + lessonId)
       .then((current) => {
-        if (alive.current && selection.current === lessonId) setLesson(current.lesson);
+        if (
+          alive.current &&
+          context.current.settings === settings &&
+          context.current.session === session &&
+          selection.current === lessonId
+        )
+          setLesson(current.lesson);
       })
       .catch((e) => {
-        if (alive.current) setError(e.message);
+        if (
+          alive.current &&
+          context.current.settings === settings &&
+          context.current.session === session
+        )
+          setError(`判题已完成，课程刷新失败：${e.message}`);
       });
-    await refresh().catch((e) => {
-      if (alive.current) setError(e.message);
-    });
+    void refresh();
     return r.attempt;
   }
   if (!session)
@@ -733,7 +792,18 @@ export function LearningPage({
           )}
           <section className="surface learning-history">
             <h2>学习记录</h2>
-            {!lessons.length && <p className="muted">生成第一份讲解后，记录会保存在这里。</p>}
+            {lessonsLoading && <p role="status">正在读取学习记录…</p>}
+            {lessonsError && (
+              <p role="alert" className="error">
+                学习记录读取失败：{lessonsError}{' '}
+                <button className="text-link" onClick={() => void refresh()}>
+                  重试读取
+                </button>
+              </p>
+            )}
+            {!lessonsLoading && !lessonsError && !lessons.length && (
+              <p className="muted">生成第一份讲解后，记录会保存在这里。</p>
+            )}
             {lessons.map((l) => (
               <button key={l.id} className="learning-history-row" onClick={() => setSelected(l.id)}>
                 <span>
@@ -776,7 +846,16 @@ export function LearningPage({
             包含已掌握的题目
           </label>
           <p className="field-help">未达到80分自动收录；再练达到80分后标为已掌握，历史仍保留。</p>
-          {!wrong.length && (
+          {wrongLoading && <p role="status">正在读取错题记录…</p>}
+          {wrongError && (
+            <p role="alert" className="error">
+              错题记录读取失败：{wrongError}{' '}
+              <button className="text-link" onClick={() => void refresh()}>
+                重试读取
+              </button>
+            </p>
+          )}
+          {!wrongLoading && !wrongError && !wrong.length && (
             <div className="surface">
               <BookOpen size={24} />
               <p>这里暂时没有待巩固的错题。</p>
