@@ -265,6 +265,7 @@ export function LearningPage({
     [tab, setTab] = useState<'learn' | 'wrong'>(saved.tab === 'wrong' ? 'wrong' : 'learn'),
     [selected, setSelected] = useState<string>(saved.selected || '');
   const [materials, setMaterials] = useState<{ name: string; content: string }[]>([]);
+  const materialSelection = useRef<{ name: string; content: string }[]>([]);
   const [materialDraft, setMaterialDraft] = useState('');
   const [materialError, setMaterialError] = useState('');
   const [activeSection, setActiveSection] = useState('');
@@ -273,6 +274,7 @@ export function LearningPage({
   const resuming = useRef(false);
   const [resumeEpoch, setResumeEpoch] = useState(0);
   useEffect(() => {
+    materialSelection.current = [];
     setMaterials([]);
     setMaterialDraft('');
     setMaterialError('');
@@ -523,7 +525,7 @@ export function LearningPage({
   async function addFiles(files: File[]) {
     setMaterialError('');
     try {
-      if (materials.length + files.length > materialLimits.maxMaterials)
+      if (materialSelection.current.length + files.length > materialLimits.maxMaterials)
         throw Error('最多16份资料。');
       const added = [];
       for (const file of files) {
@@ -534,25 +536,33 @@ export function LearningPage({
         const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
         added.push({ name: file.name, content });
       }
-      const next = [...materials, ...added];
-      materialSections(next);
+      if (
+        alive.current &&
+        context.current.settings === settings &&
+        context.current.session === session
+      ) {
+        const next = [...materialSelection.current, ...added];
+        materialSections(next);
+        materialSelection.current = next;
+        setMaterials(next);
+      }
+    } catch (e) {
       if (
         alive.current &&
         context.current.settings === settings &&
         context.current.session === session
       )
-        setMaterials(next);
-    } catch (e) {
-      if (alive.current) setMaterialError((e as Error).message);
+        setMaterialError((e as Error).message);
     }
   }
   function addPastedMaterial() {
     try {
       const next = [
-        ...materials,
-        { name: `粘贴资料${materials.length + 1}.txt`, content: materialDraft },
+        ...materialSelection.current,
+        { name: `粘贴资料${materialSelection.current.length + 1}.txt`, content: materialDraft },
       ];
       materialSections(next);
+      materialSelection.current = next;
       setMaterials(next);
       setMaterialDraft('');
       setMaterialError('');
@@ -583,17 +593,30 @@ export function LearningPage({
         context.current.session === session
       ) {
         setAPICache(settings, '/learning/lessons/' + r.lesson.id, r);
-        setLesson(r.lesson);
-        setResumeConfirmed(false);
-        resumeOperation.current = null;
-        setResumeEpoch((value) => value + 1);
+        if (selection.current === lesson.id) {
+          setLesson(r.lesson);
+          setResumeConfirmed(false);
+          resumeOperation.current = null;
+          setResumeEpoch((value) => value + 1);
+        }
         void refresh();
       }
     } catch (e) {
-      if (alive.current) setError((e as Error).message + ' 未自动重试，请刷新课程核对原请求。');
+      if (
+        alive.current &&
+        context.current.settings === settings &&
+        context.current.session === session &&
+        selection.current === lesson.id
+      )
+        setError((e as Error).message + ' 未自动重试，请刷新课程核对原请求。');
     } finally {
       resuming.current = false;
-      if (alive.current) setBusy('');
+      if (
+        alive.current &&
+        context.current.settings === settings &&
+        context.current.session === session
+      )
+        setBusy('');
     }
   }
   async function generate() {
@@ -810,7 +833,11 @@ export function LearningPage({
                       type="button"
                       className="text-link"
                       aria-label={`移除资料${index + 1}`}
-                      onClick={() => setMaterials((old) => old.filter((_, i) => i !== index))}
+                      onClick={() => {
+                        const next = materialSelection.current.filter((_, i) => i !== index);
+                        materialSelection.current = next;
+                        setMaterials(next);
+                      }}
                     >
                       移除
                     </button>
