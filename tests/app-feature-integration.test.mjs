@@ -426,6 +426,37 @@ test('learning generation from ordinary chat persists real service results, enfo
   );
 });
 
+test('learning chat defaults missing counts without changing the service contract and rejects explicit zero totals', async (t) => {
+  const f = await fixture(t);
+  const catalog = await f.tool({ action: 'catalog' });
+  const schema = catalog.functions.find((tool) => tool.name === 'learning.generate').parameters;
+  assert.equal(schema.properties.choiceCount.default, 5);
+  assert.equal(schema.properties.shortCount.default, 2);
+  assert.ok(!schema.required.includes('choiceCount'));
+  assert.ok(!schema.required.includes('shortCount'));
+  const rejected = await f.invoke('learning.generate', {
+    topic: '合成零题课程',
+    choiceCount: 0,
+    shortCount: 0,
+  });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.error, /至少.*1|至少.*一/);
+  const created = await f.invoke('learning.generate', { topic: '合成默认题量' });
+  assert.equal(created.state, 'done');
+  const saved = f.store.db
+    .prepare('SELECT input FROM learning_lessons WHERE owner=? AND id=?')
+    .get(f.owner.user.id, created.result.lesson.id);
+  const input = JSON.parse(saved.input);
+  assert.equal(input.choiceCount, 5);
+  assert.equal(input.shortCount, 2);
+  const direct = await f.req(
+    '/learning/lessons',
+    { id: randomUUID(), topic: '服务仍需明确题量', level: 'beginner' },
+    f.owner.token,
+  );
+  assert.equal(direct.status, 400);
+});
+
 test('learning tools accept complete material input and reuse the scoped explicit resume service', async (t) => {
   const f = await fixture(t);
   const limits = await f.invoke('learning.settings');
