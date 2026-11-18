@@ -349,13 +349,20 @@ export function LearningPage({
     30,
   );
   async function refresh() {
+    if (
+      !alive.current ||
+      context.current.settings !== settings ||
+      context.current.session !== session
+    )
+      return;
+    const filter = currentFilter.current;
     const version = ++refreshVersion.current;
     const current = () =>
       alive.current &&
       version === refreshVersion.current &&
       context.current.settings === settings &&
       context.current.session === session &&
-      currentFilter.current === resolved;
+      currentFilter.current === filter;
     setLessonsLoading(true);
     setWrongLoading(true);
     setLessonsError('');
@@ -375,7 +382,7 @@ export function LearningPage({
         }),
       api<{ items: Wrong[]; next?: string | null }>(
         settings,
-        '/learning/wrong' + (resolved ? '?resolved=include' : ''),
+        '/learning/wrong' + (filter ? '?resolved=include' : ''),
       )
         .then((w) => {
           if (!current()) return;

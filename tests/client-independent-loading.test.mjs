@@ -246,6 +246,43 @@ test('grading returns successful attempt without waiting for detail or list refr
   assert.match(h.state.Error, /判题已完成/);
   assert.match(h.state.LessonsError, /list down/);
 });
+test('grading after a filter change refreshes the active filter and settles both lists', async () => {
+  const h = learning();
+  const grading = h.grade('lesson', 'question', { choiceIndex: 0 }, 'attempt');
+  h.values.currentFilter.current = true;
+  const activeRefresh = compile(named('LearningPage.tsx', 'refresh'), {
+    ...h.values,
+    resolved: true,
+  });
+  const filtered = activeRefresh();
+  h.requests[1].resolve({ lessons: [{ id: 'lesson' }] });
+  h.requests[2].resolve({ items: [{ id: 'mastered' }] });
+  await filtered;
+  assert.equal(h.state.WrongLoading, false);
+  h.requests[0].resolve({ attempt: { id: 'attempt', score: 100 } });
+  assert.equal((await grading).score, 100);
+  assert.equal(h.requests[5].path, '/learning/wrong?resolved=include');
+  h.requests[3].resolve({ lesson: { id: 'lesson' } });
+  h.requests[4].resolve({ lessons: [{ id: 'lesson' }] });
+  h.requests[5].resolve({ items: [{ id: 'current-mastered' }] });
+  await tick();
+  assert.equal(h.state.LessonsLoading, false);
+  assert.equal(h.state.WrongLoading, false);
+  assert.deepEqual(h.state.Wrong, [{ id: 'current-mastered' }]);
+});
+for (const kind of ['settings', 'session', 'unmount'])
+  test('obsolete refresh cannot invalidate active loading: ' + kind, async () => {
+    const h = learning();
+    if (kind === 'settings') h.values.context.current.settings = {};
+    if (kind === 'session') h.values.context.current.session = {};
+    if (kind === 'unmount') h.values.alive.current = false;
+    const before = structuredClone(h.state);
+    const pending = h.refresh();
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.values.refreshVersion.current, 0);
+    await pending;
+    assert.deepEqual(h.state, before);
+  });
 test('document publishes while diff is pending, both errors remain actionable', async () => {
   const h = fileLoad();
   h.requests.document.resolve({ content: 'current', readOnly: false });
