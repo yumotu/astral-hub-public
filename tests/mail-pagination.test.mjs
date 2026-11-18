@@ -252,3 +252,105 @@ test('installed SEARCH command emits UID PARTIAL with filters and parses a proto
   const wire = JSON.stringify(calls[0].attributes);
   for (const value of ['1:200', 'needle', 'UNSEEN']) assert.ok(wire.includes(value), value);
 });
+
+async function protocolFixture(t) {
+  const base = import.meta.resolve('imapflow');
+  const { default: search } = await import(new URL('./commands/search.js', base));
+  const { parser } = await import(new URL('./handler/imap-handler.js', base));
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const state = {
+    wire: '* ESEARCH (TAG "A1") UID COUNT 0 PARTIAL (-11:-1 NIL)',
+    queries: [],
+    fetched: 0,
+  };
+  const client = {
+    state: 1,
+    states: { SELECTED: 1 },
+    mailbox: { uidValidity: 1n },
+    capabilities: new Set(['ESEARCH', 'PARTIAL']),
+    enabled: new Set(),
+    async connect() {},
+    async logout() {},
+    async getMailboxLock() {
+      return { release() {} };
+    },
+    async search(query, options) {
+      state.queries.push(query);
+      return ImapFlow.prototype.search.call(client, query, options);
+    },
+    async run(command, query, options) {
+      assert.equal(command, 'SEARCH');
+      return search(client, query, options);
+    },
+    async exec(command, attributes, handlers) {
+      assert.equal(command, 'UID SEARCH');
+      assert.deepEqual(attributes.slice(0, 2), [
+        { type: 'ATOM', value: 'RETURN' },
+        ['COUNT', 'PARTIAL', '-11:-1'].map((value) => ({ type: 'ATOM', value })),
+      ]);
+      await handlers.untagged.ESEARCH(await parser(Buffer.from(state.wire)));
+      return { next() {} };
+    },
+    async fetchAll(uids) {
+      state.fetched += uids.length;
+      return uids.map((uid) => ({ uid, envelope: {}, flags: new Set() }));
+    },
+  };
+  const mail = createMail(
+    { db },
+    { token: 'synthetic-mail-protocol-test', imapFactory: async () => client },
+  );
+  await mail.saveAccount('test', {
+    provider: 'gmail',
+    address: 'test@example.com',
+    appPassword: 'synthetic-password',
+  });
+  return {
+    state,
+    list(input = {}) {
+      return mail.listMessages('test', { mailbox: 'Archive', limit: 10, ...input }, true);
+    },
+  };
+}
+
+test('raw RFC 9394 NIL reply produces an empty Archive through ImapFlow and mail service', async (t) => {
+  const f = await protocolFixture(t);
+  const page = await f.list();
+  assert.deepEqual(page.messages, []);
+  assert.equal(page.total, 0);
+  assert.equal(page.hasMore, false);
+  assert.equal(page.nextCursor, null);
+  assert.equal(f.state.fetched, 0);
+});
+
+test('raw RFC 9394 NIL reply preserves zero-match INBOX filters without fetching messages', async (t) => {
+  const f = await protocolFixture(t);
+  const page = await f.list({ mailbox: 'INBOX', q: 'zero-match', unread: true });
+  assert.deepEqual(f.state.queries, [{ text: 'zero-match', seen: false }]);
+  assert.deepEqual(page.messages, []);
+  assert.equal(page.total, 0);
+  assert.equal(page.hasMore, false);
+  assert.equal(page.nextCursor, null);
+  assert.equal(f.state.fetched, 0);
+});
+
+test('raw RFC 9394 NIL reply ends an expunged cursor page and preserves its original total', async (t) => {
+  const f = await protocolFixture(t);
+  f.state.wire = '* ESEARCH (TAG "A1") UID COUNT 11 PARTIAL (-11:-1 1:11)';
+  const first = await f.list();
+  assert.deepEqual(
+    first.messages.map((message) => message.uid),
+    [11, 10, 9, 8, 7, 6, 5, 4, 3, 2],
+  );
+  assert.equal(first.hasMore, true);
+  assert.ok(first.nextCursor);
+  f.state.wire = '* ESEARCH (TAG "A1") UID COUNT 0 PARTIAL (-11:-1 NIL)';
+  const empty = await f.list({ cursor: first.nextCursor });
+  assert.deepEqual(f.state.queries.at(-1), { uid: '1:1' });
+  assert.deepEqual(empty.messages, []);
+  assert.equal(empty.total, 11);
+  assert.equal(empty.hasMore, false);
+  assert.equal(empty.nextCursor, null);
+  assert.equal(f.state.fetched, 10);
+});
