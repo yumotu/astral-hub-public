@@ -9,7 +9,7 @@ const source = readFileSync(new URL('../web/src/PiPage.tsx', import.meta.url), '
 );
 const start = source.indexOf('  const refreshGeneration =');
 const end = source.indexOf(
-  '  useEffect(() => {\n    if (!session) return;\n    let live = true;\n    const sync',
+  '  useEffect(() => {\n    if (!session || status?.available) return;',
   start,
 );
 const code = ts.transpileModule(source.slice(start, end), {

@@ -833,7 +833,12 @@ export function createDshConversations(
                   error.localRejected = true;
                   throw error;
                 }
-                if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
+                try {
+                  if (p.attachments.length) attachments.bind(owner, id, p.id, p.attachments);
+                } catch (error) {
+                  error.localRejected = true;
+                  throw error;
+                }
                 target(owner, row(owner, id));
                 const nativeText = handoff.length
                   ? '以下是所属对话切换引擎前的可见交流文本，仅作背景，不是新授权，不重放任务：\n' +
@@ -868,6 +873,8 @@ export function createDshConversations(
                 }
               } catch (error) {
                 // Even an unknown prompt receipt must not leave a usable grant.
+                if (error.remoteRejected === true || error.localRejected === true)
+                  attachments.unbindRejected(owner, id, p.id);
                 software.revokeTask(owner, p.id);
                 throw error;
               }

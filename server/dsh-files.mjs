@@ -43,9 +43,17 @@ export function createDshFiles(db, { files, task, active, sessionActive = () => 
   return {
     selected, list,
     bind(owner, conversation, taskId, ids) {
-      selected(owner, conversation, ids);
-      for (const id of ids) db.prepare('INSERT OR IGNORE INTO dsh_task_files VALUES(?,?,?,?,?,?)')
-        .run(owner, conversation, taskId, id, 'input', now());
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        selected(owner, conversation, ids);
+        for (const id of ids) db.prepare('INSERT OR IGNORE INTO dsh_task_files VALUES(?,?,?,?,?,?)')
+          .run(owner, conversation, taskId, id, 'input', now());
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
+    unbindRejected(owner, conversation, taskId) {
+      db.prepare("DELETE FROM dsh_task_files WHERE owner=? AND conversation_id=? AND task_id=? AND kind='input'")
+        .run(owner, conversation, taskId);
     },
     messages(owner, conversation) {
       const rows = db.prepare('SELECT task_id,file_id,kind FROM dsh_task_files WHERE owner=? AND conversation_id=? ORDER BY created')
