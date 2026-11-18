@@ -645,21 +645,61 @@ export function createMail(
               ...(p.before ? { before: new Date(p.before + 'T00:00:00.000Z') } : {}),
               ...(cursor ? { uid: '1:' + (cursor.uid - 1) } : {}),
             };
-            // UID 0 is invalid; a cursor ending at 1 has no older messages.
+            const observe =
+              p.mailbox === 'INBOX' && !p.q && !p.unread && !p.since && !p.before && !p.cursor;
+            // RFC 9394 bounds returned UIDs; INBOX observation still needs the full set.
+            const partial =
+              !observe &&
+              client.capabilities?.has('PARTIAL') &&
+              (client.capabilities.has('ESEARCH') ||
+                client.enabled?.has('IMAP4REV2') ||
+                (client.capabilities.has('IMAP4rev2') && !client.capabilities.has('IMAP4rev1')));
             const found = await client.search(Object.keys(search).length ? search : { all: true }, {
               uid: true,
+              ...(partial ? { returnOptions: ['COUNT', { partial: `-${p.limit + 1}:-1` }] } : {}),
             });
-            if (!Array.isArray(found)) throw fail(502, '邮箱搜索未返回结果，请重试。');
+            let values = found,
+              count;
+            if (partial) {
+              const invalid = () => fail(502, '邮箱分页搜索返回无效，请重试。');
+              if (
+                !Number.isInteger(found?.count) ||
+                found.count < 0 ||
+                found.count > 0xffffffff ||
+                found.partial?.range !== `-${p.limit + 1}:-1` ||
+                typeof found.partial?.messages !== 'string' ||
+                found.partial.messages.length > (p.limit + 1) * 22
+              )
+                throw invalid();
+              count = found.count;
+              values = [];
+              for (const part of found.partial.messages ? found.partial.messages.split(',') : []) {
+                if (!/^[1-9]\d{0,9}(?::[1-9]\d{0,9})?$/.test(part)) throw invalid();
+                const [first, last = first] = part.split(':').map(Number);
+                const low = Math.min(first, last),
+                  high = Math.max(first, last);
+                if (high > 0xffffffff || high - low + 1 > p.limit + 1 - values.length)
+                  throw invalid();
+                for (let uid = low; uid <= high; uid++) values.push(uid);
+              }
+              if (
+                new Set(values).size !== values.length ||
+                values.length !== Math.min(count, p.limit + 1) ||
+                values.some((uid) => cursor && uid >= cursor.uid)
+              )
+                throw invalid();
+            }
+            if (!Array.isArray(values)) throw fail(502, '邮箱搜索未返回结果，请重试。');
             const uids = [
               ...new Set(
-                found.filter(
+                values.filter(
                   (uid) => Number.isInteger(uid) && uid > 0 && (!cursor || uid < cursor.uid),
                 ),
               ),
             ].sort((a, b) => a - b);
+            count ??= uids.length;
             const recent = uids.slice(-p.limit).reverse();
-            if (p.mailbox === 'INBOX' && !p.q && !p.unread && !p.since && !p.before && !p.cursor)
-              await observeInbox(owner, client, uids);
+            if (observe) await observeInbox(owner, client, uids);
             const messages = [];
             const fields = {
               uid: true,
@@ -694,7 +734,7 @@ export function createMail(
               mailbox: p.mailbox,
               uidValidity:
                 client.mailbox?.uidValidity == null ? null : String(client.mailbox.uidValidity),
-              total: cursor?.total ?? uids.length,
+              total: cursor?.total ?? count,
               hasMore: !!validity && uids.length > recent.length,
               scannedFrom: recent.at(-1) ?? null,
               nextCursor:
@@ -704,7 +744,7 @@ export function createMail(
                         uid: recent.at(-1),
                         validity,
                         scope,
-                        total: cursor?.total ?? uids.length,
+                        total: cursor?.total ?? count,
                       }),
                     ).toString('base64url')
                   : null,

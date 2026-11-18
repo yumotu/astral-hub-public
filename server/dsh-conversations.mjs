@@ -48,6 +48,7 @@ export function createDshConversations(
   const bindings = createAgentBindings(db),
     watching = new Map(),
     syncing = new Map(),
+    historyReads = new Map(),
     busy = new Map();
   let closed = false;
   db.exec(`CREATE TABLE IF NOT EXISTS dsh_conversations(
@@ -221,13 +222,51 @@ export function createDshConversations(
   // question/approval handles or claims that a task has stopped.
   for (const r of db.prepare("SELECT * FROM dsh_conversations WHERE state='ready'").all())
     persist(r, applyDshFrame(stateOf(r), { type: 'disconnected' }, r.session_id));
-  function view(r) {
+  function view(r, summary = false) {
     const state = stateOf(r),
-      value = dshSessionView(state, { stopPending: r.stop_cursor !== null });
+      value = dshSessionView(state, { stopPending: r.stop_cursor !== null, summary });
     const confirmations = software.pending(r.owner, r.id);
     if (confirmations.length && value.status === 'running') {
       value.phase = '等待你的确认';
       value.uiRequests.push(...confirmations.map((p) => ({ id: p.id, status: 'pending' })));
+    }
+    if (summary) {
+      let title = r.title || state.projections.title;
+      if (!title) {
+        const first = state.events.find(
+          (e) =>
+            e.type === 'user/message' &&
+            e.data.content.some((b) => ['text', 'reasoning'].includes(b.type) && b.text.trim()),
+        );
+        if (first) {
+          const message = dshSessionView({ ...state, events: [first], assistant: null })
+            .messages[0];
+          const original =
+            message.rpcId &&
+            db
+              .prepare(
+                'SELECT input FROM assistant_dsh_inputs WHERE owner=? AND id=? AND conversation_id=?',
+              )
+              .get(r.owner, message.rpcId, r.id);
+          const task =
+            !original && message.rpcId && software.task({ owner: r.owner, task: message.rpcId });
+          title = (
+            original ? original.input : task?.conversation_id === r.id ? task.input : message.text
+          ).slice(0, 80);
+        }
+      }
+      return {
+        id: r.id,
+        title: title || 'DSH 新对话',
+        connectionId: r.connection_id,
+        projectId: r.workspace_id,
+        sessionId: r.session_id,
+        state: r.state,
+        updatedAt: r.updated_at,
+        runState: agentRunState(value),
+        pinnedAt: r.pinned_at,
+        archivedAt: r.archived_at,
+      };
     }
     const actions = db
       .prepare(
@@ -424,21 +463,7 @@ export function createDshConversations(
             )
             .all(owner);
           json(200, {
-            conversations: items.map((r) => {
-              const v = view(r);
-              return {
-                id: v.id,
-                title: v.title,
-                connectionId: v.connectionId,
-                projectId: v.projectId,
-                sessionId: v.sessionId,
-                state: v.state,
-                updatedAt: v.updatedAt,
-                runState: v.runState,
-                pinnedAt: v.pinnedAt,
-                archivedAt: v.archivedAt,
-              };
-            }),
+            conversations: items.map((r) => view(r, true)),
           });
           return true;
         }
@@ -674,12 +699,44 @@ export function createDshConversations(
             state = stateOf(current);
           const first = state.events[0]?.seq;
           if (state.hasMore && first !== undefined) {
-            const page = await chat.page(current.session_id, first, state.cursor);
+            const generation = watching.get(key(owner, id));
+            const readKey = JSON.stringify([
+              owner,
+              id,
+              current.connection_id,
+              current.workspace_id,
+              current.session_id,
+              first,
+              state.cursor,
+            ]);
+            let pending = historyReads.get(readKey);
+            if (!pending || pending.generation !== generation) {
+              const work = (async () => {
+                const page = await chat.page(current.session_id, first, state.cursor);
+                target(owner, row(owner, id));
+                if (watching.get(key(owner, id)) !== generation)
+                  throw fail(409, 'DSH 连接已更新，请重试读取。');
+                const latest = row(owner, id),
+                  next = stateOf(latest);
+                if (
+                  latest.connection_id !== current.connection_id ||
+                  latest.workspace_id !== current.workspace_id ||
+                  latest.session_id !== current.session_id
+                )
+                  throw fail(409, 'DSH 会话绑定不符。');
+                if (next.events[0]?.seq !== first) throw fail(409, '历史窗口已更新，请重试读取。');
+                persist(latest, prependDshPage(next, page));
+              })();
+              pending = { generation, work };
+              historyReads.set(readKey, pending);
+              void work
+                .finally(() => {
+                  if (historyReads.get(readKey) === pending) historyReads.delete(readKey);
+                })
+                .catch(() => {});
+            }
+            await pending.work;
             target(owner, row(owner, id));
-            const latest = row(owner, id),
-              next = stateOf(latest);
-            if (next.events[0]?.seq !== first) throw fail(409, '历史窗口已更新，请重试读取。');
-            persist(latest, prependDshPage(next, page));
           }
           json(200, { conversation: view(row(owner, id)) });
           return true;

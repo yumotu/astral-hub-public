@@ -763,6 +763,7 @@ export function FileWorkbenchPanel({
     setDiff(null);
     setError('');
     setSaved(false);
+    setBusy(false);
     if (!target) return;
     const c = new AbortController();
     controller.current = c;
@@ -770,50 +771,44 @@ export function FileWorkbenchPanel({
     setMode(target.backupId ? 'diff' : 'read');
     setMobileTab('file');
     const base = `/pi/projects/${target.projectId}`;
-    void (async () => {
-      const change = target.backupId
-        ? await api<NonNullable<typeof diff>>(
-            settings,
-            base + '/diff',
-            { backupId: target.backupId },
-            undefined,
-            false,
-            { signal: c.signal, timeout: 20000 },
-          )
-        : null;
-      let file;
-      try {
-        file = await api<NonNullable<typeof doc>>(
+    const document = api<NonNullable<typeof doc>>(
+      settings,
+      `${base}/document?path=${encodeURIComponent(target.path)}`,
+      undefined,
+      undefined,
+      false,
+      { signal: c.signal, timeout: 20000 },
+    )
+      .then((file) => {
+        if (c.signal.aborted) return;
+        setDoc(file);
+        setDraft(file.content);
+      })
+      .catch((e) => {
+        if (!c.signal.aborted)
+          setError((old) => [old, `文件读取失败：${e.message}`].filter(Boolean).join('\n'));
+      });
+    const change = target.backupId
+      ? api<NonNullable<typeof diff>>(
           settings,
-          `${base}/document?path=${encodeURIComponent(target.path)}`,
-          undefined,
+          base + '/diff',
+          { backupId: target.backupId },
           undefined,
           false,
           { signal: c.signal, timeout: 20000 },
-        );
-      } catch (e) {
-        if (!change) throw e;
-        file = {
-          path: target.path,
-          content: change.after || '',
-          sha256: '',
-          readOnly: true,
-          redacted: false,
-          totalLines: 0,
-        };
-      }
-      if (!c.signal.aborted) {
-        setDoc(file);
-        setDraft(file.content);
-        setDiff(change);
-      }
-    })()
-      .catch((e) => {
-        if (!c.signal.aborted) setError(e.message);
-      })
-      .finally(() => {
-        if (!c.signal.aborted) setBusy(false);
-      });
+        )
+          .then((value) => {
+            if (!c.signal.aborted) setDiff(value);
+          })
+          .catch((e) => {
+            if (c.signal.aborted) return;
+            setError((old) => [old, `差异读取失败：${e.message}`].filter(Boolean).join('\n'));
+            setMode((old) => (old === 'diff' ? 'read' : old));
+          })
+      : Promise.resolve();
+    void Promise.all([document, change]).finally(() => {
+      if (!c.signal.aborted) setBusy(false);
+    });
     return () => c.abort();
   }, [
     target?.projectId,
@@ -967,7 +962,7 @@ export function FileWorkbenchPanel({
                 <button
                   key={m}
                   aria-pressed={mode === m}
-                  disabled={m === 'edit' && (!doc || doc.readOnly)}
+                  disabled={m === 'edit' && (!doc || doc.readOnly || busy)}
                   onClick={() => setMode(m)}
                 >
                   {{ read: '阅读', edit: '编辑', diff: '差异', preview: '预览' }[m]}
@@ -1049,8 +1044,7 @@ export function FileWorkbenchPanel({
               setSelection({ text: s.slice(0, 5000), startLine: 1, endLine: 1 });
           }}
         >
-          {doc &&
-            !busy &&
+          {(mode === 'diff' ? diff : doc) &&
             (mode === 'preview' ? (
               <PiMarkdown text={draft} />
             ) : mode === 'diff' && diff && diff.after === undefined ? (
@@ -1058,10 +1052,10 @@ export function FileWorkbenchPanel({
             ) : (
               <Suspense fallback={<p className="field-help">正在载入编辑器…</p>}>
                 <CodeEditor
-                  path={target?.path || doc.path}
-                  content={mode === 'diff' && diff?.after !== undefined ? diff.after : draft}
+                  path={target?.path || doc?.path || ''}
+                  content={mode === 'diff' ? diff?.after || '' : draft}
                   original={mode === 'diff' ? diff?.before : undefined}
-                  readOnly={mode !== 'edit' || doc.readOnly}
+                  readOnly={mode !== 'edit' || !doc || doc.readOnly || busy}
                   onChange={mode === 'edit' ? setDraft : () => {}}
                   onSelect={setSelection}
                 />
