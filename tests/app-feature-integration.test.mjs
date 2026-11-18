@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/index.mjs';
+import { createChatFiles } from '../server/files.mjs';
 import { learningFixture } from './fixtures/learning.mjs';
 
 const adminToken = 'app-features-synthetic-admin-token-12345678901234567890';
@@ -132,6 +133,7 @@ async function fixture(t) {
     tool({ action: 'invoke', name, input, callId: 'test-' + ++n });
   return {
     ...app,
+    files: createChatFiles(app.store.db, { root: join(dir, 'files') }),
     req,
     owner,
     other,
@@ -555,6 +557,130 @@ test('learning tools accept complete material input and reuse the scoped explici
   assert.equal((await f.req(confirmPath, {}, f.owner.token)).state, 'done');
   assert.equal((await f.tool(request)).state, 'done');
   assert.equal(f.learningCalls.length - before, 3);
+});
+
+test('learning attachments preserve full source and combine with explicitly pasted materials', async (t) => {
+  const f = await fixture(t);
+  const content = 'synthetic source\n'.repeat(700) + 'ATTACHMENT_LONG_TAIL';
+  const file = await f.files.save(
+    f.owner.user.id,
+    f.conversation,
+    'source.md',
+    Buffer.from(content),
+  );
+  const second = await f.files.save(
+    f.owner.user.id,
+    f.conversation,
+    'second.txt',
+    Buffer.from('SECOND_ATTACHMENT_TAIL'),
+  );
+  const p = await f.invoke('learning.generate', {
+    topic: '附件合成学习',
+    choiceCount: 1,
+    shortCount: 0,
+    materials: [{ name: 'paste.txt', content: 'EXPLICIT_PASTED_SOURCE' }],
+    attachments: [file, second].map((item) => ({
+      conversationId: f.conversation,
+      fileId: item.id,
+    })),
+  });
+  assert.equal(p.state, 'done', JSON.stringify(p));
+  let lesson;
+  for (let i = 0; i < 100; i++) {
+    lesson = (await f.req('/learning/lessons/' + p.result.lesson.id, undefined, f.owner.token))
+      .lesson;
+    if (lesson.status !== 'generating') break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.equal(lesson.status, 'ready', lesson.error);
+  const saved = JSON.parse(
+    f.store.db
+      .prepare('SELECT input FROM learning_lessons WHERE owner=? AND id=?')
+      .get(f.owner.user.id, lesson.id).input,
+  );
+  assert.deepEqual(
+    saved.materials.map((m) => m.content),
+    ['EXPLICIT_PASTED_SOURCE', content, 'SECOND_ATTACHMENT_TAIL'],
+  );
+  const chapterInputs = f.learningCalls
+    .map((p) => JSON.parse(p.messages[1].content))
+    .filter((p) => p.section);
+  for (const marker of ['EXPLICIT_PASTED_SOURCE', 'ATTACHMENT_LONG_TAIL', 'SECOND_ATTACHMENT_TAIL'])
+    assert.ok(
+      chapterInputs.some((p) => JSON.stringify(p).includes(marker)),
+      marker,
+    );
+});
+
+test('learning attachments reject foreign scope, unsupported and invalid or excessive sources before generation', async (t) => {
+  const f = await fixture(t);
+  const files = f.files;
+  const valid = await files.save(
+    f.owner.user.id,
+    f.conversation,
+    'valid.txt',
+    Buffer.from('valid source'),
+  );
+  const foreignOwner = await files.save(
+    f.other.user.id,
+    f.conversation,
+    'other.txt',
+    Buffer.from('other owner'),
+  );
+  const foreignConversation = randomUUID();
+  const foreign = await files.save(
+    f.owner.user.id,
+    foreignConversation,
+    'foreign.txt',
+    Buffer.from('other conversation'),
+  );
+  const input = (attachments, materials) => ({
+    topic: '合成拒绝测试',
+    choiceCount: 1,
+    shortCount: 0,
+    attachments,
+    ...(materials ? { materials } : {}),
+  });
+  const ref = (file, conversationId = f.conversation) => ({ conversationId, fileId: file.id });
+  assert.equal((await f.invoke('learning.generate', input([valid.id]))).status, 400);
+  assert.equal((await f.invoke('learning.generate', input([ref(foreignOwner)]))).status, 404);
+  assert.equal((await f.invoke('learning.generate', input([ref(foreign)]))).status, 404);
+  assert.equal(
+    (await f.invoke('learning.generate', input([ref(foreign, foreignConversation)]))).status,
+    403,
+  );
+  for (const [name, bytes, message] of [
+    ['unsupported.pdf', Buffer.from('not a text lesson'), /PDF|格式|类型/],
+    ['unsupported.docx', Buffer.from('not a text lesson'), /DOCX|格式|类型/],
+    ['empty.txt', Buffer.from('  \n'), /非空/],
+    ['encoding.txt', Buffer.from([0xc3, 0x28]), /UTF-8/],
+    ['null.txt', Buffer.from('bad\0source'), /空字节/],
+    ['bytes.txt', Buffer.alloc(65537, 97), /64 KiB/],
+    ['characters.txt', Buffer.alloc(32001, 97), /32000/],
+  ]) {
+    const file = await files.save(f.owner.user.id, f.conversation, name, bytes);
+    const rejected = await f.invoke('learning.generate', input([ref(valid), ref(file)]));
+    assert.equal(rejected.status, 400, JSON.stringify(rejected));
+    assert.match(rejected.error, message);
+  }
+  const large = await files.save(
+    f.owner.user.id,
+    f.conversation,
+    'large.txt',
+    Buffer.alloc(32000, 97),
+  );
+  assert.equal((await f.invoke('learning.generate', input(Array(4).fill(ref(large))))).status, 400);
+  assert.equal(
+    (
+      await f.invoke(
+        'learning.generate',
+        input(Array(16).fill(ref(valid)), [{ name: 'paste.txt', content: 'explicit' }]),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(f.learningCalls.length, 0);
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM learning_lessons').get().n, 0);
 });
 
 test('learning resume previews cannot run after denial or a changed checkpoint', async (t) => {
