@@ -37,7 +37,10 @@ async function fixture(t) {
               objective: `合成独立目标${i + 1}：不同情境下的推理判断`,
             })),
           };
-        else reply = replies.shift();
+        else {
+          reply = replies.shift();
+          if (typeof reply === 'function') reply = await reply(input);
+        }
         if (input.assignedTargets && reply?.questions)
           reply = {
             questions: reply.questions.map((q, i) => ({
@@ -246,6 +249,137 @@ test('short-answer edits replace future rubric without changing old AI feedback 
   assert.equal(old.feedback, '原评分反馈');
   assert.equal(old.referenceAnswer, q.referenceAnswer);
   assert.equal(old.score, 72);
+});
+
+for (const finishNewestFirst of [true, false]) {
+  for (const newestPasses of [true, false]) {
+    test(`short grading keeps latest submission state: newestFirst=${finishNewestFirst}, newestPasses=${newestPasses}`, async (t) => {
+      const f = await fixture(t);
+      await f.request('/learning/lessons', f.input, f.owner.token);
+      const submit = (id, text) =>
+        f.request(
+          '/learning/attempts',
+          {
+            id,
+            lessonId: f.input.id,
+            questionId: 'q2',
+            answer: { text },
+          },
+          f.owner.token,
+        );
+      f.replies([{ score: 0, feedback: 'initial wrong answer' }]);
+      await submit(randomUUID(), 'initial');
+      const first = Promise.withResolvers(),
+        second = Promise.withResolvers();
+      const firstStarted = Promise.withResolvers(),
+        secondStarted = Promise.withResolvers();
+      f.replies([
+        () => {
+          firstStarted.resolve();
+          return first.promise;
+        },
+        () => {
+          secondStarted.resolve();
+          return second.promise;
+        },
+      ]);
+      const oldId = randomUUID(),
+        newId = randomUUID();
+      const oldRequest = submit(oldId, 'older');
+      await firstStarted.promise;
+      const newRequest = submit(newId, 'newer');
+      await secondStarted.promise;
+      const oldGrade = { score: newestPasses ? 0 : 100, feedback: 'older grade' };
+      const newGrade = { score: newestPasses ? 100 : 0, feedback: 'newer grade' };
+      if (finishNewestFirst) {
+        second.resolve(newGrade);
+        assert.equal((await newRequest).status, 201);
+        first.resolve(oldGrade);
+      } else {
+        first.resolve(oldGrade);
+        assert.equal((await oldRequest).status, 201);
+        second.resolve(newGrade);
+      }
+      const results = await Promise.all([oldRequest, newRequest]);
+      assert.ok(results.every((r) => r.status === 201));
+      const wrong = (await f.request('/learning/wrong?resolved=include', undefined, f.owner.token))
+        .body.items[0];
+      assert.equal(wrong.lastAttempt.id, newId);
+      assert.equal(wrong.resolved, newestPasses);
+      assert.equal(wrong.reviewCount, 2);
+      assert.equal(wrong.wrongCount, newestPasses ? 1 : 2);
+      const attempts = (
+        await f.request('/learning/lessons/' + f.input.id, undefined, f.owner.token)
+      ).body.lesson.attempts;
+      assert.equal(attempts.length, 3);
+      assert.equal(attempts.find((a) => a.id === oldId).score, oldGrade.score);
+      assert.equal(attempts.find((a) => a.id === newId).score, newGrade.score);
+      assert.ok(attempts.every((a) => a.questionRevision === 1));
+    });
+  }
+}
+
+test('grading an edited question archives the original revision without updating current wrong state', async (t) => {
+  const f = await fixture(t);
+  await f.request('/learning/lessons', f.input, f.owner.token);
+  const submit = (id) =>
+    f.request(
+      '/learning/attempts',
+      {
+        id,
+        lessonId: f.input.id,
+        questionId: 'q2',
+        answer: { text: 'synthetic answer' },
+      },
+      f.owner.token,
+    );
+  f.replies([{ score: 0, feedback: 'initial wrong answer' }]);
+  await submit(randomUUID());
+  const before = (await f.request('/learning/wrong?resolved=include', undefined, f.owner.token))
+    .body.items;
+  const grade = Promise.withResolvers(),
+    started = Promise.withResolvers();
+  f.replies([
+    () => {
+      started.resolve();
+      return grade.promise;
+    },
+  ]);
+  const pendingId = randomUUID(),
+    pending = submit(pendingId);
+  await started.promise;
+  const path = '/learning/lessons/' + f.input.id + '/questions/q2';
+  const { id, revision, ...question } = (await f.request(path, undefined, f.owner.token)).body
+    .question;
+  assert.equal(
+    (
+      await f.request(
+        path,
+        {
+          revision,
+          question: { ...question, referenceAnswer: 'updated reference answer' },
+        },
+        f.owner.token,
+        'PATCH',
+      )
+    ).status,
+    200,
+  );
+  grade.resolve({ score: 100, feedback: 'original revision grade' });
+  const result = await pending;
+  assert.equal(result.status, 201);
+  assert.equal(result.body.attempt.questionRevision, 1);
+  assert.equal(result.body.attempt.referenceAnswer, question.referenceAnswer);
+  const after = (await f.request('/learning/wrong?resolved=include', undefined, f.owner.token)).body
+    .items;
+  assert.equal(after[0].question.revision, 2);
+  const { question: beforeQuestion, ...beforeState } = before[0];
+  const { question: afterQuestion, ...afterState } = after[0];
+  assert.deepEqual(afterState, beforeState);
+  const attempts = (await f.request('/learning/lessons/' + f.input.id, undefined, f.owner.token))
+    .body.lesson.attempts;
+  assert.equal(attempts.find((a) => a.id === pendingId).score, 100);
+  assert.equal(attempts.length, 2);
 });
 
 test('learning generation is authenticated, account-scoped, idempotent and hides quiz answers', async (t) => {

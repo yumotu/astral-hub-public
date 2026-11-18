@@ -123,6 +123,20 @@
 .learning-wrong > .check-label {
   margin-top: 16px;
 }
+.learning-explanation > .field-label,
+.learning-explanation > article {
+  min-width: 0;
+  max-width: 100%;
+}
+.learning-explanation > .field-label select {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+.learning-explanation > article > h3,
+.learning-explanation > article > .field-help {
+  overflow-wrap: anywhere;
+}
 .learning-page .pi-markdown {
   overflow-wrap: anywhere;
   line-height: 1.8;

@@ -331,6 +331,9 @@ export function LearningPage({
     ) &&
     total >= 1 &&
     total <= maximum;
+  const [countsTouched, setCountsTouched] = useState(false);
+  const countsErrorId = useId();
+  const countsError = countsTouched && !validCounts;
   const alive = useRef(true),
     refreshVersion = useRef(0),
     currentFilter = useRef(resolved),
@@ -947,7 +950,13 @@ export function LearningPage({
                   step={1}
                   required
                   value={choiceCount}
-                  onChange={(e) => setChoiceCount(e.target.value)}
+                  aria-invalid={countsError || undefined}
+                  aria-describedby={countsError ? countsErrorId : undefined}
+                  onBlur={() => setCountsTouched(true)}
+                  onChange={(e) => {
+                    setChoiceCount(e.target.value);
+                    setCountsTouched(true);
+                  }}
                 />
               </label>
               <label className="field-label">
@@ -962,10 +971,21 @@ export function LearningPage({
                   step={1}
                   required
                   value={shortCount}
-                  onChange={(e) => setShortCount(e.target.value)}
+                  aria-invalid={countsError || undefined}
+                  aria-describedby={countsError ? countsErrorId : undefined}
+                  onBlur={() => setCountsTouched(true)}
+                  onChange={(e) => {
+                    setShortCount(e.target.value);
+                    setCountsTouched(true);
+                  }}
                 />
               </label>
             </div>
+            {countsError && (
+              <p id={countsErrorId} className="error" role="alert">
+                两类题量须为非负整数，合计须在1至{maximum}题之间。
+              </p>
+            )}
             <p className="field-help">
               共{Number.isFinite(total) ? total : 0}题，上限{maximum}
               题。两类题可任意分配。先生成完整讲解，再每批最多8题准备练习；离开页面后继续生成，可在学习记录查看进度。
