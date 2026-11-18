@@ -351,6 +351,234 @@ test('exercise single-flight prevents rapid duplicate grading and ignores comple
   assert.deepEqual(updates, before);
   assert.equal(submitting.current, false);
 });
+test('resume handler preserves unknown UUID, rejects rapid duplicates and releases accepted operations', async () => {
+  const settings = {},
+    session = {},
+    operation = { current: null },
+    resuming = { current: false };
+  const requests = [];
+  let sequence = 0;
+  const values = {
+    settings,
+    session,
+    lesson: { id: 'lesson', status: 'error' },
+    selection: { current: 'lesson' },
+    resumeConfirmed: true,
+    busy: '',
+    resumeOperation: operation,
+    resuming,
+    alive: { current: true },
+    context: { current: { settings, session } },
+    crypto: { randomUUID: () => 'operation-' + ++sequence },
+    setBusy() {},
+    setError() {},
+    setLesson() {},
+    setResumeConfirmed() {},
+    setResumeEpoch() {},
+    setAPICache() {},
+    refresh() {},
+    api: (_s, _path, input) => {
+      const request = deferred();
+      requests.push({ ...request, input });
+      return request.promise;
+    },
+  };
+  const invoke = () => compile(named('LearningPage.tsx', 'resumeLesson'), values)();
+  const first = invoke();
+  await invoke();
+  assert.equal(requests.length, 1);
+  requests[0].reject(Error('unknown network outcome'));
+  await first;
+  assert.equal(operation.current.id, 'operation-1');
+  const retry = invoke();
+  assert.equal(requests[1].input.id, 'operation-1');
+  requests[1].resolve({ lesson: { id: 'lesson', status: 'generating' } });
+  await retry;
+  assert.equal(operation.current, null);
+  // The same course later fails in a different chapter; explicit confirmation starts a new operation.
+  const next = invoke();
+  await invoke();
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].input.id, 'operation-2');
+  requests[2].resolve({ lesson: { id: 'lesson', status: 'ready' } });
+  await next;
+  assert.equal(operation.current, null);
+  assert.equal(resuming.current, false);
+  assert.doesNotMatch(
+    source('LearningPage.tsx'),
+    /if \(e.target.checked\) resumeOperation.current = null/,
+  );
+});
+
+test('resume receipt cannot replace a different selected course or restore a closed detail', async () => {
+  for (const selected of ['other-lesson', '']) {
+    const settings = {},
+      session = {},
+      request = deferred();
+    const updates = [],
+      operation = { current: null },
+      selection = { current: 'lesson' };
+    const values = {
+      settings,
+      session,
+      lesson: { id: 'lesson', status: 'error' },
+      resumeConfirmed: true,
+      busy: '',
+      resumeOperation: operation,
+      resuming: { current: false },
+      alive: { current: true },
+      selection,
+      context: { current: { settings, session } },
+      crypto: { randomUUID: () => 'resume-operation' },
+      setBusy() {},
+      setError() {},
+      setAPICache() {},
+      refresh() {},
+      setLesson: (value) => updates.push(['lesson', value]),
+      setResumeConfirmed: (value) => updates.push(['confirm', value]),
+      setResumeEpoch: () => updates.push(['epoch']),
+      api: () => request.promise,
+    };
+    const pending = compile(named('LearningPage.tsx', 'resumeLesson'), values)();
+    selection.current = selected;
+    operation.current = null;
+    request.resolve({ lesson: { id: 'lesson', status: 'generating' } });
+    await pending;
+    assert.deepEqual(updates, [], 'late receipt must not change the current detail');
+  }
+});
+
+test('late resume failure stays with its original course', async () => {
+  const settings = {},
+    session = {},
+    request = deferred(),
+    errors = [];
+  const selection = { current: 'lesson' };
+  const values = {
+    settings,
+    session,
+    lesson: { id: 'lesson', status: 'error' },
+    resumeConfirmed: true,
+    busy: '',
+    resumeOperation: { current: null },
+    resuming: { current: false },
+    alive: { current: true },
+    selection,
+    context: { current: { settings, session } },
+    crypto: { randomUUID: () => 'resume-operation' },
+    setBusy() {},
+    setError: (value) => {
+      if (value) errors.push(value);
+    },
+    api: () => request.promise,
+  };
+  const pending = compile(named('LearningPage.tsx', 'resumeLesson'), values)();
+  selection.current = 'other-lesson';
+  request.reject(Error('old course failed'));
+  await pending;
+  assert.deepEqual(errors, []);
+});
+
+function materialFiles() {
+  const settings = {},
+    session = {},
+    state = { materials: [], error: '' };
+  const materialSelection = { current: [] };
+  const values = {
+    settings,
+    session,
+    materials: [],
+    materialSelection,
+    materialLimits: { maxMaterials: 16, maxFileBytes: 65536 },
+    materialSections: (items) => {
+      assert.ok(items.length <= 16, 'material count');
+      return [];
+    },
+    TextDecoder,
+    alive: { current: true },
+    context: { current: { settings, session } },
+    setMaterials: (items) => {
+      state.materials = items;
+    },
+    setMaterialError: (message) => {
+      state.error = message;
+    },
+  };
+  const add = (files) => compile(named('LearningPage.tsx', 'addFiles'), values)(files);
+  const file = (name) => {
+    const data = deferred();
+    return {
+      name,
+      size: 20,
+      arrayBuffer: () => data.promise,
+      resolve: () => data.resolve(new TextEncoder().encode(name).buffer),
+    };
+  };
+  return { values, state, add, file };
+}
+
+test('overlapping material file reads preserve both accepted selections', async () => {
+  const h = materialFiles(),
+    a = h.file('a.txt'),
+    b = h.file('b.txt');
+  const one = h.add([a]),
+    two = h.add([b]);
+  a.resolve();
+  await one;
+  b.resolve();
+  await two;
+  assert.deepEqual(
+    h.state.materials.map((m) => m.name),
+    ['a.txt', 'b.txt'],
+  );
+});
+
+test('a pending material read does not restore removed materials', async () => {
+  const h = materialFiles(),
+    old = { name: 'old.txt', content: 'old' };
+  h.values.materials = [old];
+  h.values.materialSelection.current = [old];
+  const file = h.file('new.txt'),
+    pending = h.add([file]);
+  h.values.materialSelection.current = [];
+  h.state.materials = [];
+  file.resolve();
+  await pending;
+  assert.deepEqual(
+    h.state.materials.map((m) => m.name),
+    ['new.txt'],
+  );
+});
+
+test('overlapping material reads revalidate the latest combined count before accepting', async () => {
+  const h = materialFiles();
+  const existing = Array.from({ length: 15 }, (_, i) => ({ name: `${i}.txt`, content: 'text' }));
+  h.values.materialSelection.current = existing;
+  h.state.materials = existing;
+  const a = h.file('a.txt'),
+    b = h.file('b.txt');
+  const first = h.add([a]),
+    second = h.add([b]);
+  a.resolve();
+  await first;
+  b.resolve();
+  await second;
+  assert.equal(h.state.materials.length, 16);
+  assert.equal(h.state.materials.at(-1).name, 'a.txt');
+  assert.match(h.state.error, /material count/);
+});
+
+test('material read failures after account changes do not overwrite the active error', async () => {
+  const h = materialFiles();
+  const data = deferred(),
+    pending = h.add([{ name: 'a.txt', size: 1, arrayBuffer: () => data.promise }]);
+  h.values.context.current = { settings: {}, session: {} };
+  h.state.error = 'active account error';
+  data.reject(Error('obsolete file error'));
+  await pending;
+  assert.equal(h.state.error, 'active account error');
+});
+
 test('completed grading after scope change does not start obsolete refresh', async () => {
   const h = learning();
   const run = h.grade('lesson', 'q', {}, 'id');

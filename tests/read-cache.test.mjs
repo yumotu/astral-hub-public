@@ -211,6 +211,42 @@ test('durable display cache survives reopening, omits sensitive endpoints and cl
   assert.equal(session.values.size, 0);
 });
 
+test('material-based lesson bodies stay in memory and never enter durable browser caches', async (t) => {
+  const { local, session } = useStorage(t);
+  clearResourceCaches();
+  t.after(clearResourceCaches);
+  const s = { url: 'https://one.example', token: 'synthetic-material-session', model: 'fake' };
+  await warmResourceCache(s);
+  const path = '/learning/lessons/11111111-1111-4111-8111-111111111111';
+  const value = {
+    lesson: {
+      sections: [{ content: 'PRIVATE_MATERIAL_ORIGINAL' }],
+      explanation: 'PRIVATE_MATERIAL_ORIGINAL',
+    },
+  };
+  setAPICache(s, path, value);
+  setAPICache(s, '/learning/lessons', { lessons: [{ id: 'summary-only' }] });
+  assert.deepEqual(peekAPI(s, path), value);
+  flushResourceCaches();
+  assert.doesNotMatch(
+    JSON.stringify([...local.values, ...session.values]),
+    /PRIVATE_MATERIAL_ORIGINAL/,
+  );
+  const key = [...local.values.keys()][0];
+  const stored = JSON.parse(local.getItem(key));
+  stored.records.push({ path, at: Date.now(), ttl: 60000, value });
+  local.setItem(key, JSON.stringify(stored));
+  const reloaded = await import('../web/src/resource-cache.ts?material-privacy-test');
+  t.after(reloaded.clearResourceCaches);
+  await reloaded.warmResourceCache(s);
+  assert.equal(reloaded.peekAPI(s, path), undefined);
+  reloaded.flushResourceCaches();
+  assert.doesNotMatch(
+    JSON.stringify([...local.values, ...session.values]),
+    /PRIVATE_MATERIAL_ORIGINAL/,
+  );
+});
+
 test('unified navigation caches invalidate after related writes and never cache authority reads', async (t) => {
   clearResourceCaches();
   t.after(clearResourceCaches);

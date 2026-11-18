@@ -12,6 +12,7 @@ async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'astral-app-features-'));
   let payload, release;
   const sent = [],
+    learningCalls = [],
     lesson = learningFixture();
   const bridgeResult = new Promise((r) => {
     release = r;
@@ -52,9 +53,28 @@ async function fixture(t) {
       fetch: async (_url, options) => {
         const p = JSON.parse(options.body),
           system = p.messages[0].content;
-        const value = system.includes('课程设计者')
-          ? { title: lesson.title, explanation: lesson.explanation }
-          : { questions: [lesson.questions[0]] };
+        learningCalls.push(p);
+        const input = JSON.parse(p.messages[1].content);
+        const value = input.section
+          ? {
+              title: '合成资料章节',
+              content: '学习目标与定义、原理、完整示例和小结。'.repeat(70),
+              summary: '本章掌握资料概念并通过完整示例核验原理与边界条件。',
+            }
+          : system.includes('出题规划者')
+            ? {
+                plan: [
+                  {
+                    slot: 1,
+                    kind: 'choice',
+                    objective: '根据合成资料情境判断定义适用条件',
+                    sectionId: 's1',
+                  },
+                ],
+              }
+            : system.includes('课程设计者')
+              ? { title: lesson.title, explanation: lesson.explanation }
+              : { questions: [lesson.questions[0]] };
         return Response.json({
           choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }],
         });
@@ -110,7 +130,20 @@ async function fixture(t) {
   let n = 0;
   const invoke = (name, input = {}) =>
     tool({ action: 'invoke', name, input, callId: 'test-' + ++n });
-  return { ...app, req, owner, other, tool, invoke, sent, task, conversation, release, payload };
+  return {
+    ...app,
+    req,
+    owner,
+    other,
+    tool,
+    invoke,
+    sent,
+    learningCalls,
+    task,
+    conversation,
+    release,
+    payload,
+  };
 }
 test('memory APIs and both chat-tool scopes share corrected data without leaking accounts or stale snapshots', async (t) => {
   const f = await fixture(t);
@@ -391,6 +424,184 @@ test('learning generation from ordinary chat persists real service results, enfo
     ).result.attempt.score,
     100,
   );
+});
+
+test('learning tools accept complete material input and reuse the scoped explicit resume service', async (t) => {
+  const f = await fixture(t);
+  const limits = await f.invoke('learning.settings');
+  assert.equal(limits.result.materialLimits.maxMaterials, 16);
+  const p = await f.invoke('learning.generate', {
+    topic: '合成资料',
+    level: 'beginner',
+    choiceCount: 1,
+    shortCount: 0,
+    materials: [{ name: 'lesson.md', content: '# 合成资料\n资料末尾关键点' }],
+  });
+  assert.equal(p.state, 'done');
+  let lesson;
+  for (let i = 0; i < 100; i++) {
+    lesson = (await f.req('/learning/lessons/' + p.result.lesson.id, undefined, f.owner.token))
+      .lesson;
+    if (lesson.status !== 'generating') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(lesson.status, 'ready', lesson.error);
+  assert.equal(lesson.coverage.completed, 1);
+  const catalog = await f.tool({ action: 'catalog' });
+  assert.equal(
+    catalog.functions.find((tool) => tool.name === 'learning.resume').confirmation,
+    true,
+  );
+  assert.equal(
+    (await f.invoke('learning.resume', { lessonId: lesson.id, confirm: false })).status,
+    400,
+  );
+  assert.equal(
+    (await f.invoke('learning.resume', { lessonId: lesson.id, confirm: true })).status,
+    400,
+  );
+  const checkpoint = JSON.parse(
+    f.store.db
+      .prepare('SELECT data FROM learning_lessons WHERE owner=? AND id=?')
+      .get(f.owner.user.id, lesson.id).data,
+  );
+  checkpoint.sections[0].status = 'pending';
+  delete checkpoint.sections[0].content;
+  delete checkpoint.sections[0].summary;
+  delete checkpoint.plan;
+  checkpoint.questions = [];
+  checkpoint.progress = {
+    stage: 'sections',
+    completed: 0,
+    total: 1,
+    completedSections: 0,
+    totalSections: 1,
+  };
+  f.store.db
+    .prepare("UPDATE learning_lessons SET status='error',error=?,data=? WHERE owner=? AND id=?")
+    .run('合成未知结果，不自动重放', JSON.stringify(checkpoint), f.owner.user.id, lesson.id);
+  const before = f.learningCalls.length;
+  const request = {
+    action: 'invoke',
+    name: 'learning.resume',
+    input: { lessonId: lesson.id },
+    callId: 'resume-frozen',
+  };
+  const prepared = await f.tool(request);
+  assert.equal(prepared.state, 'prepared');
+  assert.equal(prepared.preview.lessonId, lesson.id);
+  assert.match(prepared.preview.text, /计费/);
+  assert.equal(f.learningCalls.length, before);
+  assert.equal((await f.tool(request)).id, prepared.id);
+  assert.equal(
+    (await f.req('/app-functions/requests/' + prepared.id + '/confirm', {}, f.other.token)).status,
+    404,
+  );
+  assert.equal(
+    (
+      await f.req(
+        '/app-functions/requests/' + prepared.id + '/confirm',
+        {},
+        f.payload.appAccess.token,
+      )
+    ).status,
+    401,
+  );
+  assert.equal(f.learningCalls.length, before);
+  const confirmPath = '/app-functions/requests/' + prepared.id + '/confirm';
+  const confirmations = await Promise.all([
+    f.req(confirmPath, {}, f.owner.token),
+    f.req(confirmPath, {}, f.owner.token),
+  ]);
+  assert.ok(confirmations.some((r) => r.state === 'done'));
+  for (let i = 0; i < 100; i++) {
+    lesson = (await f.req('/learning/lessons/' + lesson.id, undefined, f.owner.token)).lesson;
+    if (lesson.status !== 'generating') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(lesson.status, 'ready', lesson.error);
+  assert.equal(f.learningCalls.length - before, 3, 'one chapter, one plan and one quiz only');
+  assert.equal((await f.req(confirmPath, {}, f.owner.token)).state, 'done');
+  assert.equal((await f.tool(request)).state, 'done');
+  assert.equal(f.learningCalls.length - before, 3);
+});
+
+test('learning resume previews cannot run after denial or a changed checkpoint', async (t) => {
+  const f = await fixture(t);
+  const id = randomUUID();
+  const input = {
+    id,
+    topic: '合成未完成课程',
+    level: 'beginner',
+    choiceCount: 1,
+    shortCount: 0,
+    materials: [{ name: 'lesson.txt', content: '合成内容' }],
+  };
+  const data = {
+    title: input.topic,
+    explanation: '',
+    questions: [],
+    sections: [
+      {
+        id: 's1',
+        title: '合成章节',
+        source: { materialId: 'm1', name: 'lesson.txt', start: 0, end: 4, unit: 'utf16' },
+        status: 'pending',
+      },
+    ],
+    progress: { stage: 'sections', completed: 0, total: 1, completedSections: 0, totalSections: 1 },
+  };
+  f.store.db
+    .prepare('INSERT INTO learning_lessons VALUES(?,?,?,?,?,?,?)')
+    .run(
+      f.owner.user.id,
+      id,
+      JSON.stringify(input),
+      'error',
+      JSON.stringify(data),
+      '合成失败',
+      new Date().toISOString(),
+    );
+  const denied = await f.invoke('learning.resume', { lessonId: id });
+  assert.equal(denied.state, 'prepared');
+  assert.equal(
+    (await f.req('/app-functions/requests/' + denied.id + '/deny', {}, f.owner.token)).state,
+    'denied',
+  );
+  assert.equal(
+    (await f.req('/app-functions/requests/' + denied.id + '/confirm', {}, f.owner.token)).state,
+    'denied',
+  );
+  assert.equal(f.learningCalls.length, 0);
+  const stale = await f.invoke('learning.resume', { lessonId: id });
+  assert.equal(stale.state, 'prepared');
+  data.sections[0].status = 'ready';
+  data.sections[0].content = '更新后的合成章节内容。'.repeat(70);
+  data.sections[0].summary = '这个检查点已被另一次操作更新，不可沿用旧的确认。';
+  data.progress.completedSections = 1;
+  f.store.db
+    .prepare('UPDATE learning_lessons SET data=? WHERE owner=? AND id=?')
+    .run(JSON.stringify(data), f.owner.user.id, id);
+  const changed = await f.req(
+    '/app-functions/requests/' + stale.id + '/confirm',
+    {},
+    f.owner.token,
+  );
+  assert.equal(changed.status, 409);
+  assert.match(changed.error, /变化|更新/);
+  assert.equal(f.learningCalls.length, 0);
+  f.store.db
+    .prepare("UPDATE learning_lessons SET status='generating' WHERE owner=? AND id=?")
+    .run(f.owner.user.id, id);
+  assert.equal((await f.invoke('learning.resume', { lessonId: id })).status, 409);
+  assert.equal((await f.invoke('learning.resume', { lessonId: randomUUID() })).status, 404);
+  assert.equal(
+    f.store.db
+      .prepare('SELECT status FROM learning_lessons WHERE owner=? AND id=?')
+      .get(f.owner.user.id, id).status,
+    'generating',
+  );
+  assert.equal(f.learningCalls.length, 0);
 });
 
 test('temporary side-chat retention tool reuses scoped preferences without opening or replaying a helper', async (t) => {

@@ -1,11 +1,12 @@
 import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { fail } from './accounts.mjs';
 import { mailHistorySchema } from '../shared/mail-history.mjs';
 import { mailOperationSchema } from '../shared/mail-actions.mjs';
 import { scheduleActionSchema } from './schedule-actions.mjs';
 import { memoryFields, memoryWrite, memoryRevision } from './memories.mjs';
-import { questionEditSchema } from './learning.mjs';
+import { questionEditSchema, learningMaterialsSchema } from './learning.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
 import { dshExtensionChatChange } from '../shared/dsh-extensions.mjs';
 import { assistanceSourceSchema } from './assistance-context.mjs';
@@ -451,9 +452,49 @@ export function registerAppFeatures(
         level: z.enum(['beginner', 'intermediate', 'advanced']).default('intermediate'),
         choiceCount: z.number().int().min(0).max(200),
         shortCount: z.number().int().min(0).max(200),
+        materials: learningMaterialsSchema.optional(),
       })
       .strict(),
     execute: (ctx, p, id) => study(ctx, '/api/learning/lessons', { ...p, id, background: true }),
+  });
+  const resumeCheckpoint = (lesson) =>
+    createHash('sha256').update(JSON.stringify(lesson)).digest('hex');
+  const resumableLesson = async (ctx, lessonId) => {
+    const { lesson } = await study(ctx, '/api/learning/lessons/' + lessonId);
+    if (lesson.status !== 'error' || lesson.resumable !== true)
+      throw fail(409, '仅可恢复支持分章继续的未完成课程，请重新读取课程状态。');
+    return lesson;
+  };
+  engine.register({
+    name: 'learning.resume',
+    description:
+      '为未完成课程创建精确恢复预览，必须等待界面用户确认可能重新计费后才能继续；工具不能自行确认。成功章节不会重算。未知结果查询原调用和课程，不自动重放。',
+    schema: z.object({ lessonId: uuid }).strict(),
+    prepare: async (ctx, p) => {
+      const lesson = await resumableLesson(ctx, p.lessonId);
+      return {
+        preview: {
+          title: '继续生成学习课程',
+          lessonId: lesson.id,
+          text:
+            `${lesson.title}\n已保存${lesson.coverage.completed}/${lesson.coverage.chunks}章、` +
+            `${lesson.progress.completed}/${lesson.progress.total}道题。` +
+            '确认后继续未完成的部分，可能重新计费；已保存的成功章节不会重算。',
+        },
+        private: { lessonId: p.lessonId, checkpoint: resumeCheckpoint(lesson) },
+      };
+    },
+    validate: async (ctx, p) => {
+      const lesson = await resumableLesson(ctx, p.lessonId);
+      if (resumeCheckpoint(lesson) !== p.checkpoint)
+        throw fail(409, '课程或保存进度已变化，请重新预览后确认。');
+    },
+    commit: (ctx, p, id) =>
+      study(ctx, '/api/learning/lessons/' + p.lessonId + '/resume', {
+        id,
+        confirm: true,
+        background: true,
+      }),
   });
   engine.register({
     name: 'learning.list',
