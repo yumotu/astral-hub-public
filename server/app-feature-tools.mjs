@@ -7,6 +7,7 @@ import { mailOperationSchema } from '../shared/mail-actions.mjs';
 import { scheduleActionSchema } from './schedule-actions.mjs';
 import { memoryFields, memoryWrite, memoryRevision } from './memories.mjs';
 import { questionEditSchema, learningMaterialsSchema } from './learning.mjs';
+import { materialLimits, materialSections } from '../shared/learning-materials.mjs';
 import { dshReadSchema } from './dsh-files.mjs';
 import { dshExtensionChatChange } from '../shared/dsh-extensions.mjs';
 import { assistanceSourceSchema } from './assistance-context.mjs';
@@ -445,7 +446,7 @@ export function registerAppFeatures(
   engine.register({
     name: 'learning.generate',
     description:
-      '根据知识点生成详细讲解、选择题及问答题并保存到学习页。直接生成无需确认。未指定题量时默认5道选择题、2道问答题；显式题量合计必须至少1题且不超过learning.settings上限。返回generating时表示生成中，未完成，按lesson.id调用learning.read查询进度，不重复新建。',
+      '根据知识点生成详细讲解、选择题及问答题并保存到学习页。topic只写简短主题；用户明确选作学习素材的粘贴原文放materials，不压缩进topic，也不自动收集全部聊天。当前Pi服务器对话的TXT/Markdown附件可放attachments:[{conversationId,fileId}]，先assistant.attachments查询精确ID；不接受裸ID或其他账号/对话附件。服务端完整读取UTF-8原件，资料与附件共享learning.settings限额，超额/空内容/不支持格式整体拒绝，不使用聊天截断预览。直接生成无需确认。未指定题量时默认5道选择题、2道问答题；显式题量合计必须至少1题且不超过learning.settings上限。返回generating时表示生成中，未完成，按lesson.id调用learning.read查询进度，不重复新建。',
     schema: z
       .object({
         topic: z.string().trim().min(2).max(2000),
@@ -453,11 +454,50 @@ export function registerAppFeatures(
         choiceCount: z.number().int().min(0).max(200).default(5),
         shortCount: z.number().int().min(0).max(200).default(2),
         materials: learningMaterialsSchema.optional(),
+        attachments: z
+          .array(z.object({ conversationId: uuid, fileId: uuid }).strict())
+          .min(1)
+          .max(materialLimits.maxMaterials)
+          .optional(),
       })
       .strict(),
-    execute: (ctx, p, id) => {
+    execute: async (ctx, p, id) => {
       if (p.choiceCount + p.shortCount < 1) throw fail(400, '选择题与问答题合计至少1题。');
-      return study(ctx, '/api/learning/lessons', { ...p, id, background: true });
+      const { attachments, ...input } = p;
+      if (attachments) {
+        if (ctx.origin !== 'pi' || !ctx.conversation)
+          throw fail(400, '附件学习资料目前仅支持当前Pi服务器对话的TXT/Markdown附件。');
+        const materials = [...(p.materials || [])];
+        if (materials.length + attachments.length > materialLimits.maxMaterials)
+          throw fail(400, '粘贴资料与附件合计最多16份，不会只取前16份。');
+        for (const reference of attachments) {
+          if (reference.conversationId !== ctx.conversation)
+            throw fail(403, '学习附件必须属于当前对话，不能引用其他对话。');
+          const [file] = community.chatFiles.selected(ctx.owner, ctx.conversation, [
+            reference.fileId,
+          ]);
+          if (!/\.(txt|md|markdown)$/i.test(file.name))
+            throw fail(400, '附件学习资料仅支持完整UTF-8 TXT/Markdown，暂不支持PDF/DOCX等类型。');
+          if (file.bytes > materialLimits.maxFileBytes)
+            throw fail(400, '单份学习附件最多64 KiB，不会截断读取。');
+          const bytes = await community.chatFiles.readBytes(
+            ctx.owner,
+            ctx.conversation,
+            reference.fileId,
+            materialLimits.maxFileBytes,
+          );
+          let content;
+          try {
+            content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          } catch {
+            throw fail(400, '学习附件不是有效UTF-8文本，请转换编码后重试。');
+          }
+          materials.push({ name: file.name, content });
+        }
+        materialSections(materials);
+        input.materials = materials;
+      }
+      return study(ctx, '/api/learning/lessons', { ...input, id, background: true });
     },
   });
   const resumeCheckpoint = (lesson) =>
