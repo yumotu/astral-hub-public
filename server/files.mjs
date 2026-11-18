@@ -217,11 +217,21 @@ export function createChatFiles(db, { root, piRoot = root, removeFile = rm }) {
     },
     async removeConversation(owner, conversation) {
       if (delivered(owner, conversation)) throw fail(409, '电脑对话附件随电脑历史保留。');
-      await rm(join(root, prefix(owner, conversation)), { recursive: true, force: true });
-      db.prepare('DELETE FROM pi_files WHERE owner=? AND conversation_id=?').run(
-        owner,
-        conversation,
-      );
+      await removeFile(join(root, prefix(owner, conversation)), { recursive: true, force: true });
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare(
+          'DELETE FROM pi_file_deletions WHERE owner=? AND file_id IN (SELECT id FROM pi_files WHERE owner=? AND conversation_id=?)',
+        ).run(owner, owner, conversation);
+        db.prepare('DELETE FROM pi_files WHERE owner=? AND conversation_id=?').run(
+          owner,
+          conversation,
+        );
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
     async remove(owner, conversation, id) {
       db.exec('BEGIN IMMEDIATE');

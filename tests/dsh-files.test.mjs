@@ -258,6 +258,60 @@ test('failed filesystem deletion remains blocked for binding but permits explici
   assert.equal(f.db.prepare('SELECT count(*) n FROM pi_file_deletions').get().n, 0);
 });
 
+test('deleting a conversation cleans its failed attachment deletion intents without touching other scopes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-')), db = new DatabaseSync(':memory:');
+  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+  db.exec('CREATE TABLE pi_turns(owner TEXT,conversation_id TEXT,attachments TEXT,artifacts TEXT);');
+  const files = createChatFiles(db, { root }), scope = randomUUID(), otherScope = randomUUID();
+  const target = await files.save('alice', scope, 'failed.txt', Buffer.from('target'));
+  const sibling = await files.save('alice', scope, 'sibling.txt', Buffer.from('sibling'));
+  const otherConversation = await files.save('alice', otherScope, 'other.txt', Buffer.from('other'));
+  const otherOwner = await files.save('bob', scope, 'bob.txt', Buffer.from('bob'));
+  const broken = createChatFiles(db, { root, removeFile: async () => { throw Error('synthetic disk error'); } });
+  await assert.rejects(broken.remove('alice', scope, target.id), { status: 409 });
+  for (const [owner, file] of [['alice', sibling], ['alice', otherConversation], ['bob', otherOwner]])
+    db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run(owner, file.id);
+  await files.removeConversation('alice', scope);
+  assert.equal(files.list('alice', scope).length, 0);
+  assert.deepEqual(db.prepare('SELECT owner,file_id FROM pi_file_deletions ORDER BY owner').all().map(row => ({ ...row })), [
+    { owner: 'alice', file_id: otherConversation.id }, { owner: 'bob', file_id: otherOwner.id },
+  ]);
+  assert.equal(files.list('alice', otherScope).length, 1);
+  assert.equal(files.list('bob', scope).length, 1);
+  await assert.rejects(readFile(join(root, hash('alice'), scope, target.id)), { code: 'ENOENT' });
+  assert.equal((await readFile(join(root, hash('alice'), otherScope, otherConversation.id))).toString(), 'other');
+  assert.equal((await readFile(join(root, hash('bob'), scope, otherOwner.id))).toString(), 'bob');
+});
+
+test('failed conversation directory deletion preserves attachment metadata and deletion intents', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-fail-')), db = new DatabaseSync(':memory:');
+  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+  const files = createChatFiles(db, { root }), scope = randomUUID();
+  const file = await files.save('alice', scope, 'retain.txt', Buffer.from('retain'));
+  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run('alice', file.id);
+  const broken = createChatFiles(db, { root, removeFile: async () => { throw Error('synthetic directory error'); } });
+  await assert.rejects(broken.removeConversation('alice', scope), /synthetic directory error/);
+  assert.equal(files.list('alice', scope).length, 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions WHERE owner=? AND file_id=?').get('alice', file.id).n, 1);
+  assert.equal((await readFile(join(root, hash('alice'), scope, file.id))).toString(), 'retain');
+});
+
+test('conversation attachment metadata and deletion intents are cleaned in one transaction', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-atomic-')), db = new DatabaseSync(':memory:');
+  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+  const files = createChatFiles(db, { root }), scope = randomUUID();
+  const file = await files.save('alice', scope, 'atomic.txt', Buffer.from('atomic'));
+  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run('alice', file.id);
+  db.exec("CREATE TRIGGER keep_cleanup BEFORE DELETE ON pi_files BEGIN SELECT RAISE(ABORT,'synthetic metadata error'); END;");
+  await assert.rejects(files.removeConversation('alice', scope), /synthetic metadata error/);
+  assert.equal(files.list('alice', scope).length, 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions WHERE owner=? AND file_id=?').get('alice', file.id).n, 1);
+  db.exec('DROP TRIGGER keep_cleanup');
+  await files.removeConversation('alice', scope);
+  assert.equal(files.list('alice', scope).length, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions').get().n, 0);
+});
+
 test('DSH previews do not consume the independent upload or delete rate budget', async t => {
   const f = await fixture(t);
   for (let i=0;i<25;i++) assert.equal((await f.req('/files')).status,200);
