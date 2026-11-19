@@ -274,7 +274,7 @@ export function createDshRemote(
     const { client, row, peer } = await connection(owner, id);
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(), 20000);
-    let source;
+    let source, readError;
     const aborted = new Promise((_, reject) => {
       controller.signal.addEventListener(
         'abort',
@@ -283,15 +283,28 @@ export function createDshRemote(
       );
     });
     try {
-      source = await Promise.race([client.workspaces(controller.signal), aborted]);
-      const iterator = source[Symbol.asyncIterator]();
-      const first = await Promise.race([iterator.next(), aborted]);
-      if (first.done || first.value?.type !== 'baseline') throw fail(502, 'DSH 工作区快照无效。');
-      const spaces = z.array(workspace).max(2000).parse(first.value.value?.items);
+      const reads = await Promise.allSettled([
+        (async () => {
+          source = await Promise.race([client.workspaces(controller.signal), aborted]);
+          const iterator = source[Symbol.asyncIterator]();
+          const first = await Promise.race([iterator.next(), aborted]);
+          if (first.done || first.value?.type !== 'baseline') throw fail(502, 'DSH 工作区快照无效。');
+          return z.array(workspace).max(2000).parse(first.value.value?.items);
+        })(),
+        (async () => {
+          const data = await Promise.race([client.sessions(controller.signal), aborted]);
+          return z.array(session).max(10000).parse(data.items);
+        })(),
+      ].map((read) => read.catch((error) => {
+        readError ??= error;
+        controller.abort();
+        throw error;
+      })));
+      if (readError) throw readError;
+      const spaces = reads[0].value,
+        sessions = reads[1].value;
       if (new Set(spaces.map((row) => row.workspaceId)).size !== spaces.length)
         throw fail(502, 'DSH 工作区编号重复。');
-      const data = await client.sessions(controller.signal);
-      const sessions = z.array(session).max(10000).parse(data.items);
       if (new Set(sessions.map((row) => row.sessionId)).size !== sessions.length)
         throw fail(502, 'DSH 会话编号重复。');
       live(owner, id, row.revision);
