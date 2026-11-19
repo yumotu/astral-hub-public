@@ -266,9 +266,16 @@ export function ConversationDialog({
         if (event.key === 'Tab') {
           const elements = [
             ...content.current!.querySelectorAll<HTMLElement>(
-              'button:not(:disabled),input:not(:disabled),select:not(:disabled)',
+              'button,input,select,textarea,a[href],summary,[tabindex]',
             ),
-          ];
+          ].filter(
+            (element) =>
+              element.tabIndex >= 0 &&
+              !element.matches(':disabled') &&
+              !element.closest('[hidden],[inert]') &&
+              element.getClientRects().length > 0 &&
+              getComputedStyle(element).visibility === 'visible',
+          );
           const first = elements[0],
             last = elements.at(-1);
           if (event.shiftKey && document.activeElement === first) {

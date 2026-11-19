@@ -178,6 +178,8 @@ export default function FilePreview({
   conversation,
   close,
   download,
+  downloadBusy = false,
+  downloadError = '',
   blob,
 }: {
   file: ChatFile;
@@ -185,6 +187,8 @@ export default function FilePreview({
   conversation: string;
   close: () => void;
   download: () => Promise<void>;
+  downloadBusy?: boolean;
+  downloadError?: string;
   blob?: Blob;
 }) {
   const [kind, setKind] = useState(''),
@@ -245,11 +249,16 @@ export default function FilePreview({
           {Math.max(1, Math.ceil(file.bytes / 1024))} KiB
           {kind === 'docx' ? ' · Word 文本预览' : kind === 'xlsx' ? ' · Excel 工作表预览' : ''}
         </span>
-        <button className="secondary" onClick={() => void download()}>
-          <Download size={15} />
-          下载原文件
+        <button className="secondary" disabled={downloadBusy} onClick={() => void download()}>
+          {downloadBusy ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
+          {downloadBusy ? '正在下载…' : '下载原文件'}
         </button>
       </div>
+      {downloadError && (
+        <p className="error" role="alert">
+          {downloadError}
+        </p>
+      )}
       <div className="pi-file-preview-body">
         {busy && (
           <p className="pi-file-preview-loading" role="status">

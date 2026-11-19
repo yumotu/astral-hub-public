@@ -804,7 +804,20 @@ export function createLearning(db, { complete }) {
                 'SELECT * FROM learning_wrong WHERE owner=? AND lesson_id=? AND question_id=?',
               )
               .get(owner, p.lessonId, p.questionId);
-            if (wrong || !result.passed)
+            // Submission order, not completion time or millisecond timestamps, owns current review state.
+            const latest = db
+              .prepare(
+                'SELECT id FROM learning_attempts WHERE owner=? AND lesson_id=? AND question_id=? ORDER BY rowid DESC LIMIT 1',
+              )
+              .get(owner, p.lessonId, p.questionId);
+            const current = storedLesson(owner, p.lessonId).data.questions[
+              Number(p.questionId.slice(1)) - 1
+            ];
+            if (
+              latest.id === p.id &&
+              (current.revision || 1) === result.questionRevision &&
+              (wrong || !result.passed)
+            )
               db.prepare(
                 `INSERT INTO learning_wrong VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner,lesson_id,question_id) DO UPDATE SET attempt_id=excluded.attempt_id,wrong_count=excluded.wrong_count,review_count=excluded.review_count,resolved=excluded.resolved,updated_at=excluded.updated_at`,
               ).run(

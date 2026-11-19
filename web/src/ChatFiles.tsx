@@ -32,7 +32,7 @@ export { fetchChatFile, uploadChatFile } from './chat-file-transport';
 export type { ChatFile } from './chat-file-transport';
 const FilePreview = lazy(() => import('./FilePreview'));
 class PreviewBoundary extends Component<
-  { children: ReactNode; close: () => void; download: () => void },
+  { children: ReactNode; close: () => void; download: () => void; downloadBusy: boolean; downloadError: string },
   { failed: boolean }
 > {
   state = { failed: false };
@@ -44,9 +44,10 @@ class PreviewBoundary extends Component<
       return (
         <ConversationDialog title="无法打开预览" close={this.props.close}>
           <p>预览组件暂时无法加载。请检查连接，或刷新页面后重新打开。</p>
-          <button className="secondary" onClick={this.props.download}>
-            下载原文件
+          <button className="secondary" disabled={this.props.downloadBusy} onClick={this.props.download}>
+            {this.props.downloadBusy ? '正在下载…' : '下载原文件'}
           </button>
+          {this.props.downloadError && <p className="error" role="alert">{this.props.downloadError}</p>}
         </ConversationDialog>
       );
     return this.props.children;
@@ -167,7 +168,12 @@ export function ChatFiles({
   const [error, setError] = useState(''),
     [busy, setBusy] = useState('');
   const [preview, setPreview] = useState<ChatFile | null>(null);
+  const downloading = useRef(false);
+  const [downloadError, setDownloadError] = useState<{ id: string; message: string } | null>(null);
   async function download(file: ChatFile) {
+    if (downloading.current) return;
+    downloading.current = true;
+    setDownloadError(null);
     setBusy(file.id);
     setError('');
     try {
@@ -179,7 +185,9 @@ export function ChatFiles({
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (e) {
       setError((e as Error).message);
+      setDownloadError({ id: file.id, message: (e as Error).message });
     } finally {
+      downloading.current = false;
       setBusy('');
     }
   }
@@ -230,6 +238,8 @@ export function ChatFiles({
           key={`${conversation}:${preview.id}`}
           close={() => setPreview(null)}
           download={() => void download(preview)}
+          downloadBusy={!!busy}
+          downloadError={downloadError?.id === preview.id ? downloadError.message : ''}
         >
           <Suspense fallback={<span role="status">正在打开预览…</span>}>
             <FilePreview
@@ -239,6 +249,8 @@ export function ChatFiles({
               conversation={conversation}
               close={() => setPreview(null)}
               download={() => download(preview)}
+              downloadBusy={!!busy}
+              downloadError={downloadError?.id === preview.id ? downloadError.message : ''}
             />
           </Suspense>
         </PreviewBoundary>
