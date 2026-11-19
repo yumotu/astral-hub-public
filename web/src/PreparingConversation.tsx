@@ -329,14 +329,34 @@ export function PreparingConversation({
                     {prep.error}
                   </p>
                 )}
-                {!waiting && prep.state !== 'handed' && prep.state !== 'ready' && (
-                  <button
-                    className="secondary"
-                    onClick={() => void model.retryPreparation(prep.id)}
-                  >
-                    核对并继续连接
-                  </button>
+                {prep.recoveryError && (
+                  <>
+                    <p className="error" role="alert">
+                      {prep.recoveryError}
+                    </p>
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void model
+                          .refresh()
+                          .catch((e) => setError('对话目录加载失败：' + (e as Error).message))
+                      }
+                    >
+                      重新读取恢复状态
+                    </button>
+                  </>
                 )}
+                {!prep.recoveryError &&
+                  !waiting &&
+                  prep.state !== 'handed' &&
+                  prep.state !== 'ready' && (
+                    <button
+                      className="secondary"
+                      onClick={() => void model.retryPreparation(prep.id)}
+                    >
+                      核对并继续连接
+                    </button>
+                  )}
                 {prep.state === 'ready' && prep.resumeRequired && (
                   <button
                     className="secondary"

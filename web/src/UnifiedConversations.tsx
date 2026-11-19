@@ -111,6 +111,7 @@ export type ConversationPreparation = {
   createdAt: string;
   state: 'creating' | 'ready' | 'unknown' | 'failed' | 'handed';
   error: string;
+  recoveryError?: string;
   native?: Selection;
   resumeRequired?: boolean;
   message?: { id: string; text: string };
@@ -256,12 +257,19 @@ export function UnifiedConversationsProvider({
       /* Keep navigation responsive; durable intent is still in the journal. */
     }
   }
+  const preparationRecoveryErrors = useRef(new Map<string, string>());
   function updatePreparations() {
-    setPreparations([...preparationJournal.current.list()] as ConversationPreparation[]);
+    setPreparations(
+      (preparationJournal.current.list() as ConversationPreparation[]).map((value) => ({
+        ...value,
+        recoveryError: preparationRecoveryErrors.current.get(value.id),
+      })),
+    );
   }
   async function resolvePreparation(id: string, ref: Selection) {
     await preparationJournal.current.resolve(id, ref);
     if (!preparationAlive.current) return;
+    preparationRecoveryErrors.current.delete(id);
     updatePreparations();
     if (preparationSelection.current === id) {
       setSelected(ref);
@@ -412,8 +420,21 @@ export function UnifiedConversationsProvider({
     setConversations(result.conversations);
     for (const pending of preparationJournal.current.list() as ConversationPreparation[]) {
       const found = result.conversations.find((c) => c.id === pending.id);
-      if (found && !['ready', 'handed'].includes(pending.state))
-        await resolvePreparation(pending.id, found.active);
+      if (found && !['ready', 'handed'].includes(pending.state)) {
+        try {
+          await resolvePreparation(pending.id, found.active);
+        } catch (e) {
+          if (preparationAlive.current) {
+            preparationRecoveryErrors.current.set(
+              pending.id,
+              '此条准备记录恢复失败，内容已保留：' + (e as Error).message,
+            );
+            updatePreparations();
+          }
+        }
+      }
+      if (generation.current !== born || historyRead.current !== read || mutationLock.current)
+        return;
     }
     setSelected((old) => {
       const next = activeUnifiedSelection(result.conversations, old);
@@ -511,7 +532,8 @@ export function UnifiedConversationsProvider({
       try {
         await refresh();
       } catch (e) {
-        if (live && generation.current === born) setError((e as Error).message);
+        if (live && generation.current === born)
+          setError('对话目录加载失败：' + (e as Error).message);
       } finally {
         loading = false;
       }
