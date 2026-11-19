@@ -331,6 +331,7 @@ test('exercise single-flight prevents rapid duplicate grading and ignores comple
     mounted,
     attempt,
     answer: { choiceIndex: 0 },
+    question: { revision: 1 },
     draftKey: 'test',
     choice: 0,
     text: '',
@@ -607,6 +608,9 @@ function detail() {
     detailVersion: { current: 0 },
     peekAPI: () => undefined,
     invalidateAPI() {},
+    setEditableScope: (v) => {
+      state.EditableScope = v;
+    },
     setDetailLoading: (v) => {
       state.DetailLoading = v;
     },
