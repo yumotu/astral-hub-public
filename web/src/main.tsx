@@ -367,7 +367,7 @@ function Workspace({
     saveConnection(s);
     setNotice('本机设置已保存，AI 密钥不会同步。');
   }
-  function navigate(p: Page) {
+  // A lesson opened from a delivery card is a one-time navigation intent.\n  // Clear it when the user leaves Learning so ordinary navigation does not reopen an old lesson.\n  useEffect(() => {\n    if (page !== 'learning') setLessonTarget('');\n  }, [page]);\n  function navigate(p: Page) {
     if (p === 'mail') setMailNotice(null);
     if (p === 'social') setContactNotice(null);
     if (p !== page) pageHistory.current = [...pageHistory.current.slice(-19), page];

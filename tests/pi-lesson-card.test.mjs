@@ -190,3 +190,11 @@ test('ready entry wires exact id and overrides prior wrong tab', () => {
   assert.match(learning, /initialLessonId \|\| saved.selected/);
   assert.match(learning, /!initialLessonId && saved.tab/);
 });
+
+test('clears the lesson target when leaving Learning', () => {
+  const main = fs.readFileSync(new URL('../web/src/main.tsx', import.meta.url), 'utf8');
+  assert.match(
+    main,
+    /useEffect\(\(\) => \{\s*if \(page !== 'learning'\) setLessonTarget\(''\);\s*\}, \[page\]\);/,
+  );
+});
