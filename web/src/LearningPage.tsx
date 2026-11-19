@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { Component, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { BookOpen, CheckCircle2, GraduationCap, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api, dateLabel } from './data';
 import { serverIdentity } from './session';
@@ -16,6 +16,274 @@ type Question = {
   options?: string[];
   revision?: number;
 };
+type EditableQuestion = Question & {
+  revision: number;
+  slot?: number;
+  correctIndex?: number;
+  explanation: string;
+  referenceAnswer?: string;
+  rubric?: string[];
+};
+
+function QuestionEditor({
+  settings,
+  lessonId,
+  questionId,
+  saved,
+}: {
+  settings: Settings;
+  lessonId: string;
+  questionId: string;
+  saved: (question: Question) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState<EditableQuestion | null>(null);
+  const [versions, setVersions] = useState<EditableQuestion[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const live = useRef(true),
+    lock = useRef(false);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const path = `/learning/lessons/${lessonId}/questions/${questionId}`;
+  async function read() {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const [current, history] = await Promise.all([
+        api<{ question: EditableQuestion }>(settings, path, undefined, undefined, false, {
+          fresh: true,
+        }),
+        api<{ versions: EditableQuestion[] }>(
+          settings,
+          path + '/history',
+          undefined,
+          undefined,
+          false,
+          { fresh: true },
+        ),
+      ]);
+      if (live.current) {
+        setQuestion(current.question);
+        setVersions(history.versions);
+        setOpen(true);
+        setNotice('');
+      }
+    } catch (e) {
+      if (live.current) setError((e as Error).message);
+    } finally {
+      lock.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
+  async function save() {
+    if (!question || lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    const { id, revision, ...content } = question;
+    try {
+      const result = await api<{ question: EditableQuestion }>(
+        settings,
+        path,
+        { revision, question: content },
+        'PATCH',
+      );
+      if (live.current) {
+        setQuestion(result.question);
+        setVersions((old) => [result.question, ...old]);
+        setNotice('已保存。旧答题记录不变；未提交的作答草稿保留，请核对新版题目后再提交。');
+        saved(result.question);
+      }
+    } catch (e) {
+      if (live.current)
+        setError(
+          (e as Error & { status?: number }).status === 409
+            ? '题目已被更新，本次未覆盖，编辑内容已保留。请复制需保留的内容，再点“重新读取最新版”后合并修改。'
+            : (e as Error).message + ' 编辑内容已保留，未自动重试。',
+        );
+    } finally {
+      lock.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
+  return (
+    <section className="learning-question-editor" aria-label="人工修题">
+      <button
+        type="button"
+        className="text-link"
+        disabled={busy}
+        onClick={() => (open ? setOpen(false) : question ? setOpen(true) : void read())}
+      >
+        {open ? '收起修题' : '人工修题'}
+      </button>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {open && question && (
+        <>
+          <p className="field-help">
+            正在编辑第{question.revision}
+            版。不重新生成，不改变历史成绩。作答草稿会保留，选项变化后请重新核对。
+          </p>
+          <details>
+            <summary>读取旧版题目（最近100版，只读）</summary>
+            {versions.map((version) => (
+              <details key={version.revision}>
+                <summary>第{version.revision}版</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                  {JSON.stringify(version, null, 2)}
+                </pre>
+              </details>
+            ))}
+          </details>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            <fieldset disabled={busy}>
+              <legend>修订题目</legend>
+              <label className="field-label">
+                题干
+                <textarea
+                  className="standard-input"
+                  required
+                  maxLength={2000}
+                  value={question.prompt}
+                  onChange={(e) => setQuestion({ ...question, prompt: e.target.value })}
+                />
+              </label>
+              {question.kind === 'choice' ? (
+                <>
+                  <label className="field-label">
+                    选项数量
+                    <select
+                      className="standard-input"
+                      value={question.options?.length}
+                      onChange={(e) => {
+                        const length = Number(e.target.value);
+                        setQuestion({
+                          ...question,
+                          options: Array.from({ length }, (_, i) => question.options?.[i] || ''),
+                          correctIndex: Math.min(question.correctIndex || 0, length - 1),
+                        });
+                      }}
+                    >
+                      {[2, 3, 4, 5, 6].map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {question.options?.map((option, i) => (
+                    <label className="field-label" key={i}>
+                      选项{String.fromCharCode(65 + i)}
+                      <textarea
+                        className="standard-input"
+                        required
+                        maxLength={1000}
+                        value={option}
+                        onChange={(e) =>
+                          setQuestion({
+                            ...question,
+                            options: question.options!.map((v, index) =>
+                              index === i ? e.target.value : v,
+                            ),
+                          })
+                        }
+                      />
+                    </label>
+                  ))}
+                  <label className="field-label">
+                    正确选项
+                    <select
+                      className="standard-input"
+                      value={question.correctIndex}
+                      onChange={(e) =>
+                        setQuestion({ ...question, correctIndex: Number(e.target.value) })
+                      }
+                    >
+                      {question.options?.map((_, i) => (
+                        <option key={i} value={i}>
+                          {String.fromCharCode(65 + i)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label className="field-label">
+                    参考答案
+                    <textarea
+                      className="standard-input"
+                      required
+                      maxLength={5000}
+                      value={question.referenceAnswer || ''}
+                      onChange={(e) =>
+                        setQuestion({ ...question, referenceAnswer: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field-label">
+                    评分要点（每行一条，1至8条）
+                    <textarea
+                      className="standard-input"
+                      required
+                      value={question.rubric?.join('\n') || ''}
+                      onChange={(e) =>
+                        setQuestion({ ...question, rubric: e.target.value.split('\n') })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <label className="field-label">
+                解析
+                <textarea
+                  className="standard-input"
+                  required
+                  maxLength={2000}
+                  value={question.explanation}
+                  onChange={(e) => setQuestion({ ...question, explanation: e.target.value })}
+                />
+              </label>
+              <div className="action-row">
+                <button className="primary" type="submit">
+                  {busy ? '正在保存' : '保存修订'}
+                </button>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm('重新读取会替换当前修题内容（不会清空作答草稿），继续吗？'))
+                      void read();
+                  }}
+                >
+                  重新读取最新版
+                </button>
+              </div>
+            </fieldset>
+          </form>
+        </>
+      )}
+    </section>
+  );
+}
+
 type Answer = { choiceIndex: number } | { text: string };
 type Attempt = {
   id: string;
@@ -74,16 +342,57 @@ type Wrong = {
   updatedAt: string;
 };
 
+class ExerciseMarkdownBoundary extends Component<
+  { text: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? (
+      <div className="learning-math-fallback">{this.props.text}</div>
+    ) : (
+      this.props.children
+    );
+  }
+}
+
+function ExerciseMarkdown({ text }: { text: string }) {
+  return (
+    <div className="learning-exercise-markdown">
+      <ExerciseMarkdownBoundary key={text} text={text}>
+        <PiMarkdown text={text} />
+      </ExerciseMarkdownBoundary>
+    </div>
+  );
+}
+
+function optionDescription(text: string) {
+  return (
+    text
+      .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1) / ($2)')
+      .replace(/\\(?:begin|end)\{[^}]*\}/g, ' ')
+      .replace(/\\([a-zA-Z]+)/g, ' $1 ')
+      .replace(/\\[()[\]]|[$`*_{}]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim() || '数学表达式'
+  );
+}
+
 function Exercise({
   question,
   latest,
   onGrade,
   draftKey,
+  editor,
 }: {
   question: Question;
   latest?: Attempt;
   onGrade: (answer: Answer, id: string) => Promise<Attempt>;
   draftKey: string;
+  editor?: ReactNode;
 }) {
   const [draft] = useState(() => {
     try {
@@ -106,7 +415,10 @@ function Exercise({
     } catch {}
   }, [draftKey, choice, text]);
   const answer: Answer = question.kind === 'choice' ? { choiceIndex: choice ?? -1 } : { text };
-  const valid = question.kind === 'choice' ? choice !== null : !!text.trim();
+  const valid =
+    question.kind === 'choice'
+      ? choice !== null && choice >= 0 && choice < (question.options?.length || 0)
+      : !!text.trim();
   const submitting = useRef(false),
     mounted = useRef(true);
   useEffect(() => {
@@ -118,7 +430,7 @@ function Exercise({
   async function submit() {
     if (submitting.current) return;
     submitting.current = true;
-    const signature = JSON.stringify(answer);
+    const signature = JSON.stringify({ revision: question.revision || 1, answer });
     if (attempt.current?.signature !== signature)
       attempt.current = { signature, id: crypto.randomUUID() };
     try {
@@ -139,7 +451,10 @@ function Exercise({
   return (
     <article className="learning-exercise surface" aria-label={question.prompt}>
       <span className="tag">{question.kind === 'choice' ? '单项选择' : '问答题'}</span>
-      <h3>{question.prompt}</h3>
+      <div role="heading" aria-level={3} className="learning-question-prompt">
+        <ExerciseMarkdown text={question.prompt} />
+      </div>
+      {editor}
       {question.kind === 'choice' ? (
         <fieldset disabled={busy} className="learning-options">
           <legend className="sr-only">选择一个答案</legend>
@@ -148,12 +463,20 @@ function Exercise({
               <input
                 type="radio"
                 name={group}
+                aria-label={`选项 ${String.fromCharCode(65 + i)}`}
+                aria-describedby={`${group}-option-${i}`}
                 checked={choice === i}
                 onChange={() => setChoice(i)}
               />
-              <span>
-                {String.fromCharCode(65 + i)}. {option}
-              </span>
+              <div className="learning-option-content">
+                <span className="sr-only" id={`${group}-option-${i}`}>
+                  {optionDescription(option)}
+                </span>
+                <div aria-hidden="true">
+                  <span>{String.fromCharCode(65 + i)}.</span>
+                  <ExerciseMarkdown text={option} />
+                </div>
+              </div>
             </label>
           ))}
         </fieldset>
@@ -223,10 +546,14 @@ function Exercise({
             {answerOpen && (
               <>
                 {result.correctIndex !== undefined && (
-                  <p>
-                    正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
-                    {(result.question?.options || question.options)?.[result.correctIndex]}
-                  </p>
+                  <div className="learning-correct-option">
+                    <span>正确选项：{String.fromCharCode(65 + result.correctIndex)}.</span>
+                    <ExerciseMarkdown
+                      text={
+                        (result.question?.options || question.options)?.[result.correctIndex] || ''
+                      }
+                    />
+                  </div>
                 )}
                 {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
                 <PiMarkdown text={result.explanation} />
@@ -325,6 +652,11 @@ export function LearningPage({
   const [detailLoading, setDetailLoading] = useState(false),
     [detailError, setDetailError] = useState(''),
     [generationError, setGenerationError] = useState('');
+  const [editableScope, setEditableScope] = useState<{
+    settings: Settings;
+    session: AuthSession;
+    id: string;
+  } | null>(null);
   const detailVersion = useRef(0),
     detailReload = useRef<(() => void) | null>(null),
     loadedPages = useRef({ lessons: 1, wrong: 1 });
@@ -566,6 +898,7 @@ export function LearningPage({
         );
         if (!current()) return;
         setLesson(r.lesson);
+        setEditableScope({ settings, session: session!, id: selected });
         setLessons((old) =>
           old.map((l) =>
             l.id === selected
@@ -1178,8 +1511,43 @@ export function LearningPage({
               {lesson.status === 'ready' && <h2>检验理解 · {lesson.questions?.length}题</h2>}
               {lesson.questions?.map((q) => (
                 <Exercise
-                  key={lesson.id + q.id + ':' + (q.revision || 1)}
+                  key={lesson.id + q.id}
                   draftKey={viewKey + lesson.id + q.id + ':' + (q.revision || 1)}
+                  editor={
+                    lesson.status === 'ready' &&
+                    editableScope?.settings === settings &&
+                    editableScope.session === session &&
+                    editableScope.id === lesson.id && (
+                      <QuestionEditor
+                        key={viewKey + lesson.id + q.id}
+                        settings={settings}
+                        lessonId={lesson.id}
+                        questionId={q.id}
+                        saved={(updated) => {
+                          detailVersion.current++;
+                          invalidateAPI(settings, '/learning/lessons/' + lesson.id, true);
+                          setLesson((current) =>
+                            current?.id === lesson.id
+                              ? {
+                                  ...current,
+                                  questions: current.questions?.map((item) =>
+                                    item.id === updated.id
+                                      ? {
+                                          id: updated.id,
+                                          kind: updated.kind,
+                                          prompt: updated.prompt,
+                                          options: updated.options,
+                                          revision: updated.revision,
+                                        }
+                                      : item,
+                                  ),
+                                }
+                              : current,
+                          );
+                        }}
+                      />
+                    )
+                  }
                   question={q}
                   latest={latestAttempts.get(q.id)}
                   onGrade={(answer, id) => grade(lesson.id, q.id, answer, id, q.revision || 1)}

@@ -158,6 +158,20 @@ test('question edits validate answers, preserve historical grades and reject sta
     ).status,
     400,
   );
+  for (const options of [['only'], Array.from({ length: 7 }, (_, i) => `option ${i}`)]) {
+    assert.equal(
+      (
+        await f.request(
+          path,
+          { ...edit, question: { ...edit.question, options, correctIndex: 0 } },
+          f.owner.token,
+          'PATCH',
+        )
+      ).status,
+      400,
+    );
+  }
+  assert.equal((await f.request(path + '/history', undefined, f.other.token)).status, 404);
   const changed = await f.request(path, edit, f.owner.token, 'PATCH');
   assert.equal(changed.status, 200);
   assert.equal(changed.body.question.revision, 2);

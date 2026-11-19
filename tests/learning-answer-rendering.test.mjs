@@ -56,6 +56,7 @@ function fixture() {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value),
     },
+    ExerciseMarkdown: ({ text }) => React.createElement('div', null, text),
     PiMarkdown: ({ text }) => {
       markdown.push(text);
       return React.createElement('div', { 'data-markdown': true }, text);
