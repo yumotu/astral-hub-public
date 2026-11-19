@@ -145,6 +145,9 @@ export function createCollector({ projectMode = false, maxBytes = 4 * 1024 * 102
       if (isTodo(tool.name)) tool.output = toolOutput(e.result);
       Object.assign(tool, todoResultFields(tool.name, e.result));
       const details = e.result?.details || {};
+      for (const key of ['lessonId', 'lessonStatus'])
+        if (tool.name === 'app_functions' && typeof details[key] === 'string')
+          tool[key] = details[key].slice(0, 500);
       if (['bash', 'host_command'].includes(tool.name)) {
         tool.output = toolOutput(e.result);
         if (tool.name === 'host_command' && Number.isInteger(details.exitCode))

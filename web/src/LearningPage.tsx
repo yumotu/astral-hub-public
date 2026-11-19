@@ -253,10 +253,12 @@ export function LearningPage({
   settings,
   session,
   login,
+  initialLessonId = '',
 }: {
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
+  initialLessonId?: string;
 }) {
   const viewKey =
     'astral.learning.view:' +
@@ -272,8 +274,10 @@ export function LearningPage({
     [level, setLevel] = useState<string>(saved.level || 'beginner'),
     [choiceCount, setChoiceCount] = useState<string>(String(saved.choiceCount ?? 2)),
     [shortCount, setShortCount] = useState<string>(String(saved.shortCount ?? 1)),
-    [tab, setTab] = useState<'learn' | 'wrong'>(saved.tab === 'wrong' ? 'wrong' : 'learn'),
-    [selected, setSelected] = useState<string>(saved.selected || '');
+    [tab, setTab] = useState<'learn' | 'wrong'>(
+      !initialLessonId && saved.tab === 'wrong' ? 'wrong' : 'learn',
+    ),
+    [selected, setSelected] = useState<string>(initialLessonId || saved.selected || '');
   const [materials, setMaterials] = useState<{ name: string; content: string }[]>([]);
   const materialSelection = useRef<{ name: string; content: string }[]>([]);
   const [materialDraft, setMaterialDraft] = useState('');
@@ -300,8 +304,10 @@ export function LearningPage({
     ),
     [lesson, setLesson] = useState<Lesson | null>(
       () =>
-        peekAPI<{ lesson: Lesson }>(settings, '/learning/lessons/' + (saved.selected || ''))
-          ?.lesson || null,
+        peekAPI<{ lesson: Lesson }>(
+          settings,
+          '/learning/lessons/' + (initialLessonId || saved.selected || ''),
+        )?.lesson || null,
     ),
     [wrong, setWrong] = useState<Wrong[]>(
       () => peekAPI<{ items: Wrong[] }>(settings, '/learning/wrong')?.items || [],

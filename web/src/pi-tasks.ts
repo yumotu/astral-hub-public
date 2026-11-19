@@ -149,7 +149,7 @@ export function reduceTaskEvent(task: PiTask, e: Record<string, unknown>): PiTas
               ...(Array.isArray(e.todos) ? { todos: normalizeTodos(e.todos) || [] } : {}),
               ...(typeof e.todoAction === 'string' ? { todoAction: e.todoAction } : {}),
               ...Object.fromEntries(
-                ['projectId', 'backupId', 'sha256', 'summary']
+                ['projectId', 'backupId', 'sha256', 'summary', 'lessonId', 'lessonStatus']
                   .filter((k) => typeof e[k] === 'string')
                   .map((k) => [k, e[k]]),
               ),

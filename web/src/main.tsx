@@ -184,6 +184,7 @@ function Workspace({
   changeSession: (s: AuthSession | null) => void;
   saveConnection: (s: Settings) => void;
 }) {
+  const [lessonTarget, setLessonTarget] = useState('');
   const [page, setPage] = useState<Page>('pi');
   const pageHistory = useRef<Page[]>([]);
   const unread = useUnread(settings, !!session);
@@ -366,6 +367,11 @@ function Workspace({
     saveConnection(s);
     setNotice('本机设置已保存，AI 密钥不会同步。');
   }
+  // A lesson opened from a delivery card is a one-time navigation intent.
+  // Clear it when the user leaves Learning so ordinary navigation does not reopen an old lesson.
+  useEffect(() => {
+    if (page !== 'learning') setLessonTarget('');
+  }, [page]);
   function navigate(p: Page) {
     if (p === 'mail') setMailNotice(null);
     if (p === 'social') setContactNotice(null);
@@ -706,11 +712,16 @@ function Workspace({
                   settings={settings}
                   session={session}
                   login={() => navigate('account')}
+                  openLesson={(id) => {
+                    setLessonTarget(id);
+                    navigate('learning');
+                  }}
                   shellActions={shellActions}
                   openNavigation={() => setMobileNav(true)}
                 />
               ) : page === 'learning' ? (
                 <LearningPage
+                  initialLessonId={lessonTarget}
                   key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
                   settings={settings}
                   session={session}

@@ -27,7 +27,15 @@ export function applyPiTimeline(items = [], event = {}) {
     if (index !== -1) {
       const item = (next[index] = { ...next[index] });
       if (event.type === 'tool_end') item.status = event.error ? 'error' : 'done';
-      for (const key of ['output', 'summary', 'projectId', 'backupId', 'sha256'])
+      for (const key of [
+        'output',
+        'summary',
+        'projectId',
+        'backupId',
+        'sha256',
+        'lessonId',
+        'lessonStatus',
+      ])
         if (typeof event[key] === 'string')
           item[key] = event[key].slice(0, key === 'output' ? 12000 : 500);
       for (const key of ['exitCode', 'added', 'removed'])

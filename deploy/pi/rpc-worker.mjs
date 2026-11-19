@@ -392,7 +392,16 @@ const handleEvent = (e) => {
       output: toolOutput(e.result),
       ...todoResultFields(e.toolName, e.result),
       ...Object.fromEntries(
-        ['projectId', 'backupId', 'sha256', 'summary', 'added', 'removed']
+        [
+          'projectId',
+          'backupId',
+          'sha256',
+          'summary',
+          'added',
+          'removed',
+          'lessonId',
+          'lessonStatus',
+        ]
           .filter((key) => ['string', 'number'].includes(typeof e.result?.details?.[key]))
           .map((key) => [key, e.result.details[key]]),
       ),
