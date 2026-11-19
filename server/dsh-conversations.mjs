@@ -166,6 +166,46 @@ export function createDshConversations(
         "UPDATE dsh_actions SET state='observed' WHERE owner=? AND conversation_id=? AND kind='respond' AND reference=?",
       ).run(owner, id, frame.id);
   }
+  function reclaim(except, pressureOwner) {
+    const candidates = [...watching.entries()]
+      .filter(([k, watch]) => {
+        if (k === except || !watch.ready || typeof watch.client.chat().unwatch !== 'function')
+          return false;
+        const r = saved(watch.owner, watch.id);
+        if (
+          !r ||
+          r.state !== 'ready' ||
+          busy.has(k) ||
+          [...historyReads.values()].some((read) => read.generation === watch) ||
+          r.stop_cursor !== null
+        ) return false;
+        const state = dshSessionView(stateOf(r));
+        if (state.connection !== 'connected' || !['done', 'stopped', 'error'].includes(state.status)) return false;
+        if (
+          db
+            .prepare(
+              "SELECT 1 FROM dsh_actions WHERE owner=? AND conversation_id=? AND state NOT IN ('observed','rejected') LIMIT 1",
+            )
+            .get(watch.owner, watch.id)
+        )
+          return false;
+        return true;
+      })
+      .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+    for (const [k, watch] of candidates) {
+      const ownerFull =
+        [...watching.values()].filter((v) => v.owner === pressureOwner).length >= 16;
+      const globalFull = watching.size >= 64;
+      const idle = now() - watch.lastAccess >= 60000;
+      if (!idle && !(ownerFull && watch.owner === pressureOwner) && !globalFull) continue;
+      watching.delete(k);
+      watch.client.chat().unwatch(watch.sessionId);
+    }
+  }
+  const reapTimer = setInterval(() => {
+    if (!closed) reclaim(null);
+  }, 30000);
+  reapTimer.unref?.();
   async function ensure(owner, id) {
     const r = row(owner, id);
     target(owner, r);
@@ -175,14 +215,27 @@ export function createDshConversations(
     const k = key(owner, id),
       old = watching.get(k);
     if (old?.client === client) {
+      old.lastAccess = now();
       await old.opened;
       target(owner, row(owner, id));
       workbench.connected(owner, r.connection_id, client.chat());
       return { r: row(owner, id), chat: client.chat() };
     }
+    reclaim(k, owner);
     if ([...watching.values()].filter((v) => v.owner === owner).length >= 16 || watching.size >= 64)
-      throw fail(429, '当前打开的DSH会话较多，请先断开不使用的连接。');
-    const generation = { client, owner, connectionId: r.connection_id };
+      throw fail(
+        429,
+        '同步已降级：DSH订阅容量已满，正在显示可能不是最新的记录；后台任务订阅不会被强制关闭。',
+      );
+    const generation = {
+      client,
+      owner,
+      id,
+      sessionId: r.session_id,
+      connectionId: r.connection_id,
+      lastAccess: now(),
+      ready: false,
+    };
     watching.set(k, generation);
     generation.opened = client.chat().watch(r.session_id, (frame) => {
       try {
@@ -195,6 +248,7 @@ export function createDshConversations(
     });
     try {
       await generation.opened;
+      generation.ready = true;
     } catch (error) {
       if (watching.get(k) === generation) {
         watching.delete(k);
@@ -666,8 +720,8 @@ export function createDshConversations(
             if (!pending) {
               pending = ensure(owner, id)
                 .then(
-                  () => true,
-                  () => false,
+                  () => '',
+                  (error) => error.status === 429 ? '同步已降级：DSH订阅容量已满，记录可能不是最新。' : '同步已降级：连接暂不可用，记录可能不是最新。',
                 )
                 .finally(() => {
                   if (syncing.get(k) === pending) syncing.delete(k);
@@ -676,18 +730,26 @@ export function createDshConversations(
             }
             let timer;
             try {
-              const connected = await Promise.race([
+              const reason = await Promise.race([
                 pending,
                 new Promise((resolve) => {
-                  timer = setTimeout(() => resolve(false), 1000);
+                  timer = setTimeout(
+                    () => resolve('正在重新连接，先显示已保存的记录，可能不是最新。'),
+                    1000,
+                  );
                 }),
               ]);
-              if (!connected) warning = '正在重新连接，先显示已保存的记录。';
+              warning = reason;
             } finally {
               clearTimeout(timer);
             }
           }
-          json(200, { conversation: view(row(owner, id)), warning });
+          json(200, {
+            conversation: view(row(owner, id)),
+            warning,
+            degraded: !!warning,
+            syncStale: !!warning,
+          });
           return true;
         }
         if (req.method === 'POST' && match[2] === 'history') {
@@ -928,6 +990,7 @@ export function createDshConversations(
       extensions.close();
       software.close();
       closed = true;
+      clearInterval(reapTimer);
       watching.clear();
     },
   };

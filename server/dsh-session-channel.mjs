@@ -252,7 +252,7 @@ export function createDshSessionChannel(
       }
     }
   }
-  async function pump(endpoint, args, first, each) {
+  async function pump(endpoint, args, first, each, followSignal) {
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(), 60000);
     let source;
@@ -260,7 +260,7 @@ export function createDshSessionChannel(
       source = await gateway.open(
         endpoint,
         { args },
-        AbortSignal.any([activeSignal, controller.signal]),
+        AbortSignal.any([activeSignal, controller.signal, ...(followSignal ? [followSignal] : [])]),
       );
     } catch (error) {
       clearTimeout(deadline);
@@ -293,7 +293,9 @@ export function createDshSessionChannel(
         streams.delete(source);
       }
     })();
-    void running.catch(report);
+    void running.catch((error) => {
+      if (!followSignal?.aborted) report(error);
+    });
   }
   async function start() {
     if (!starting) {
@@ -331,7 +333,12 @@ export function createDshSessionChannel(
         activeSignal.throwIfAborted();
         return;
       }
-      watch = { listeners: new Set([listener]), projectionSeqs: {}, projections: {} };
+      watch = {
+        listeners: new Set([listener]),
+        projectionSeqs: {},
+        projections: {},
+        controller: new AbortController(),
+      };
       watches.set(sessionId, watch);
       watch.opened = (async () => {
         await start();
@@ -345,6 +352,7 @@ export function createDshSessionChannel(
             },
           },
           (frame) => {
+            if (watches.get(sessionId) !== watch) return;
             if (frame?.type !== 'snapshot') throw fail(502, 'DSH 对话快照无效。');
             notify(sessionId, frame);
             projections(sessionId, frame.projections);
@@ -360,14 +368,23 @@ export function createDshSessionChannel(
                 notify(sessionId, { type: 'interaction', interaction: publicInteraction(item) });
           },
           (frame) => {
+            if (watches.get(sessionId) !== watch) return;
             if (frame?.type === 'projection')
               projections(sessionId, { asOfSeq: frame.seq, values: { [frame.key]: frame.value } });
             else notify(sessionId, frame);
           },
+          watch.controller.signal,
         );
       })();
       await watch.opened;
       activeSignal.throwIfAborted();
+    },
+    unwatch(sessionId) {
+      const watch = watches.get(sessionId);
+      if (!watch) return;
+      watches.delete(sessionId);
+      watch.listeners.clear();
+      watch.controller.abort();
     },
     create: (workspaceId, sessionId) =>
       call('session/create', {

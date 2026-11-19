@@ -648,16 +648,20 @@ export function DshRemoteWorkspace({
     const sync = async () => {
       const generation = guardAPI(settings, dshDisplayPath(selected));
       try {
-        const r = await api<{ conversation: DshConversation }>(
-          settings,
-          remoteBase + `/conversations/${selected}`,
-          undefined,
-          undefined,
-          false,
-          { fresh: true, timeout: 10000, signal: abort.signal },
-        );
+        const r = await api<{
+          conversation: DshConversation;
+          warning?: string;
+          degraded?: boolean;
+          syncStale?: boolean;
+        }>(settings, remoteBase + `/conversations/${selected}`, undefined, undefined, false, {
+          fresh: true,
+          timeout: 10000,
+          signal: abort.signal,
+        });
         if (live && generation.current()) {
-          setSyncError('');
+          setSyncError(
+            r.warning || (r.degraded || r.syncStale ? '同步已降级，当前记录可能不是最新。' : ''),
+          );
           setConversation(r.conversation);
           setAPICache(settings, dshDisplayPath(selected), dshDisplaySnapshot(r.conversation));
           setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== selected)]);
@@ -733,7 +737,7 @@ export function DshRemoteWorkspace({
             DSH · {current?.host?.name || '选择已有主机'}
             {projectName ? ` · ${projectName}` : ''}
           </small>
-          {syncError && <small role="status">连接暂时中断，正在重新同步…</small>}
+          {syncError && <small role="status">{syncError}</small>}
         </div>
         {actions}
         <button
