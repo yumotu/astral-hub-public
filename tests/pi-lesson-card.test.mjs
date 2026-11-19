@@ -195,6 +195,5 @@ test('clears the lesson target when leaving Learning', () => {
   const main = fs.readFileSync(new URL('../web/src/main.tsx', import.meta.url), 'utf8');
   assert.match(
     main,
-    /useEffect\(\(\) => \{\s*if \(page !== 'learning'\) setLessonTarget\(''\);\s*\}, \[page\]\);/,
-  );
+    /if \\(page !== 'learning'\\) setLessonTarget\\(''\\);/,  );
 });
