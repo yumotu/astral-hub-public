@@ -53,6 +53,7 @@ import { SandboxNetworkControl } from './SandboxNetworkControl';
 import type { ServerProject } from './ProjectBrowser';
 import { ProjectSummary } from './ProjectSummary';
 import { ToolLog } from './ToolLog';
+import { PiLessonCard, deliveredLessons } from './PiLessonCard';
 import { PiTimeline } from './PiTimeline';
 import { FileChanges } from './FileChanges';
 import { RunSummary, RunMetrics, SessionTelemetry } from './ExecutionInfo';
@@ -147,6 +148,7 @@ type PiPageProps = {
   settings: Settings;
   session: AuthSession | null;
   login: () => void;
+  openLesson: (id: string) => void;
   shellActions: ReactNode;
   openNavigation: () => void;
 };
@@ -382,7 +384,9 @@ function ServerPiPage({
   openComputerConnections,
   connectionsOpen,
   navigationControls,
+  openLesson,
 }: {
+  openLesson: (id: string) => void;
   workspaceActions: ReactNode;
   openNavigation: () => void;
   openComputerConnections: () => void;
@@ -2387,6 +2391,21 @@ function ServerPiPage({
                             {running && <span className="stream-cursor" />}
                           </div>
                         ) : null}
+                        {driver === 'pi' &&
+                          !computerTarget &&
+                          deliveredLessons([
+                            ...(t.tools || []),
+                            ...((t.timeline || []).filter(
+                              (item) => item.kind === 'tool',
+                            ) as ToolRun[]),
+                          ]).map((id) => (
+                            <PiLessonCard
+                              key={conversation + ':' + id}
+                              id={id}
+                              settings={settings}
+                              openLesson={openLesson}
+                            />
+                          ))}
                         {running && (taskState?.compacting || !t.output) && (
                           <p className="pi-thinking" role="status">
                             <LoaderCircle size={16} className="spin" />

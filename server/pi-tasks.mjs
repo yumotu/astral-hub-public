@@ -189,7 +189,7 @@ export function createPiTasks(
                 ? { todoAction: e.todoAction.slice(0, 30) }
                 : {}),
               ...Object.fromEntries(
-                ['projectId', 'backupId', 'sha256', 'summary']
+                ['projectId', 'backupId', 'sha256', 'summary', 'lessonId', 'lessonStatus']
                   .filter((k) => typeof e[k] === 'string')
                   .map((k) => [k, e[k]]),
               ),

@@ -184,6 +184,7 @@ function Workspace({
   changeSession: (s: AuthSession | null) => void;
   saveConnection: (s: Settings) => void;
 }) {
+  const [lessonTarget, setLessonTarget] = useState('');
   const [page, setPage] = useState<Page>('pi');
   const pageHistory = useRef<Page[]>([]);
   const unread = useUnread(settings, !!session);
@@ -706,11 +707,16 @@ function Workspace({
                   settings={settings}
                   session={session}
                   login={() => navigate('account')}
+                  openLesson={(id) => {
+                    setLessonTarget(id);
+                    navigate('learning');
+                  }}
                   shellActions={shellActions}
                   openNavigation={() => setMobileNav(true)}
                 />
               ) : page === 'learning' ? (
                 <LearningPage
+                  initialLessonId={lessonTarget}
                   key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
                   settings={settings}
                   session={session}

@@ -20,6 +20,8 @@ export type ToolRun = {
   exitCode?: number;
   arguments?: string;
   todos?: TodoItem[];
+  lessonId?: string;
+  lessonStatus?: string;
   todoAction?: string;
 };
 export const toolLabels: Record<string, string> = {
