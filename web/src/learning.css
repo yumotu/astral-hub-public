@@ -33,7 +33,8 @@
   resize: vertical;
   max-height: 240px;
 }
-.learning-exercise h3 {
+.learning-exercise h3,
+.learning-question-prompt {
   font-size: 17px;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -60,6 +61,34 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.learning-option-content {
+  flex: 1;
+  min-width: 0;
+}
+.learning-question-prompt {
+  margin: 1em 0;
+  font-weight: 600;
+}
+.learning-exercise-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.learning-exercise-markdown .pi-markdown > :first-child {
+  margin-top: 0;
+}
+.learning-exercise-markdown .pi-markdown > :last-child {
+  margin-bottom: 0;
+}
+.learning-exercise-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.learning-math-fallback {
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .learning-options label:has(input:checked) {
