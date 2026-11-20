@@ -43,4 +43,4 @@ S4 增加 `chat_files`、`chat_read`、`chat_download`、`chat_export`，也在�
 
 不要重复添加已有行。受管理服务器的 `host.mjs` 在下一次完整镜像构建时生成独立 overlay；原补丁、凭据和模型选择不覆盖。外部主机需用户自行配置，不自动安装到已配对电脑。`extensions-qa-provider.mjs` 仅隔离验收用，不加入生产 Profile。
 
-管理命令 `/astral-extensions` 是 human-only，输入不写会话日志；输出仅返回脱敏目录和固定回执。App 校验当前登录管理员、账号/连接/工作区/原生会话和操作ID。聊天工具只准备预览，管理员在设置里确认后才实际应用。Skill/MCP按工作区，npm bundle按主机Profile；主机加密文件与key应同时备份。详细用法、字段和限制见[扩展管理](../../docs/dsh-extensions.md)及[发行说明](../../docs/release-0.8.13.md)。
+管理命令 `/astral-extensions` 是 human-only，输入不写会话日志；输出仅返回脱敏目录和固定回执。App 校验当前登录管理员、账号/连接/工作区/原生会话和操作ID。聊天工具只准备预览，管理员在设置里确认后才实际应用。Skill/MCP按工作区，npm bundle按主机Profile；主机加密文件与key应同时备份。详细用法、字段和限制见[扩展管理](../../docs/dsh-extensions.md)及[开发交接](../../docs/handoff-0.8.12-dsh-extensions.md)。

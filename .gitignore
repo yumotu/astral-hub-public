@@ -21,20 +21,5 @@ android/**/capacitor-cordova-android-plugins/
 
 .device-ai.json
 
-.env.*
-!.env.example
-!.env.*.example
-**/device.json
-*.sqlite*
-*.key
-*.pem
-*.crt
-*.cer
-private/
-backups/
-.codex/
-.claude/
-agent/assets/
-
-# Rebuilt from installed dependency licenses.
+# Generated dependency notices are rebuilt from installed packages.
 web/public/licenses/

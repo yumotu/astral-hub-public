@@ -1,13 +1,12 @@
 // Ordered, bounded execution trace shared by server snapshots and the web client.
 export function applyPiTimeline(items = [], event = {}) {
-  const next = [...items];
+  const next = items.map((item) => ({ ...item }));
   const last = next.at(-1);
   if (event.type === 'text_delta' || event.type === 'thinking_delta') {
     const kind = event.type === 'text_delta' ? 'text' : 'thinking';
     const delta = String(event.delta || '');
     if (!delta) return next;
-    if (last?.kind === kind)
-      next[next.length - 1] = { ...last, text: (last.text + delta).slice(-48000) };
+    if (last?.kind === kind) last.text = (last.text + delta).slice(-48000);
     else next.push({ kind, text: delta.slice(-48000) });
   } else if (event.type === 'tool_start' && typeof event.id === 'string') {
     if (!next.some((item) => item.kind === 'tool' && item.id === event.id))
@@ -23,9 +22,8 @@ export function applyPiTimeline(items = [], event = {}) {
           : {}),
       });
   } else if (event.type === 'tool_output' || event.type === 'tool_end') {
-    const index = next.findIndex((item) => item.kind === 'tool' && item.id === event.id);
-    if (index !== -1) {
-      const item = (next[index] = { ...next[index] });
+    const item = next.find((item) => item.kind === 'tool' && item.id === event.id);
+    if (item) {
       if (event.type === 'tool_end') item.status = event.error ? 'error' : 'done';
       for (const key of ['output', 'summary', 'projectId', 'backupId', 'sha256'])
         if (typeof event[key] === 'string')

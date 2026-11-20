@@ -198,6 +198,11 @@
   font-size: 10px;
   font-weight: 400;
 }
+.unified-location-heading > .unified-location-status {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+}
 .unified-location-tree[open] > summary > .unified-location-caret {
   transform: rotate(90deg);
 }
@@ -208,6 +213,60 @@
 }
 .unified-location-projects .project-tree {
   margin: 2px 0;
+}
+.workspace-folder-tree {
+  margin: 2px 0;
+}
+.workspace-folder-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.workspace-folder-heading::-webkit-details-marker {
+  display: none;
+}
+.workspace-folder-heading:hover {
+  color: var(--text);
+  background: var(--surface-active);
+}
+.workspace-folder-heading > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-folder-heading > small {
+  flex: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.workspace-folder-add {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+.workspace-folder-caret {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.workspace-folder-tree[open] > .workspace-folder-heading > .workspace-folder-caret {
+  transform: rotate(90deg);
+}
+.workspace-folder-projects {
+  margin-left: 10px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
 }
 .unified-location-projects .project-tree > summary {
   padding: 7px 2px;

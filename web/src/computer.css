@@ -396,6 +396,24 @@
   width: 16px;
   height: 16px;
 }
+.local-permission-summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+.local-permission-summary small {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
 .local-grant-options {
   display: grid;
   gap: 8px;

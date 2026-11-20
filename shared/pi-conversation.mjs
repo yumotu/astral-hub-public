@@ -104,16 +104,11 @@ export function conversationEntries(turns, tasks, conversationId) {
     entries.push({ turn: taskTurn(task), task, submittedAt: task.createdAt, supplements: [] });
     ids.add(task.id);
   }
-  const children = new Map();
-  for (const task of scoped) {
-    const parentId = task.parentId;
-    const group = children.get(parentId);
-    if (group) group.push(task);
-    else children.set(parentId, [task]);
-  }
   for (const entry of entries) {
     const saved = new Set((entry.turn.supplements || []).map((s) => s.id));
-    entry.supplements = (children.get(entry.turn.id) || []).filter((task) => !saved.has(task.id));
+    entry.supplements = scoped.filter(
+      (task) => task.parentId === entry.turn.id && !saved.has(task.id),
+    );
   }
   for (const task of scoped) {
     if (task.parentId && !ids.has(task.parentId) && !represented.has(task.id) && incomplete(task))

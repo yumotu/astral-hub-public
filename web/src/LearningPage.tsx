@@ -2,11 +2,10 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, CheckCircle2, GraduationCap, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api, dateLabel } from './data';
 import { serverIdentity } from './session';
-import { invalidateAPI, peekAPI, setAPICache } from './resource-cache';
+import { peekAPI, setAPICache } from './resource-cache';
 import { PiMarkdown } from './PiMarkdown';
 import { useBackLayer } from './back-navigation';
 import type { AuthSession, Settings } from './types';
-import { materialLimits, materialSections } from '../../shared/learning-materials.mjs';
 import './learning.css';
 
 type Question = {
@@ -42,22 +41,7 @@ type Lesson = {
   status: string;
   createdAt: string;
   error?: string;
-  progress?: {
-    stage: string;
-    completed: number;
-    total: number;
-    completedSections?: number;
-    totalSections?: number;
-  };
-  coverage?: { materials: number; chunks: number; completed: number };
-  resumable?: boolean;
-  sections?: {
-    id: string;
-    title: string;
-    source: { materialId: string; name: string; start: number; end: number; unit: string };
-    status: string;
-    content?: string;
-  }[];
+  progress?: { stage: string; completed: number; total: number };
   explanation?: string;
   questions?: Question[];
   attempts?: Attempt[];
@@ -96,8 +80,7 @@ function Exercise({
     [text, setText] = useState<string>(draft.text || ''),
     [result, setResult] = useState(latest),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState(''),
-    [answerOpen, setAnswerOpen] = useState(false);
+    [error, setError] = useState('');
   const attempt = useRef<{ signature: string; id: string } | null>(draft.attempt || null),
     group = useId();
   useEffect(() => {
@@ -107,17 +90,7 @@ function Exercise({
   }, [draftKey, choice, text]);
   const answer: Answer = question.kind === 'choice' ? { choiceIndex: choice ?? -1 } : { text };
   const valid = question.kind === 'choice' ? choice !== null : !!text.trim();
-  const submitting = useRef(false),
-    mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   async function submit() {
-    if (submitting.current) return;
-    submitting.current = true;
     const signature = JSON.stringify(answer);
     if (attempt.current?.signature !== signature)
       attempt.current = { signature, id: crypto.randomUUID() };
@@ -127,13 +100,11 @@ function Exercise({
     setBusy(true);
     setError('');
     try {
-      const result = await onGrade(answer, attempt.current!.id);
-      if (mounted.current) setResult(result);
+      setResult(await onGrade(answer, attempt.current!.id));
     } catch (e) {
-      if (mounted.current) setError((e as Error).message);
+      setError((e as Error).message);
     } finally {
-      submitting.current = false;
-      if (mounted.current) setBusy(false);
+      setBusy(false);
     }
   }
   return (
@@ -213,31 +184,22 @@ function Exercise({
               版；历史分数保留，重新作答使用新版。
             </p>
           )}
-          <details
-            open={answerOpen}
-            onToggle={(event) => {
-              if (event.target === event.currentTarget) setAnswerOpen(event.currentTarget.open);
-            }}
-          >
+          <details>
             <summary>答案与解析</summary>
-            {answerOpen && (
-              <>
-                {result.correctIndex !== undefined && (
-                  <p>
-                    正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
-                    {(result.question?.options || question.options)?.[result.correctIndex]}
-                  </p>
-                )}
-                {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
-                <PiMarkdown text={result.explanation} />
-                {result.rubric && (
-                  <ul>
-                    {result.rubric.map((r) => (
-                      <li key={r}>{r}</li>
-                    ))}
-                  </ul>
-                )}
-              </>
+            {result.correctIndex !== undefined && (
+              <p>
+                正确选项：{String.fromCharCode(65 + result.correctIndex)}.{' '}
+                {(result.question?.options || question.options)?.[result.correctIndex]}
+              </p>
+            )}
+            {result.referenceAnswer && <PiMarkdown text={result.referenceAnswer} />}
+            <PiMarkdown text={result.explanation} />
+            {result.rubric && (
+              <ul>
+                {result.rubric.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
             )}
           </details>
           {result.method === 'ai' && (
@@ -274,27 +236,6 @@ export function LearningPage({
     [shortCount, setShortCount] = useState<string>(String(saved.shortCount ?? 1)),
     [tab, setTab] = useState<'learn' | 'wrong'>(saved.tab === 'wrong' ? 'wrong' : 'learn'),
     [selected, setSelected] = useState<string>(saved.selected || '');
-  const [materials, setMaterials] = useState<{ name: string; content: string }[]>([]);
-  const materialSelection = useRef<{ name: string; content: string }[]>([]);
-  const [materialDraft, setMaterialDraft] = useState('');
-  const [materialError, setMaterialError] = useState('');
-  const [activeSection, setActiveSection] = useState('');
-  const [resumeConfirmed, setResumeConfirmed] = useState(false);
-  const resumeOperation = useRef<{ lessonId: string; id: string } | null>(null);
-  const resuming = useRef(false);
-  const [resumeEpoch, setResumeEpoch] = useState(0);
-  useEffect(() => {
-    materialSelection.current = [];
-    setMaterials([]);
-    setMaterialDraft('');
-    setMaterialError('');
-    setResumeConfirmed(false);
-  }, [settings, session]);
-  useEffect(() => {
-    setActiveSection('');
-    setResumeConfirmed(false);
-    resumeOperation.current = null;
-  }, [selected]);
   const [lessons, setLessons] = useState<Lesson[]>(
       () => peekAPI<{ lessons: Lesson[] }>(settings, '/learning/lessons')?.lessons || [],
     ),
@@ -312,16 +253,6 @@ export function LearningPage({
   const [lessonsNext, setLessonsNext] = useState<string | null>(null),
     [wrongNext, setWrongNext] = useState<string | null>(null),
     [moreBusy, setMoreBusy] = useState(false);
-  const [lessonsLoading, setLessonsLoading] = useState(true),
-    [wrongLoading, setWrongLoading] = useState(true),
-    [lessonsError, setLessonsError] = useState(''),
-    [wrongError, setWrongError] = useState('');
-  const [detailLoading, setDetailLoading] = useState(false),
-    [detailError, setDetailError] = useState(''),
-    [generationError, setGenerationError] = useState('');
-  const detailVersion = useRef(0),
-    detailReload = useRef<(() => void) | null>(null),
-    loadedPages = useRef({ lessons: 1, wrong: 1 });
   const [maximum, setMaximum] = useState(40),
     [maximumDraft, setMaximumDraft] = useState('40');
   const total = Number(choiceCount) + Number(shortCount);
@@ -336,8 +267,6 @@ export function LearningPage({
     currentFilter = useRef(resolved),
     selection = useRef(selected),
     generation = useRef<{ signature: string; id: string } | null>(null);
-  const context = useRef({ settings, session });
-  context.current = { settings, session };
   selection.current = selected;
   currentFilter.current = resolved;
   useEffect(() => {
@@ -401,85 +330,27 @@ export function LearningPage({
     },
     30,
   );
-  async function refresh(fresh = false) {
-    if (
-      !alive.current ||
-      context.current.settings !== settings ||
-      context.current.session !== session
-    )
-      return;
-    const filter = currentFilter.current;
+  async function refresh() {
     const version = ++refreshVersion.current;
-    const current = () =>
-      alive.current &&
-      version === refreshVersion.current &&
-      context.current.settings === settings &&
-      context.current.session === session &&
-      currentFilter.current === filter;
-    setLessonsLoading(true);
-    setWrongLoading(true);
-    setLessonsError('');
-    setWrongError('');
-    if (fresh) {
-      invalidateAPI(settings, '/learning/lessons', true);
-      invalidateAPI(settings, '/learning/lessons?');
-      invalidateAPI(settings, '/learning/wrong');
-      detailReload.current?.();
-    }
-    async function pages(kind: 'lessons' | 'wrong') {
-      const items: (Lesson | Wrong)[] = [];
-      let next: string | null = null;
-      for (let page = 0; page < loadedPages.current[kind]; page++) {
-        const query = new URLSearchParams();
-        if (next) query.set('before', next);
-        if (kind === 'wrong' && filter) query.set('resolved', 'include');
-        const r = await api<{ lessons?: Lesson[]; items?: Wrong[]; next?: string | null }>(
-          settings,
-          `/learning/${kind}` + (query.size ? '?' + query : ''),
-          undefined,
-          undefined,
-          false,
-          { fresh: fresh || page > 0 },
-        );
-        if (!current()) return null;
-        items.push(...(kind === 'lessons' ? r.lessons || [] : r.items || []));
-        next = r.next || null;
-        if (!next) break;
-      }
-      return { items, next };
-    }
-    await Promise.all([
-      pages('lessons')
-        .then((l) => {
-          if (!current() || !l) return;
-          setLessons(l.items as Lesson[]);
-          setLessonsNext(l.next);
-        })
-        .catch((e) => {
-          if (current()) setLessonsError(e.message);
-        })
-        .finally(() => {
-          if (current()) setLessonsLoading(false);
-        }),
-      pages('wrong')
-        .then((w) => {
-          if (!current() || !w) return;
-          setWrong(w.items as Wrong[]);
-          setWrongNext(w.next);
-        })
-        .catch((e) => {
-          if (current()) setWrongError(e.message);
-        })
-        .finally(() => {
-          if (current()) setWrongLoading(false);
-        }),
+    const [l, w] = await Promise.all([
+      api<{ lessons: Lesson[]; next?: string | null }>(settings, '/learning/lessons'),
+      api<{ items: Wrong[]; next?: string | null }>(
+        settings,
+        '/learning/wrong' + (resolved ? '?resolved=include' : ''),
+      ),
     ]);
+    if (alive.current && version === refreshVersion.current) {
+      setLessons(l.lessons);
+      setWrong(w.items);
+      setLessonsNext(l.next || null);
+      setWrongNext(w.next || null);
+    }
   }
   async function older(kind: 'lessons' | 'wrong') {
     const version = refreshVersion.current,
       filter = resolved;
     const cursor = kind === 'lessons' ? lessonsNext : wrongNext;
-    if (!cursor || moreBusy || (kind === 'lessons' ? lessonsLoading : wrongLoading)) return;
+    if (!cursor || moreBusy) return;
     setMoreBusy(true);
     setError('');
     try {
@@ -494,7 +365,6 @@ export function LearningPage({
         version === refreshVersion.current &&
         (kind === 'lessons' || filter === currentFilter.current)
       ) {
-        loadedPages.current[kind]++;
         if (kind === 'lessons') {
           setLessons((old) => [
             ...new Map([...old, ...(r.lessons || [])].map((l) => [l.id, l])).values(),
@@ -516,36 +386,18 @@ export function LearningPage({
     }
   }
   useEffect(() => {
-    loadedPages.current = { lessons: 1, wrong: 1 };
-  }, [settings, session]);
-  useEffect(() => {
     if (session)
       void refresh().catch((e) => {
         if (alive.current) setError(e.message);
       });
   }, [settings, session, resolved]);
   useEffect(() => {
-    if (!selected || !session) {
-      detailReload.current = null;
-      setDetailLoading(false);
-      setDetailError('');
-      return;
-    }
+    if (!selected || !session) return;
     let live = true;
     const cached = peekAPI<{ lesson: Lesson }>(settings, '/learning/lessons/' + selected);
     setLesson(cached?.lesson || null);
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function load(fresh = false) {
-      clearTimeout(timer);
-      const version = ++detailVersion.current;
-      const current = () =>
-        live &&
-        version === detailVersion.current &&
-        selection.current === selected &&
-        context.current.settings === settings &&
-        context.current.session === session;
-      setDetailLoading(true);
-      setDetailError('');
       try {
         const r = await api<{ lesson: Lesson }>(
           settings,
@@ -555,7 +407,7 @@ export function LearningPage({
           false,
           { fresh },
         );
-        if (!current()) return;
+        if (!live) return;
         setLesson(r.lesson);
         setLessons((old) =>
           old.map((l) =>
@@ -566,131 +418,24 @@ export function LearningPage({
                   questions: undefined,
                   explanation: undefined,
                   attempts: undefined,
-                  sections: undefined,
                 }
               : l,
           ),
         );
         if (r.lesson.status === 'generating') timer = setTimeout(() => void load(true), 3000);
       } catch (e) {
-        if (current()) setDetailError((e as Error).message);
-      } finally {
-        if (current()) setDetailLoading(false);
+        if (live) setError((e as Error).message);
       }
     }
-    detailReload.current = () => {
-      invalidateAPI(settings, '/learning/lessons/' + selected, true);
-      void load(true);
-    };
     void load(cached?.lesson.status === 'generating');
     return () => {
       live = false;
       clearTimeout(timer);
-      detailReload.current = null;
     };
-  }, [settings, session, selected, resumeEpoch]);
-  async function addFiles(files: File[]) {
-    setMaterialError('');
-    try {
-      if (materialSelection.current.length + files.length > materialLimits.maxMaterials)
-        throw Error('最多16份资料。');
-      const added = [];
-      for (const file of files) {
-        if (file.size > materialLimits.maxFileBytes)
-          throw Error('单个文件最多64 KiB，请拆分后添加。');
-        if (!/\.(txt|md|markdown)$/i.test(file.name))
-          throw Error('仅支持UTF-8 TXT/Markdown；PDF和DOCX暂不支持。');
-        const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
-        added.push({ name: file.name, content });
-      }
-      if (
-        alive.current &&
-        context.current.settings === settings &&
-        context.current.session === session
-      ) {
-        const next = [...materialSelection.current, ...added];
-        materialSections(next);
-        materialSelection.current = next;
-        setMaterials(next);
-      }
-    } catch (e) {
-      if (
-        alive.current &&
-        context.current.settings === settings &&
-        context.current.session === session
-      )
-        setMaterialError((e as Error).message);
-    }
-  }
-  function addPastedMaterial() {
-    try {
-      const next = [
-        ...materialSelection.current,
-        { name: `粘贴资料${materialSelection.current.length + 1}.txt`, content: materialDraft },
-      ];
-      materialSections(next);
-      materialSelection.current = next;
-      setMaterials(next);
-      setMaterialDraft('');
-      setMaterialError('');
-    } catch (e) {
-      setMaterialError((e as Error).message);
-    }
-  }
-  async function resumeLesson() {
-    if (!lesson || !resumeConfirmed || busy || resuming.current) return;
-    resuming.current = true;
-    if (resumeOperation.current?.lessonId !== lesson.id)
-      resumeOperation.current = { lessonId: lesson.id, id: crypto.randomUUID() };
-    setBusy('resume');
-    setError('');
-    try {
-      const r = await api<{ lesson: Lesson }>(
-        settings,
-        '/learning/lessons/' + lesson.id + '/resume',
-        {
-          id: resumeOperation.current.id,
-          confirm: true,
-          background: true,
-        },
-      );
-      if (
-        alive.current &&
-        context.current.settings === settings &&
-        context.current.session === session
-      ) {
-        invalidateAPI(settings, '/learning/lessons/' + r.lesson.id, true);
-        setAPICache(settings, '/learning/lessons/' + r.lesson.id, r);
-        if (selection.current === lesson.id) {
-          detailVersion.current++;
-          setLesson(r.lesson);
-          setResumeConfirmed(false);
-          resumeOperation.current = null;
-          setResumeEpoch((value) => value + 1);
-        }
-        void refresh();
-      }
-    } catch (e) {
-      if (
-        alive.current &&
-        context.current.settings === settings &&
-        context.current.session === session &&
-        selection.current === lesson.id
-      )
-        setError((e as Error).message + ' 未自动重试，请刷新课程核对原请求。');
-    } finally {
-      resuming.current = false;
-      if (
-        alive.current &&
-        context.current.settings === settings &&
-        context.current.session === session
-      )
-        setBusy('');
-    }
-  }
+  }, [settings, session, selected]);
   async function generate() {
     if (!validCounts) {
-      setGenerationError('请填写有效题量，总数须在1至' + maximum + '之间。');
+      setError('请填写有效题量，总数须在1至' + maximum + '之间。');
       return;
     }
     const payload = {
@@ -699,13 +444,12 @@ export function LearningPage({
       choiceCount: Number(choiceCount),
       shortCount: Number(shortCount),
       background: true,
-      ...(materials.length ? { materials } : {}),
     };
     const signature = JSON.stringify(payload);
     if (generation.current?.signature !== signature)
       generation.current = { signature, id: crypto.randomUUID() };
     setBusy('generate');
-    setGenerationError('');
+    setError('');
     try {
       const r = await api<{ lesson: Lesson }>(
         settings,
@@ -725,7 +469,7 @@ export function LearningPage({
         await refresh();
       }
     } catch (e) {
-      if (alive.current) setGenerationError((e as Error).message);
+      if (alive.current) setError((e as Error).message);
     } finally {
       if (alive.current) setBusy('');
     }
@@ -751,35 +495,18 @@ export function LearningPage({
       false,
       { timeout: 210000 },
     );
-    if (
-      !alive.current ||
-      context.current.settings !== settings ||
-      context.current.session !== session
-    )
-      return r.attempt;
     void api<{ lesson: Lesson }>(settings, '/learning/lessons/' + lessonId)
       .then((current) => {
-        if (
-          alive.current &&
-          context.current.settings === settings &&
-          context.current.session === session &&
-          selection.current === lessonId
-        )
-          setLesson(current.lesson);
+        if (alive.current && selection.current === lessonId) setLesson(current.lesson);
       })
       .catch((e) => {
-        if (
-          alive.current &&
-          context.current.settings === settings &&
-          context.current.session === session
-        )
-          setError(`判题已完成，课程刷新失败：${e.message}`);
+        if (alive.current) setError(e.message);
       });
-    void refresh();
+    await refresh().catch((e) => {
+      if (alive.current) setError(e.message);
+    });
     return r.attempt;
   }
-  const latestAttempts = new Map<string, Attempt>();
-  for (const attempt of lesson?.attempts || []) latestAttempts.set(attempt.questionId, attempt);
   if (!session)
     return (
       <section className="surface">
@@ -819,7 +546,7 @@ export function LearningPage({
         <button
           className="icon-btn"
           aria-label="刷新学习记录"
-          onClick={() => void refresh(true).catch((e) => setError(e.message))}
+          onClick={() => void refresh().catch((e) => setError(e.message))}
         >
           <RefreshCw size={16} />
         </button>
@@ -852,76 +579,6 @@ export function LearningPage({
                 minLength={2}
               />
             </label>
-            <fieldset disabled={!!busy}>
-              <legend>学习资料（可选，不添加时按知识点生成）</legend>
-              <p className="field-help">
-                支持UTF-8 TXT/Markdown，最多{materialLimits.maxMaterials}份。单份64 KiB /
-                32000字符单位，合计256 KiB / 96000字符单位，最多24章。
-                字符按UTF-16单位计算。这是产品限额，不是模型窗口保证；PDF/DOCX暂不支持。原文不会保存到浏览器会话草稿。
-              </p>
-              <label className="field-label">
-                添加资料文件
-                <input
-                  type="file"
-                  aria-label="添加资料文件"
-                  accept=".txt,.md,.markdown"
-                  multiple
-                  onChange={(e) => {
-                    void addFiles(Array.from(e.target.files || []));
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-              <label className="field-label">
-                粘贴一份资料
-                <textarea
-                  className="standard-input"
-                  aria-label="粘贴一份资料"
-                  rows={4}
-                  maxLength={materialLimits.maxFileCharacters}
-                  value={materialDraft}
-                  onChange={(e) => setMaterialDraft(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!materialDraft.trim()}
-                onClick={addPastedMaterial}
-              >
-                添加粘贴资料
-              </button>
-              {materialError && (
-                <p className="error" role="alert">
-                  {materialError}
-                </p>
-              )}
-              <ul>
-                {materials.map((material, index) => (
-                  <li key={index}>
-                    {material.name} · {material.content.length}字符单位
-                    <button
-                      type="button"
-                      className="text-link"
-                      aria-label={`移除资料${index + 1}`}
-                      onClick={() => {
-                        const next = materialSelection.current.filter((_, i) => i !== index);
-                        materialSelection.current = next;
-                        setMaterials(next);
-                      }}
-                    >
-                      移除
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {materials.length > 0 && (
-                <p role="status">
-                  已选{materials.length}份资料，将完整分段为{materialSections(materials).length}
-                  章。每章单独生成并保存，随后规划练习；更多章节会增加等待与费用。单轮最多24次章节调用、1次出题规划和最多203次题目批次（含失败的重复修复）；主动恢复会增加调用与费用。
-                </p>
-              )}
-            </fieldset>
             <div className="learning-form-options">
               <label className="field-label">
                 程度
@@ -978,12 +635,7 @@ export function LearningPage({
                 {busy ? <LoaderCircle size={16} className="spin" /> : <GraduationCap size={16} />}{' '}
                 {busy ? '正在准备讲解和题目' : '生成讲解与练习'}
               </button>
-              {generationError && (
-                <p className="error" role="alert">
-                  {generationError}
-                </p>
-              )}
-              {generationError && (
+              {error && (
                 <button
                   type="button"
                   className="secondary"
@@ -1033,19 +685,6 @@ export function LearningPage({
               </div>
             </details>
           )}
-          {selected && (
-            <section aria-label="课程读取状态" aria-busy={detailLoading}>
-              {detailLoading && <p role="status">正在读取课程详情…</p>}
-              {detailError && (
-                <p className="error" role="alert">
-                  课程详情读取失败：{detailError}{' '}
-                  <button className="text-link" onClick={() => detailReload.current?.()}>
-                    重试读取课程
-                  </button>
-                </p>
-              )}
-            </section>
-          )}
           {lesson && (
             <section className="learning-lesson">
               <header className="section-title">
@@ -1064,90 +703,21 @@ export function LearningPage({
                 {lesson.status === 'generating' && (
                   <p role="status">
                     <LoaderCircle size={16} className="spin" />{' '}
-                    {lesson.progress?.stage === 'sections'
-                      ? `正在逐章准备完整教案 · ${lesson.progress.completedSections || 0}/${lesson.progress.totalSections || 0}章`
-                      : lesson.progress?.stage === 'planning'
-                        ? '讲解已保存，正在规划整套题目的覆盖与难度'
-                        : lesson.progress?.stage === 'questions' ||
-                            lesson.progress?.stage === 'repair'
-                          ? '讲解已保存，正在分批准备练习'
-                          : '正在准备详细讲解'}{' '}
+                    {lesson.progress?.stage === 'planning'
+                      ? '讲解已保存，正在规划整套题目的覆盖与难度'
+                      : lesson.progress?.stage === 'questions' ||
+                          lesson.progress?.stage === 'repair'
+                        ? '讲解已保存，正在分批准备练习'
+                        : '正在准备详细讲解'}{' '}
                     · {lesson.progress?.completed || 0} / {lesson.progress?.total || total}题
                   </p>
                 )}
                 {lesson.error && (
                   <p className="error" role="alert">
-                    {lesson.error} 部分内容保留，未自动重试。
-                    {lesson.resumable ? '可明确确认后继续未完成部分。' : '请明确新建生成请求。'}
+                    {lesson.error} 部分内容保留，未自动重试；请明确新建生成请求。
                   </p>
                 )}
-                {lesson.resumable && (
-                  <div>
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={resumeConfirmed}
-                        onChange={(e) => {
-                          setResumeConfirmed(e.target.checked);
-                        }}
-                      />
-                      我确认继续未完成部分。未知结果可能需要再次调用并重新计费，成功章节不会重算。
-                    </label>
-                    <button
-                      className="secondary"
-                      disabled={!resumeConfirmed || !!busy}
-                      onClick={() => void resumeLesson()}
-                    >
-                      继续未完成章节与练习
-                    </button>
-                  </div>
-                )}
-                {lesson.coverage && (
-                  <p role="status">
-                    资料覆盖：{lesson.coverage.materials}份 / {lesson.coverage.completed}
-                    章已保存，共{lesson.coverage.chunks}
-                    章。覆盖表示原文分段已送入生成，并不保证AI解释无误，请核对。
-                  </p>
-                )}
-                {lesson.sections ? (
-                  <>
-                    <label className="field-label">
-                      章节目录
-                      <select
-                        aria-label="章节目录"
-                        className="standard-input"
-                        value={activeSection || lesson.sections[0]?.id || ''}
-                        onChange={(e) => setActiveSection(e.target.value)}
-                      >
-                        {lesson.sections.map((section) => (
-                          <option key={section.id} value={section.id}>
-                            {section.title} · {section.status === 'ready' ? '已保存' : '待完成'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {lesson.sections
-                      .filter(
-                        (section) => section.id === (activeSection || lesson.sections?.[0]?.id),
-                      )
-                      .map((section) => (
-                        <article key={section.id}>
-                          <h3>{section.title}</h3>
-                          <p className="field-help">
-                            来源 {section.source.materialId} · {section.source.name} · UTF-16区间 [
-                            {section.source.start}, {section.source.end})
-                          </p>
-                          {section.content ? (
-                            <PiMarkdown text={section.content} />
-                          ) : (
-                            <p>本章尚未生成完成，其他已保存章节可从目录阅读。</p>
-                          )}
-                        </article>
-                      ))}
-                  </>
-                ) : (
-                  <PiMarkdown text={lesson.explanation || ''} />
-                )}
+                <PiMarkdown text={lesson.explanation || ''} />
               </div>
               {lesson.status === 'ready' && <h2>检验理解 · {lesson.questions?.length}题</h2>}
               {lesson.questions?.map((q) => (
@@ -1155,7 +725,7 @@ export function LearningPage({
                   key={lesson.id + q.id + ':' + (q.revision || 1)}
                   draftKey={viewKey + lesson.id + q.id + ':' + (q.revision || 1)}
                   question={q}
-                  latest={latestAttempts.get(q.id)}
+                  latest={lesson.attempts?.filter((a) => a.questionId === q.id).at(-1)}
                   onGrade={(answer, id) => grade(lesson.id, q.id, answer, id, q.revision || 1)}
                 />
               ))}
@@ -1163,18 +733,7 @@ export function LearningPage({
           )}
           <section className="surface learning-history">
             <h2>学习记录</h2>
-            {lessonsLoading && <p role="status">正在读取学习记录…</p>}
-            {lessonsError && (
-              <p role="alert" className="error">
-                学习记录读取失败：{lessonsError}{' '}
-                <button className="text-link" onClick={() => void refresh(true)}>
-                  重试读取
-                </button>
-              </p>
-            )}
-            {!lessonsLoading && !lessonsError && !lessons.length && (
-              <p className="muted">生成第一份讲解后，记录会保存在这里。</p>
-            )}
+            {!lessons.length && <p className="muted">生成第一份讲解后，记录会保存在这里。</p>}
             {lessons.map((l) => (
               <button key={l.id} className="learning-history-row" onClick={() => setSelected(l.id)}>
                 <span>
@@ -1217,16 +776,7 @@ export function LearningPage({
             包含已掌握的题目
           </label>
           <p className="field-help">未达到80分自动收录；再练达到80分后标为已掌握，历史仍保留。</p>
-          {wrongLoading && <p role="status">正在读取错题记录…</p>}
-          {wrongError && (
-            <p role="alert" className="error">
-              错题记录读取失败：{wrongError}{' '}
-              <button className="text-link" onClick={() => void refresh(true)}>
-                重试读取
-              </button>
-            </p>
-          )}
-          {!wrongLoading && !wrongError && !wrong.length && (
+          {!wrong.length && (
             <div className="surface">
               <BookOpen size={24} />
               <p>这里暂时没有待巩固的错题。</p>

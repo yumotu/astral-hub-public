@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DesktopWindowBar } from './DesktopWindowBar';
 import { MobilePanelsProvider, useMobilePanels } from './MobilePanels';
@@ -72,10 +72,8 @@ import { loadSession, persistSession, accountScope, serverIdentity } from './ses
 import { AccountPage } from './AccountPage';
 import { SocialPage } from './SocialPage';
 import { PiPage } from './PiPage';
-const MailPage = lazy(() => import('./MailPage').then((module) => ({ default: module.MailPage })));
-const LearningPage = lazy(() =>
-  import('./LearningPage').then((module) => ({ default: module.LearningPage })),
-);
+import { MailPage } from './MailPage';
+import { LearningPage } from './LearningPage';
 import { PetPage } from './PetPage';
 import { interpretReading, runAIPlugin, tarotQuestions } from './ai';
 import { SettingsPage } from './SettingsPage';
@@ -636,118 +634,110 @@ function Workspace({
                 </div>
               </div>
             )}
-            <Suspense
-              fallback={
-                <p className="field-help" role="status">
-                  正在载入{pageLabel}…
-                </p>
-              }
-            >
-              {page === 'tarot' ? (
-                <Tarot
-                  aiConfigured={
-                    settings.aiMode === 'local' ? !!settings.apiKey.trim() : !!status?.aiConfigured
-                  }
-                  settings={settings}
-                  save={saveReading}
-                  openSettings={() => navigate('settings')}
-                />
-              ) : page === 'gallery' ? (
-                <Gallery theme={deckTheme} onThemeChange={setDeckTheme} />
-              ) : page === 'history' ? (
-                <History
-                  readings={history}
-                  remove={(id) => {
-                    setEntries((es) =>
-                      es.map((e) => (e.id === id ? { id, deleted: true, data: null } : e)),
-                    );
-                    setNotice('已删除记录；同步后其他设备也会删除。');
-                  }}
-                  start={() => navigate('tarot')}
-                  sync={() => sync()}
-                  syncing={syncing}
-                  lastSync={lastSync}
-                />
-              ) : page === 'plugins' ? (
-                <Plugins
-                  selectedId={activePluginId}
-                  openPlugin={openPlugin}
-                  openTarot={() => navigate('tarot')}
-                  openLearning={() => navigate('learning')}
-                  openPet={() => navigate('pet')}
-                  plugins={plugins}
-                  updatePlugins={setPlugins}
-                  settings={settings}
-                  connected={!!status}
-                  refresh={() => refresh(settings)}
-                  notify={setNotice}
-                  openSettings={() => navigate('settings')}
-                />
-              ) : page === 'account' ? (
-                <AccountPage
-                  settings={settings}
-                  session={session}
-                  changeSession={changeSession}
-                  saveSettings={saveSettings}
-                  notify={setNotice}
-                />
-              ) : page === 'social' ? (
-                <SocialPage
-                  openTarget={contactNotice}
-                  key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
-                  settings={settings}
-                  session={session}
-                  login={() => navigate('account')}
-                  notify={setNotice}
-                />
-              ) : page === 'pi' ? (
-                <PiPage
-                  key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
-                  settings={settings}
-                  session={session}
-                  login={() => navigate('account')}
-                  shellActions={shellActions}
-                  openNavigation={() => setMobileNav(true)}
-                />
-              ) : page === 'learning' ? (
-                <LearningPage
-                  key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
-                  settings={settings}
-                  session={session}
-                  login={() => navigate('account')}
-                />
-              ) : page === 'mail' ? (
-                <MailPage
-                  openTarget={mailNotice}
-                  key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
-                  settings={settings}
-                  session={session}
-                  login={() => navigate('account')}
-                />
-              ) : page === 'pet' ? (
-                <PetPage
-                  key={`${scope}:pet`}
-                  settings={settings}
-                  aiConfigured={aiConfigured}
-                  scope={scope}
-                  openSettings={() => navigate('settings')}
-                />
-              ) : (
-                <SettingsPage
-                  admin={session?.user.role === 'owner'}
-                  notifications={notifications}
-                  settings={settings}
-                  save={saveSettings}
-                  test={refresh}
-                  status={status}
-                  sync={() => sync()}
-                  syncing={syncing}
-                  count={history.length}
-                  lastSync={lastSync}
-                  notify={setNotice}
-                />
-              )}
-            </Suspense>
+            {page === 'tarot' ? (
+              <Tarot
+                aiConfigured={
+                  settings.aiMode === 'local' ? !!settings.apiKey.trim() : !!status?.aiConfigured
+                }
+                settings={settings}
+                save={saveReading}
+                openSettings={() => navigate('settings')}
+              />
+            ) : page === 'gallery' ? (
+              <Gallery theme={deckTheme} onThemeChange={setDeckTheme} />
+            ) : page === 'history' ? (
+              <History
+                readings={history}
+                remove={(id) => {
+                  setEntries((es) =>
+                    es.map((e) => (e.id === id ? { id, deleted: true, data: null } : e)),
+                  );
+                  setNotice('已删除记录；同步后其他设备也会删除。');
+                }}
+                start={() => navigate('tarot')}
+                sync={() => sync()}
+                syncing={syncing}
+                lastSync={lastSync}
+              />
+            ) : page === 'plugins' ? (
+              <Plugins
+                selectedId={activePluginId}
+                openPlugin={openPlugin}
+                openTarot={() => navigate('tarot')}
+                openLearning={() => navigate('learning')}
+                openPet={() => navigate('pet')}
+                plugins={plugins}
+                updatePlugins={setPlugins}
+                settings={settings}
+                connected={!!status}
+                refresh={() => refresh(settings)}
+                notify={setNotice}
+                openSettings={() => navigate('settings')}
+              />
+            ) : page === 'account' ? (
+              <AccountPage
+                settings={settings}
+                session={session}
+                changeSession={changeSession}
+                saveSettings={saveSettings}
+                notify={setNotice}
+              />
+            ) : page === 'social' ? (
+              <SocialPage
+                openTarget={contactNotice}
+                key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
+                settings={settings}
+                session={session}
+                login={() => navigate('account')}
+                notify={setNotice}
+              />
+            ) : page === 'pi' ? (
+              <PiPage
+                key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
+                settings={settings}
+                session={session}
+                login={() => navigate('account')}
+                shellActions={shellActions}
+                openNavigation={() => setMobileNav(true)}
+              />
+            ) : page === 'learning' ? (
+              <LearningPage
+                key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
+                settings={settings}
+                session={session}
+                login={() => navigate('account')}
+              />
+            ) : page === 'mail' ? (
+              <MailPage
+                openTarget={mailNotice}
+                key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
+                settings={settings}
+                session={session}
+                login={() => navigate('account')}
+              />
+            ) : page === 'pet' ? (
+              <PetPage
+                key={`${scope}:pet`}
+                settings={settings}
+                aiConfigured={aiConfigured}
+                scope={scope}
+                openSettings={() => navigate('settings')}
+              />
+            ) : (
+              <SettingsPage
+                admin={session?.user.role === 'owner'}
+                notifications={notifications}
+                settings={settings}
+                save={saveSettings}
+                test={refresh}
+                status={status}
+                sync={() => sync()}
+                syncing={syncing}
+                count={history.length}
+                lastSync={lastSync}
+                notify={setNotice}
+              />
+            )}
             {page !== 'pi' && (
               <footer>
                 <span>

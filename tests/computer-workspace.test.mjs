@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createApp } from '../server/index.mjs';
 import { localGrant, saveConfig } from '../agent/config.mjs';
 import { createLocalWorkspace } from '../agent/workspace.mjs';
+import { FULL_WORKSPACE_PERMISSIONS } from '../shared/computer-permissions.mjs';
 async function setup(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'astral-computer-')),
     root = join(dir, 'project');
@@ -135,6 +136,54 @@ async function setup(t, options = {}) {
     },
   };
 }
+test('full-workspace pairing and project announcements persist explicit permissions', async (t) => {
+  const f = await setup(t);
+  const pairing = (await f.req('/pairing', {}, f.owner.token)).body;
+  const enrolled = await f.req('/device/enroll', {
+    code: pairing.code,
+    name: 'Full access Mac',
+    platform: 'darwin',
+    rootLabel: 'project',
+    allowWrite: false,
+    allowExecute: false,
+    permissionVersion: 1,
+    permissionProfile: 'full-workspace',
+    permissions: [...FULL_WORKSPACE_PERMISSIONS],
+  });
+  assert.equal(enrolled.status, 201, JSON.stringify(enrolled.body));
+  assert.deepEqual(enrolled.body.permissions, FULL_WORKSPACE_PERMISSIONS);
+  assert.equal(enrolled.body.permissionProfile, 'full-workspace');
+
+  const permissionAnnouncement = await f.req(
+    '/device/workspace/announce',
+    {
+      version: 2,
+      permissionVersion: 1,
+      permissions: [...FULL_WORKSPACE_PERMISSIONS],
+      projects: [
+        {
+          id: f.grant.id,
+          name: f.grant.name,
+          allowWrite: false,
+          allowExecute: false,
+          permissionVersion: 1,
+          permissions: [...FULL_WORKSPACE_PERMISSIONS],
+        },
+      ],
+    },
+    f.device.token,
+  );
+  assert.equal(permissionAnnouncement.status, 200, JSON.stringify(permissionAnnouncement.body));
+  const projects = await f.req(
+    '/projects?deviceId=' + f.device.deviceId,
+    undefined,
+    f.owner.token,
+  );
+  assert.equal(projects.status, 200);
+  assert.deepEqual(projects.body.projects[0].permissions, FULL_WORKSPACE_PERMISSIONS);
+  assert.equal(projects.body.projects[0].readOnly, false);
+  assert.equal(projects.body.projects[0].allowExecute, true);
+});
 test('online package preview confirmation pins the queued operation, isolates owners and renews only live device leases', async (t) => {
   const integrity = 'sha512-' + Buffer.alloc(64, 7).toString('base64');
   const f = await setup(t, {

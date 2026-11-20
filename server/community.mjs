@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAccounts, equal, fail } from './accounts.mjs';
 import { createChatFiles, readUpload } from './files.mjs';
-import { expectsLearningOutput, learningOutputNotice } from './learning-output-notice.mjs';
 import { createPiTasks } from './pi-tasks.mjs';
 import { createPiSchedulePump } from './pi-schedules.mjs';
 import { cronAction } from './schedule-actions.mjs';
@@ -96,13 +95,6 @@ export function createCommunity(store, { token, body, options = {} }) {
     }
   }
   const activePi = new Set();
-  const learningNotice = (owner, p) =>
-    p.assistance || !expectsLearningOutput(p.input)
-      ? {}
-      : learningOutputNotice(
-          p.input,
-          options.appFunctions?.generatedLesson(owner, p.id, p.conversationId),
-        );
   const limits = concurrencyLimits(
     options.piConcurrency ?? process.env.PI_MAX_CONCURRENT,
     options.piConcurrencyPerUser ?? process.env.PI_MAX_CONCURRENT_PER_USER,
@@ -623,7 +615,6 @@ export function createCommunity(store, { token, body, options = {} }) {
           titles.consider(owner, p, output);
         }
         return {
-          ...learningNotice(owner, p),
           output,
           artifacts,
           thinking: (result.thinking || '').slice(0, 48000),
@@ -2597,7 +2588,6 @@ export function createCommunity(store, { token, body, options = {} }) {
           titles.consider(actor.id, p, output);
           if (p.projectId) accounts.finishPiJob(actor.id, p.id, 'done', tools);
           const completed = {
-            ...learningNotice(actor.id, p),
             turns: accounts.piHistory(actor.id, p.conversationId),
             context: result.context,
           };

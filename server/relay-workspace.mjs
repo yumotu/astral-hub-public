@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  COMPUTER_PERMISSION_VERSION,
+  hasComputerPermission,
+  normalizeComputerPermissions,
+  permissionsFromLegacy,
+} from '../shared/computer-permissions.mjs';
 import { createProjectLabels, projectLabelSchema } from './project-labels.mjs';
 import { fail } from './accounts.mjs';
 import { createRelayComputer } from './relay-computer.mjs';
@@ -91,9 +97,17 @@ export function createRelayWorkspace(
   },
 ) {
   const labels = createProjectLabels(db);
-  db.exec(`CREATE TABLE IF NOT EXISTS relay_projects(device_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,allow_write INTEGER NOT NULL,allow_execute INTEGER NOT NULL DEFAULT 0,revoked INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(device_id,id));
+  db.exec(`CREATE TABLE IF NOT EXISTS relay_projects(device_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,allow_write INTEGER NOT NULL,allow_execute INTEGER NOT NULL DEFAULT 0,revoked INTEGER NOT NULL DEFAULT 0,permission_version INTEGER NOT NULL DEFAULT 1,permissions TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(device_id,id));
  CREATE TABLE IF NOT EXISTS relay_operations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,project_id TEXT NOT NULL,input TEXT NOT NULL,status TEXT NOT NULL,lease_until INTEGER,result TEXT,error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS relay_operations_queue ON relay_operations(device_id,status,created_at);`);
+  const projectColumns = new Set(
+    db.prepare('PRAGMA table_info(relay_projects)').all().map((column) => column.name),
+  );
+  for (const [name, type] of [
+    ['permission_version', 'INTEGER NOT NULL DEFAULT 1'],
+    ['permissions', "TEXT NOT NULL DEFAULT '[]'"],
+  ])
+    if (!projectColumns.has(name)) db.exec(`ALTER TABLE relay_projects ADD COLUMN ${name} ${type}`);
   const project = (device, id) => {
     const p = db
       .prepare('SELECT * FROM relay_projects WHERE device_id=? AND id=? AND revoked=0')
@@ -101,11 +115,20 @@ export function createRelayWorkspace(
     if (!p) throw fail(404, '电脑尚未授权这个项目，或授权已撤销。');
     return p;
   };
+  const projectPermissions = (p) => {
+    const permissions = normalizeComputerPermissions(JSON.parse(p.permissions || '[]'));
+    return permissions.length
+      ? permissions
+      : permissionsFromLegacy({ allowWrite: p.allow_write, allowExecute: p.allow_execute });
+  };
+  const projectHas = (p, permission) => projectPermissions(p).includes(permission);
   const projectView = (p) => ({
     id: p.id,
     name: p.name,
-    readOnly: !p.allow_write,
-    allowExecute: !!p.allow_execute,
+    readOnly: !projectHas(p, 'file.write'),
+    allowExecute: projectHas(p, 'terminal.execute'),
+    permissionVersion: p.permission_version || COMPUTER_PERMISSION_VERSION,
+    permissions: projectPermissions(p),
     target: 'computer',
   });
   const opView = (r) => ({
@@ -174,6 +197,8 @@ export function createRelayWorkspace(
               .array(z.string().regex(/^[a-z][a-z0-9_]{1,63}$/))
               .max(64)
               .optional(),
+            permissionVersion: z.number().int().min(1).max(10).optional(),
+            permissions: z.array(z.string().min(1).max(64)).max(16).optional(),
             projects: z
               .array(
                 z
@@ -182,6 +207,8 @@ export function createRelayWorkspace(
                     name: z.string().trim().min(1).max(100),
                     allowWrite: z.boolean(),
                     allowExecute: z.boolean(),
+                    permissionVersion: z.number().int().min(1).max(10).optional(),
+                    permissions: z.array(z.string().min(1).max(64)).max(16).optional(),
                   })
                   .strict(),
               )
@@ -193,25 +220,48 @@ export function createRelayWorkspace(
           throw fail(400, '项目编号重复。');
         db.exec('BEGIN IMMEDIATE');
         try {
-          db.prepare('UPDATE relay_devices SET agent_version=?,capabilities=? WHERE id=?').run(
+          const devicePermissions = p.permissions
+            ? normalizeComputerPermissions(p.permissions)
+            : normalizeComputerPermissions(JSON.parse(d.permissions || '[]'));
+          db.prepare(
+            'UPDATE relay_devices SET agent_version=?,capabilities=?,permission_version=?,permissions=? WHERE id=?',
+          ).run(
             p.agentVersion || null,
             JSON.stringify([...new Set(p.capabilities || [])]),
+            p.permissionVersion || d.permission_version || COMPUTER_PERMISSION_VERSION,
+            JSON.stringify(devicePermissions),
             d.id,
           );
           const previous = db
             .prepare('SELECT * FROM relay_projects WHERE device_id=? AND revoked=0')
             .all(d.id);
           db.prepare('UPDATE relay_projects SET revoked=1 WHERE device_id=?').run(d.id);
-          for (const x of p.projects)
+          for (const x of p.projects) {
+            const permissions = normalizeComputerPermissions(
+              x.permissions ?? permissionsFromLegacy(x),
+            );
             db.prepare(
-              'INSERT INTO relay_projects VALUES(?,?,?,?,?,0) ON CONFLICT(device_id,id) DO UPDATE SET name=excluded.name,allow_write=excluded.allow_write,allow_execute=excluded.allow_execute,revoked=0',
-            ).run(d.id, x.id, x.name, Number(x.allowWrite), Number(x.allowExecute));
+              'INSERT INTO relay_projects(device_id,id,name,allow_write,allow_execute,revoked,permission_version,permissions) VALUES(?,?,?,?,?,0,?,?) ON CONFLICT(device_id,id) DO UPDATE SET name=excluded.name,allow_write=excluded.allow_write,allow_execute=excluded.allow_execute,permission_version=excluded.permission_version,permissions=excluded.permissions,revoked=0',
+            ).run(
+              d.id,
+              x.id,
+              x.name,
+              Number(x.allowWrite || permissions.includes('file.write')),
+              Number(x.allowExecute || permissions.includes('terminal.execute')),
+              x.permissionVersion || COMPUTER_PERMISSION_VERSION,
+              JSON.stringify(permissions),
+            );
+          }
           for (const old of previous) {
             const current = p.projects.find((p) => p.id === old.id);
             if (
               !current ||
               (old.allow_write && !current.allowWrite) ||
-              (old.allow_execute && !current.allowExecute)
+              (old.allow_execute && !current.allowExecute) ||
+              (old.permissions &&
+                JSON.parse(old.permissions).some(
+                  (permission) => !normalizeComputerPermissions(current.permissions).includes(permission),
+                ))
             )
               revoke(d.id, old.id);
           }
@@ -260,7 +310,7 @@ export function createRelayWorkspace(
         let valid = r.status === 'running';
         try {
           const pr = project(d.id, r.project_id);
-          if (JSON.parse(r.input).kind.startsWith('package_') && !pr.allow_execute) valid = false;
+          if (JSON.parse(r.input).kind.startsWith('package_') && !projectHas(pr, 'plugin.install')) valid = false;
         } catch {
           valid = false;
         }
@@ -366,7 +416,7 @@ export function createRelayWorkspace(
                       streaming: supported('streaming'),
                       stop: supported('cancellation'),
                       steer: supported('steering'),
-                      terminal: supported('terminals') && !!p.allow_execute,
+                      terminal: supported('terminals') && projectHas(p, 'terminal.execute'),
                       compact: supported('compact'),
                     },
                     now() - device.last_seen < 45000 ? '' : '目标电脑离线。',
@@ -397,11 +447,14 @@ export function createRelayWorkspace(
           .parse(await body(req));
         const device = ownedDevice(p.deviceId, actor.id);
         const pr = project(p.deviceId, p.projectId);
-        if (['write', 'mkdir', 'restore'].includes(p.operation.kind) && !pr.allow_write)
+        if (['write', 'mkdir', 'restore'].includes(p.operation.kind) && !projectHas(pr, 'file.write'))
           throw fail(403, '此电脑项目仅允许读取。');
         if (p.operation.kind === 'plugin_register') {
           const permission = pluginPermissions(p.operation.manifest);
-          if ((permission.write && !pr.allow_write) || (permission.execute && !pr.allow_execute))
+          if (
+            (permission.write && !projectHas(pr, 'file.write')) ||
+            (permission.execute && !projectHas(pr, 'terminal.execute'))
+          )
             throw fail(403, '本机未授权插件需要的修改或命令权限。');
         }
         let prepared = p.operation;
@@ -422,7 +475,7 @@ export function createRelayWorkspace(
         if (p.operation.kind.startsWith('package_')) {
           if (!JSON.parse(device.capabilities || '[]').includes('online_packages'))
             throw fail(409, '这台电脑尚未运行支持网上插件的执行器，请同步新版电脑执行器。');
-          if (p.operation.kind !== 'package_list' && !pr.allow_execute)
+          if (p.operation.kind !== 'package_list' && !projectHas(pr, 'plugin.install'))
             throw fail(403, '请先在目标电脑为此项目授权本机命令执行，再安装或修改网上插件。');
           if (
             p.operation.kind !== 'package_list' &&

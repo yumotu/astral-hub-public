@@ -52,7 +52,7 @@ export function prepareDshPromptText(value, attachments = []) {
 }
 
 export function dshPromptFailure(error) {
-  const rejected = error?.submissionState === 'rejected';
+  const rejected = [400, 401, 403, 404, 413].includes(error?.status);
   return {
     state: rejected ? 'rejected' : 'unknown',
     message:

@@ -87,37 +87,13 @@ export default function appTools(pi) {
         });
         result = await call({ action: 'status', id: result.id }, signal);
       }
-      const lesson = result.result?.lesson;
-      const learning = lesson
-        ? {
-            lessonId: lesson.id,
-            status: lesson.status,
-            completed: lesson.status === 'ready',
-            message:
-              lesson.status === 'generating'
-                ? '生成中，未完成；外层state=done仅表示工具调用结束。'
-                : lesson.status === 'ready'
-                  ? '课程已生成完成。'
-                  : '课程未完成，请读取课程状态和错误；不要自动重新生成。',
-            query: { action: 'invoke', name: 'learning.read', input: { lessonId: lesson.id } },
-          }
-        : null;
       return {
-        content: [
-          { type: 'text', text: JSON.stringify({ ...result, ...(learning ? { learning } : {}) }) },
-        ],
+        content: [{ type: 'text', text: JSON.stringify(result) }],
         details: {
-          summary: learning
-            ? `${p.name || result.name || '学习资料'}：${learning.message} lesson.id=${lesson.id} lesson.status=${lesson.status}`
-            : p.action === 'catalog'
-              ? '查询软件功能目录'
-              : p.name || '查询功能执行结果',
+          summary: p.action === 'catalog' ? '查询软件功能目录' : p.name || '查询功能执行结果',
           actionId: result.id,
-          ...(learning ? { lessonId: lesson.id, lessonStatus: lesson.status } : {}),
         },
-        ...(['unknown', 'error', 'denied'].includes(result.state) || lesson?.status === 'error'
-          ? { isError: true }
-          : {}),
+        ...(['unknown', 'error', 'denied'].includes(result.state) ? { isError: true } : {}),
       };
     },
   });

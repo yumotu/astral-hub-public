@@ -260,12 +260,7 @@ export async function api<T>(
     }
     if (!r.ok) {
       if (r.status === 401) clearResourceCaches();
-      throw Object.assign(new Error(data.error || '请求失败'), {
-        status: r.status,
-        ...(['rejected', 'unknown'].includes(data.submissionState)
-          ? { submissionState: data.submissionState }
-          : {}),
-      });
+      throw Object.assign(new Error(data.error || '请求失败'), { status: r.status });
     }
     return data;
   };

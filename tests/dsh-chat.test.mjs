@@ -682,73 +682,17 @@ test('DSH local input validation and rejection feedback distinguish an unsent dr
   ])
     assert.throws(() => parseDshPrompt(value), { status: 400, localRejected: true });
   for (const status of [400, 401, 403, 404, 413]) {
-    const failure = dshPromptFailure({ status, submissionState: 'rejected', message: '明确拒绝' });
+    const failure = dshPromptFailure({ status, message: '明确拒绝' });
     assert.equal(failure.state, 'rejected');
     assert.match(failure.message, /未提交.*恢复到草稿/);
     assert.doesNotMatch(failure.message, /核对主机记录/);
   }
-  for (const status of [undefined, 400, 401, 403, 404, 409, 413, 429, 500, 502, 504]) {
+  for (const status of [undefined, 409, 429, 500, 502, 504]) {
     const failure = dshPromptFailure({ status, message: '结果待确认' });
     assert.equal(failure.state, 'unknown');
     assert.match(failure.message, /不会自动重发/);
   }
 });
-test('DSH pre-dispatch authorization failures are rejected only when the operation has no prior receipt', async (t) => {
-  const f = conversationsFixture(t),
-    id = randomUUID();
-  await f.call('', { id, connectionId: f.connectionId, workspaceId: 'project' });
-  f.revoked();
-  await assert.rejects(f.call('/' + id + '/prompt', { id: randomUUID(), text: 'draft' }), {
-    status: 404,
-    submissionState: 'rejected',
-  });
-  assert.equal(f.actions.length, 0);
-});
-
-for (const scenario of [
-  'accepted-then-revoked',
-  'timeout',
-  'unproven-400',
-  'remote-rejected',
-  'local-rejected',
-])
-  test(`DSH dispatch outcome preserves evidence and original-id idempotency: ${scenario}`, async (t) => {
-    let f;
-    f = conversationsFixture(t, {
-      prompt: () => {
-        if (scenario === 'accepted-then-revoked') {
-          f.revoked();
-          return { accepted: true };
-        }
-        throw Object.assign(
-          Error(scenario),
-          scenario === 'remote-rejected'
-            ? { status: 400, remoteRejected: true }
-            : scenario === 'local-rejected'
-              ? { status: 413, localRejected: true }
-              : scenario === 'unproven-400'
-                ? { status: 400 }
-                : { status: 504 },
-        );
-      },
-    });
-    const id = randomUUID(),
-      prompt = { id: randomUUID(), text: 'synthetic prompt' };
-    await f.call('', { id, connectionId: f.connectionId, workspaceId: 'project' });
-    const expected = scenario.endsWith('rejected') ? 'rejected' : 'unknown';
-    await assert.rejects(f.call('/' + id + '/prompt', prompt), (error) => {
-      assert.equal(error.submissionState, expected);
-      assert.equal(dshPromptFailure(error).state, expected);
-      return true;
-    });
-    assert.equal(
-      f.db.prepare('SELECT state FROM dsh_actions WHERE id=?').get(prompt.id).state,
-      expected,
-    );
-    assert.equal((await f.call('/' + id + '/prompt', prompt)).operation.state, expected);
-    assert.equal(f.actions.length, 1, 'original id is never dispatched again');
-  });
-
 test('DSH conversations isolate native bindings, journal exact submissions and never replay unknown acceptance, including after restart', async (t) => {
   const f = conversationsFixture(t),
     id = randomUUID();

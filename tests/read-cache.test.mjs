@@ -9,8 +9,6 @@ import {
   warmResourceCache,
   flushResourceCaches,
   cacheTTL,
-  guardAPI,
-  invalidateAPI,
 } from '../web/src/resource-cache.ts';
 const tick = () => new Promise((r) => setImmediate(r));
 test('read cache merges concurrent reads, returns independent values, refreshes stale data and survives a failed refresh', async () => {
@@ -213,42 +211,6 @@ test('durable display cache survives reopening, omits sensitive endpoints and cl
   assert.equal(session.values.size, 0);
 });
 
-test('material-based lesson bodies stay in memory and never enter durable browser caches', async (t) => {
-  const { local, session } = useStorage(t);
-  clearResourceCaches();
-  t.after(clearResourceCaches);
-  const s = { url: 'https://one.example', token: 'synthetic-material-session', model: 'fake' };
-  await warmResourceCache(s);
-  const path = '/learning/lessons/11111111-1111-4111-8111-111111111111';
-  const value = {
-    lesson: {
-      sections: [{ content: 'PRIVATE_MATERIAL_ORIGINAL' }],
-      explanation: 'PRIVATE_MATERIAL_ORIGINAL',
-    },
-  };
-  setAPICache(s, path, value);
-  setAPICache(s, '/learning/lessons', { lessons: [{ id: 'summary-only' }] });
-  assert.deepEqual(peekAPI(s, path), value);
-  flushResourceCaches();
-  assert.doesNotMatch(
-    JSON.stringify([...local.values, ...session.values]),
-    /PRIVATE_MATERIAL_ORIGINAL/,
-  );
-  const key = [...local.values.keys()][0];
-  const stored = JSON.parse(local.getItem(key));
-  stored.records.push({ path, at: Date.now(), ttl: 60000, value });
-  local.setItem(key, JSON.stringify(stored));
-  const reloaded = await import('../web/src/resource-cache.ts?material-privacy-test');
-  t.after(reloaded.clearResourceCaches);
-  await reloaded.warmResourceCache(s);
-  assert.equal(reloaded.peekAPI(s, path), undefined);
-  reloaded.flushResourceCaches();
-  assert.doesNotMatch(
-    JSON.stringify([...local.values, ...session.values]),
-    /PRIVATE_MATERIAL_ORIGINAL/,
-  );
-});
-
 test('unified navigation caches invalidate after related writes and never cache authority reads', async (t) => {
   clearResourceCaches();
   t.after(clearResourceCaches);
@@ -319,63 +281,6 @@ test('DSH display caches invalidate around native writes, unified deletion and e
   assert.equal(peekAPI(s, display), undefined);
   assert.deepEqual(peekAPI(other, display), { text: 'another account' });
 });
-
-for (const status of [200, 503])
-  test(`DSH delayed poll cannot publish after a completed write: ${status}`, async (t) => {
-    const { local, session } = useStorage(t);
-    clearResourceCaches();
-    t.after(clearResourceCaches);
-    const s = { url: 'https://display.example', token: 'owner', model: 'deepseek-flash' };
-    await warmResourceCache(s);
-    const display = '/@dsh-display/one';
-    const gate = Promise.withResolvers(),
-      started = Promise.withResolvers();
-    let ui = 'current';
-    t.mock.method(globalThis, 'fetch', async (_url, options) => {
-      if (options.method === 'GET') {
-        started.resolve();
-        await gate.promise;
-        return Response.json({ text: 'STALE_POLL_MARKER' });
-      }
-      return Response.json(status === 200 ? { ok: true } : { error: 'unknown' }, { status });
-    });
-    const generation = guardAPI(s, display);
-    const other = guardAPI({ ...s, token: 'other' }, display);
-    const untouched = guardAPI(s, '/@dsh-display/two');
-    const poll = api(s, '/agent/remote/conversations/one', undefined, undefined, false, {
-      fresh: true,
-      signal: new AbortController().signal,
-    })
-      .then((value) => {
-        if (generation.current()) {
-          ui = value.text;
-          setAPICache(s, display, value);
-        }
-      })
-      .finally(generation.release);
-    await started.promise;
-    const write = api(s, '/agent/remote/conversations/one/prompt', { text: 'new' });
-    if (status === 503) await assert.rejects(write);
-    else await write;
-    gate.resolve();
-    await poll;
-    assert.equal(ui, 'current');
-    assert.equal(peekAPI(s, display), undefined);
-    flushResourceCaches();
-    assert.doesNotMatch(JSON.stringify([...local.values, ...session.values]), /STALE_POLL_MARKER/);
-    assert.equal(other.current(), true);
-    assert.equal(untouched.current(), true);
-    const next = guardAPI(s, display);
-    assert.equal(next.current(), true);
-    invalidateAPI(s, display, true);
-    assert.equal(next.current(), false);
-    clearResourceCaches();
-    assert.equal(other.current(), false);
-    assert.equal(untouched.current(), false);
-    next.release();
-    other.release();
-    untouched.release();
-  });
 
 test('restored navigation is stale even during its TTL and old, corrupt or unavailable storage is disposable', async (t) => {
   const { local, session } = useStorage(t);

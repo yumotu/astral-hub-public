@@ -166,7 +166,6 @@ export async function createApp(options = {}) {
       appFunctions: {
         scope: (...a) => appFunctions?.scope(...a),
         revoke: (...a) => appFunctions?.revoke(...a),
-        generatedLesson: (...a) => appFunctions?.generatedLesson(...a),
       },
       scheduleComputer: (run) => relay?.schedule(run),
       mailAgent: {
@@ -824,20 +823,10 @@ export async function createApp(options = {}) {
         });
         res.end(req.method === 'HEAD' ? undefined : bytes);
       } catch (e) {
-        const submission = ['rejected', 'unknown'].includes(e.submissionState)
-          ? { submissionState: e.submissionState }
-          : {};
         if (e instanceof z.ZodError)
-          json(400, {
-            error: '输入格式不正确',
-            details: e.issues.map((x) => x.message),
-            ...submission,
-          });
+          json(400, { error: '输入格式不正确', details: e.issues.map((x) => x.message) });
         else
-          json(e.status || 500, {
-            error: e.status ? e.message : '服务器处理失败，请稍后重试。',
-            ...submission,
-          });
+          json(e.status || 500, { error: e.status ? e.message : '服务器处理失败，请稍后重试。' });
       }
     }),
   );

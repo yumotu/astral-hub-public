@@ -6,7 +6,16 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { createCollector, projectToolNames } from './assets/protocol.mjs';
-import { validServer, localGrant, saveConfig, loadConfig } from './config.mjs';
+import {
+  validServer,
+  localGrant,
+  saveConfig,
+  loadConfig,
+  COMPUTER_PERMISSION_VERSION,
+  FULL_WORKSPACE_PERMISSIONS,
+  hasComputerPermission,
+  permissionsFromLegacy,
+} from './config.mjs';
 import { createLocalWorkspace } from './workspace.mjs';
 import { createComputerTasks } from './task-runner.mjs';
 import { createComputerTerminals } from './terminal-runtime.mjs';
@@ -34,7 +43,7 @@ async function request(config, path, data, signal) {
 }
 if (args.includes('--help')) {
   console.log(
-    '配对: node relay-agent.mjs --server https://your-server --pair-code CODE --root PROJECT [--name NAME] [--allow-write] [--allow-execute]\n运行: node relay-agent.mjs [--config PATH]\n默认只读；文件工具仅访问授权目录。添加项目：--add-project PATH；撤销：--revoke-project ID；--project ID --read-only 撤销写入与执行权限。终端/Agent执行另需 --allow-execute（当前本机用户完整系统权限，项目目录不是Shell沙箱）。',
+    '配对: node relay-agent.mjs --server https://your-server --pair-code CODE --root PROJECT [--name NAME] [--full-workspace]\n运行: node relay-agent.mjs [--config PATH]\n默认只读；--full-workspace 需要本机用户明确确认并开启完整工作权限。添加项目：--add-project PATH；撤销：--revoke-project ID；--project ID --read-only 撤销写入与执行权限。终端/Agent执行使用当前本机用户权限，项目目录不是Shell沙箱。',
   );
   process.exit(0);
 }
@@ -52,10 +61,19 @@ if (option('--pair-code')) {
     server: validServer(option('--server')),
     root: await realpath(resolve(option('--root'))),
     allowWrite: args.includes('--allow-write'),
+    fullWorkspace: args.includes('--full-workspace'),
+    permissionVersion: COMPUTER_PERMISSION_VERSION,
+    permissions: args.includes('--full-workspace')
+      ? [...FULL_WORKSPACE_PERMISSIONS]
+      : permissionsFromLegacy({
+          allowWrite: args.includes('--allow-write'),
+          allowExecute: args.includes('--allow-execute'),
+        }),
   };
   const grant = await localGrant(config.root, {
     allowWrite: config.allowWrite,
     allowExecute: args.includes('--allow-execute'),
+    permissions: config.permissions,
   });
   config.projects = [grant];
   config.legacyProjectId = grant.id;
@@ -71,6 +89,9 @@ if (option('--pair-code')) {
     platform: process.platform,
     rootLabel: basename(config.root) || 'project',
     allowWrite: config.allowWrite,
+    permissionVersion: config.permissionVersion,
+    permissionProfile: args.includes('--full-workspace') ? 'full-workspace' : 'legacy',
+    permissions: config.permissions,
   });
   config = { ...config, ...result };
   await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
@@ -84,6 +105,12 @@ if (option('--pair-code')) {
       name: option('--label'),
       allowWrite: args.includes('--allow-write'),
       allowExecute: args.includes('--allow-execute'),
+      permissions: config.fullWorkspace
+        ? [...FULL_WORKSPACE_PERMISSIONS]
+        : permissionsFromLegacy({
+            allowWrite: args.includes('--allow-write'),
+            allowExecute: args.includes('--allow-execute'),
+          }),
     });
     config.projects.push(p);
     await saveConfig(configPath, config);
@@ -101,6 +128,10 @@ if (option('--pair-code')) {
     if (!p) throw Error('项目不存在');
     p.allowWrite = !args.includes('--read-only') && args.includes('--allow-write');
     p.allowExecute = !args.includes('--read-only') && args.includes('--allow-execute');
+    p.permissions = permissionsFromLegacy({
+      allowWrite: p.allowWrite,
+      allowExecute: p.allowExecute,
+    });
     await saveConfig(configPath, config);
     console.log('已更新本机权限', p.id);
     process.exit(0);
@@ -146,7 +177,8 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 async function run(job) {
   const grant = config.projects.find((p) => p.id === config.legacyProjectId);
   if (!grant) throw Error('本机已撤销旧目录授权');
-  if (job.access === 'edit' && !grant.allowWrite) throw new Error('本机未允许修改文件');
+  if (job.access === 'edit' && !hasComputerPermission(grant, 'file.write'))
+    throw new Error('本机未允许修改文件');
   const dir = await mkdtemp(join(tmpdir(), 'astral-device-')),
     collector = createCollector({ projectMode: true });
   let cancelled = false;
@@ -189,7 +221,7 @@ async function run(job) {
         name: '已授权本机项目',
         root: grant.root,
         canonicalRoot: grant.root,
-        readOnly: !grant.allowWrite,
+        readOnly: !hasComputerPermission(grant, 'file.write'),
       },
     ]),
   );
@@ -441,11 +473,14 @@ async function workspaceLoop() {
             'scheduled_tasks',
             'question_resume',
           ],
-          projects: config.projects.map(({ id, name, allowWrite, allowExecute }) => ({
+          permissionVersion: config.permissionVersion || COMPUTER_PERMISSION_VERSION,
+          projects: config.projects.map(({ id, name, allowWrite, allowExecute, permissions, permissionVersion }) => ({
             id,
             name,
             allowWrite,
             allowExecute,
+            permissionVersion: permissionVersion || config.permissionVersion || COMPUTER_PERMISSION_VERSION,
+            permissions: permissions || permissionsFromLegacy({ allowWrite, allowExecute }),
           })),
         });
         signature = current;
@@ -463,7 +498,8 @@ async function workspaceLoop() {
                   if (stopping) throw Error('执行器正在停止。');
                   const next = await loadConfig(configPath),
                     grant = next.projects.find((p) => p.id === operation.projectId);
-                  if (!grant?.allowExecute) throw Error('本机已撤销插件执行授权。');
+                  if (!grant || !hasComputerPermission(grant, 'plugin.install'))
+                    throw Error('本机已撤销插件执行授权。');
                   config = next;
                   computerTasks.revoke();
                   await terminals.revoke();

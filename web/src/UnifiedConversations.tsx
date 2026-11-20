@@ -8,7 +8,6 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import { flushSync } from 'react-dom';
 import {
   ArrowLeft,
   Archive,
@@ -75,6 +74,11 @@ export type ConversationTarget = {
   projectId: string | null;
   deviceId?: string;
   connectionId?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  workspacePath?: string;
+  connectionState?: 'unpaired' | 'paired' | 'connecting' | 'online' | 'offline' | 'revoked';
+  online?: boolean;
   label?: string;
   locationName?: string;
   location?: 'server' | 'computer';
@@ -119,14 +123,14 @@ type Model = {
   preparations: ConversationPreparation[];
   preparing: ConversationPreparation | null;
   selectPreparation: (id: string) => void;
-  preparationDraft: (id: string, text: string, expectedDraft: string) => Promise<void>;
-  preparationQueue: (id: string, text: string, expectedDraft: string) => Promise<void>;
-  preparationEdit: (id: string, expectedDraft: string) => Promise<void>;
+  preparationDraft: (id: string, text: string) => void;
+  preparationQueue: (id: string, text: string) => void;
+  preparationEdit: (id: string) => void;
   retryPreparation: (id: string) => Promise<void>;
-  resumePreparation: (id: string) => Promise<void>;
-  claimPreparation: (id: string) => Promise<ConversationPreparation | null>;
-  finishPreparation: (id: string, restoreDraft: (text: string) => void) => Promise<void>;
-  discardPreparation: (id: string) => Promise<void>;
+  resumePreparation: (id: string) => void;
+  claimPreparation: (id: string) => ConversationPreparation | null;
+  finishPreparation: (id: string) => void;
+  discardPreparation: (id: string) => void;
   openPreparedConversation: (id: string) => void;
   settings: Settings;
   owner: string;
@@ -230,13 +234,6 @@ export function UnifiedConversationsProvider({
       : null;
   });
   const preparationSelection = useRef(preparationId);
-  const preparationNavigation = useRef(0);
-  const initialPreparationSelection = useRef(
-    localStorage.getItem(storageKey + ':preparation-selection'),
-  );
-  // Input events update this before asynchronous persistence; a handoff must not
-  // restore the older snapshot returned by claim().
-  const preparationInputs = useRef(new Map<string, { text: string }>());
   const preparationRequests = useRef(new Set<string>());
   const preparationAlive = useRef(true);
   useEffect(() => {
@@ -246,7 +243,6 @@ export function UnifiedConversationsProvider({
     };
   }, []);
   function showPreparation(id: string | null) {
-    preparationNavigation.current++;
     preparationSelection.current = id;
     setPreparationId(id);
     try {
@@ -259,9 +255,8 @@ export function UnifiedConversationsProvider({
   function updatePreparations() {
     setPreparations([...preparationJournal.current.list()] as ConversationPreparation[]);
   }
-  async function resolvePreparation(id: string, ref: Selection) {
-    await preparationJournal.current.resolve(id, ref);
-    if (!preparationAlive.current) return;
+  function resolvePreparation(id: string, ref: Selection) {
+    preparationJournal.current.resolve(id, ref);
     updatePreparations();
     if (preparationSelection.current === id) {
       setSelected(ref);
@@ -318,7 +313,6 @@ export function UnifiedConversationsProvider({
   }, [settings]);
   useEffect(() => {
     const load = () => {
-      if (document.hidden) return;
       void refreshManagement().catch((e) => setError(e.message));
     };
     load();
@@ -355,45 +349,6 @@ export function UnifiedConversationsProvider({
     piDirectoryReady = useRef(initialCache.directoryReady),
     mutationLock = useRef(false);
   const operationIds = useRef(createUnifiedOperationJournal(localStorage, storageKey));
-  useEffect(() => {
-    let live = true;
-    let first = true;
-    const hydrate = async () => {
-      const navigation = preparationNavigation.current;
-      const restoreSelection = first;
-      first = false;
-      try {
-        await preparationJournal.current.hydrate();
-        if (!live) return;
-        updatePreparations();
-        const id = initialPreparationSelection.current;
-        if (
-          restoreSelection &&
-          navigation === 0 &&
-          preparationNavigation.current === navigation &&
-          id &&
-          preparationJournal.current
-            .list()
-            .some((value: ConversationPreparation) => value.id === id)
-        ) {
-          showPreparation(id);
-          const value = preparationJournal.current
-            .list()
-            .find((item: ConversationPreparation) => item.id === id) as ConversationPreparation;
-          if (value.native) setSelected(value.native);
-        }
-      } catch (e) {
-        if (live) setError((e as Error).message);
-      }
-    };
-    void hydrate();
-    const focus = () => void hydrate();
-    window.addEventListener('focus', focus);
-    return () => {
-      live = false;
-      window.removeEventListener('focus', focus);
-    };
-  }, [storageKey]);
   const refresh = useCallback(async () => {
     const born = generation.current,
       read = ++historyRead.current;
@@ -413,7 +368,7 @@ export function UnifiedConversationsProvider({
     for (const pending of preparationJournal.current.list() as ConversationPreparation[]) {
       const found = result.conversations.find((c) => c.id === pending.id);
       if (found && !['ready', 'handed'].includes(pending.state))
-        await resolvePreparation(pending.id, found.active);
+        resolvePreparation(pending.id, found.active);
     }
     setSelected((old) => {
       const next = activeUnifiedSelection(result.conversations, old);
@@ -529,7 +484,6 @@ export function UnifiedConversationsProvider({
   }, [refresh]);
   const select = useCallback(
     (value: Selection) => {
-      preparationNavigation.current++;
       const preparation = preparationJournal.current
         .list()
         .find((v: ConversationPreparation) => v.id === preparationSelection.current) as
@@ -580,8 +534,7 @@ export function UnifiedConversationsProvider({
     preparationRequests.current.add(id);
     generation.current++;
     try {
-      await preparationJournal.current.creating(id);
-      if (!preparationAlive.current) return;
+      preparationJournal.current.creating(id);
       updatePreparations();
       const r = await api<{ conversation: UnifiedConversation }>(settings, endpoint, {
         id,
@@ -594,7 +547,7 @@ export function UnifiedConversationsProvider({
         return;
       generation.current++;
       setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== r.conversation.id)]);
-      await resolvePreparation(id, r.conversation.active);
+      resolvePreparation(id, r.conversation.active);
       operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
     } catch (e) {
       if (
@@ -604,7 +557,7 @@ export function UnifiedConversationsProvider({
         return;
       const reason = e as Error & { status?: number };
       try {
-        await preparationJournal.current.fail(
+        preparationJournal.current.fail(
           id,
           reason.message,
           [400, 401, 403, 404, 413].includes(reason.status || 0),
@@ -634,69 +587,44 @@ export function UnifiedConversationsProvider({
             saveUnifiedSelection(localStorage, storageKey, value.native);
           }
         },
-        preparationDraft: async (id, text, expectedDraft) => {
-          const input = { text };
-          preparationInputs.current.set(id, input);
+        preparationDraft: (id, text) => {
           try {
-            await preparationJournal.current.draft(id, text, expectedDraft);
-            if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
+            preparationJournal.current.draft(id, text);
           } finally {
             updatePreparations();
           }
         },
-        preparationQueue: async (id, text, expectedDraft) => {
-          const input = preparationInputs.current.get(id);
-          await preparationJournal.current.queue(id, text, undefined, expectedDraft);
-          if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
+        preparationQueue: (id, text) => {
+          preparationJournal.current.queue(id, text);
           updatePreparations();
         },
-        preparationEdit: async (id, expectedDraft) => {
-          const input = preparationInputs.current.get(id);
-          await preparationJournal.current.edit(id, expectedDraft);
-          if (preparationInputs.current.get(id) === input) preparationInputs.current.delete(id);
+        preparationEdit: (id) => {
+          preparationJournal.current.edit(id);
           updatePreparations();
         },
         retryPreparation: createPreparedConversation,
-        resumePreparation: async (id) => {
-          await preparationJournal.current.resume(id);
+        resumePreparation: (id) => {
+          preparationJournal.current.resume(id);
           updatePreparations();
         },
-        claimPreparation: async (id) => {
-          if (preparationSelection.current !== id || !preparationAlive.current) return null;
+        claimPreparation: (id) => {
+          if (preparationSelection.current !== id) return null;
           try {
-            const value = (await preparationJournal.current.claim(
-              id,
-            )) as ConversationPreparation | null;
-            return preparationAlive.current && preparationSelection.current === id ? value : null;
+            return preparationJournal.current.claim(id) as ConversationPreparation | null;
           } finally {
             updatePreparations();
           }
         },
-        finishPreparation: async (id, restoreDraft) => {
-          if (preparationSelection.current !== id || !preparationAlive.current) return;
-          const value = preparationJournal.current
-            .list()
-            .find((item: ConversationPreparation) => item.id === id) as
-            ConversationPreparation | undefined;
-          if (!value) return;
-          const draft = preparationInputs.current.get(id)?.text ?? value.draft;
-          // Close the old editor and restore its newest input in one render,
-          // before awaiting cleanup. No editable cleanup window may consume a
-          // later keystroke. Queued draft writes precede remove in the journal.
-          flushSync(() => {
-            restoreDraft(draft);
-            showPreparation(null);
-          });
+        finishPreparation: (id) => {
           try {
-            await preparationJournal.current.remove(id);
-            preparationInputs.current.delete(id);
+            preparationJournal.current.remove(id);
           } catch {
-            if (preparationAlive.current)
-              setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
+            setError('消息已交给发送流程，但本地草稿清理失败；不会自动重复发送。');
           }
-          if (preparationAlive.current) updatePreparations();
+          updatePreparations();
+          if (preparationSelection.current === id) showPreparation(null);
         },
-        discardPreparation: async (id) => {
+        discardPreparation: (id) => {
           const value = preparationJournal.current
             .list()
             .find((v: ConversationPreparation) => v.id === id) as
@@ -704,8 +632,7 @@ export function UnifiedConversationsProvider({
           if (!value) return;
           // Remove durable local intent first. This does not cancel an already
           // issued create/submission or delete the actual native conversation.
-          await preparationJournal.current.remove(id);
-          preparationInputs.current.delete(id);
+          preparationJournal.current.remove(id);
           setError('');
           operationIds.current.complete('create:' + JSON.stringify(targetBody(value.target)));
           generation.current++;
@@ -764,7 +691,7 @@ export function UnifiedConversationsProvider({
         create: async (target) => {
           const key = 'create:' + JSON.stringify(targetBody(target));
           const id = operationIds.current.id(key);
-          await preparationJournal.current.begin(id, target);
+          preparationJournal.current.begin(id, target);
           updatePreparations();
           showPreparation(id);
           void createPreparedConversation(id);
@@ -1121,6 +1048,7 @@ export function UnifiedConversationNavigation({
   const [projectSetup, setProjectSetup] = useState<ProjectSetupComputer[] | null>(null);
   const [query, setQuery] = useState('');
   const [projectExpansion, setProjectExpansion] = useState<Record<string, boolean>>({});
+  const [workspaceExpansion, setWorkspaceExpansion] = useState<Record<string, boolean>>({});
   const [locationExpansion, setLocationExpansion] = useState<Record<string, boolean>>({});
   const more = useRef<HTMLDetailsElement>(null);
   const open = displayPanel === 'conversations';
@@ -1235,6 +1163,36 @@ export function UnifiedConversationNavigation({
         pendingIn(group.target).length ||
         (group.target.projectId && matches(group)),
     );
+  const workspaceKey = (target: ConversationTarget) => {
+    const identity = target.connectionId || target.deviceId || target.origin;
+    const value = target.workspaceId || target.workspacePath || 'unassigned';
+    return JSON.stringify([target.origin, identity, value]);
+  };
+  const workspaceName = (target: ConversationTarget) =>
+    target.workspaceName ||
+    (target.workspacePath ? target.workspacePath.split('/').filter(Boolean).at(-1) : '') ||
+    '未分组';
+  function workspaceFolders(groups: typeof filteredGroups) {
+    const folders = new Map<string, { key: string; title: string; target: ConversationTarget; groups: typeof filteredGroups }>();
+    for (const group of groups) {
+      const key = workspaceKey(group.target);
+      if (!folders.has(key))
+        folders.set(key, { key, title: workspaceName(group.target), target: group.target, groups: [] });
+      folders.get(key)!.groups.push(group);
+    }
+    return [...folders.values()];
+  }
+  function connectionStatus(location: { server: boolean; groups: typeof filteredGroups }) {
+    if (location.server) return '';
+    if (!location.groups.length) return '已配对';
+    const states = location.groups.map((group) => group.target.connectionState).filter(Boolean);
+    if (states.includes('revoked')) return '已撤销';
+    if (states.includes('online') || location.groups.some((group) => group.target.online)) return '在线';
+    if (states.includes('connecting')) return '连接中';
+    if (states.includes('offline')) return '离线';
+    if (states.includes('paired')) return '已配对';
+    return '已连接';
+  }
   const locations = new Map<
     string,
     { title: string; server: boolean; groups: typeof filteredGroups }
@@ -1495,6 +1453,9 @@ export function UnifiedConversationNavigation({
                   <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
                   <Monitor size={16} />
                   <span>{location.title}</span>
+                  {!!connectionStatus(location) && (
+                    <small className="unified-location-status">{connectionStatus(location)}</small>
+                  )}
                   <small>
                     {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
                   </small>
@@ -1519,6 +1480,9 @@ export function UnifiedConversationNavigation({
                   <ChevronRight size={14} className="unified-location-caret" aria-hidden="true" />
                   <Server size={16} />
                   <span>{location.title}</span>
+                  {!!connectionStatus(location) && (
+                    <small className="unified-location-status">{connectionStatus(location)}</small>
+                  )}
                   <small>
                     {location.groups.reduce((count, group) => count + group.items.length, 0) || ''}
                   </small>
@@ -1542,60 +1506,103 @@ export function UnifiedConversationNavigation({
                   <p className="field-help">
                     {location.server
                       ? '点击加号创建项目文件夹。'
-                      : '点击电脑旁的加号添加项目，已有连接会保留。'}
+                      : '点击电脑旁的加号添加工作区文件夹。'}
                   </p>
                 )}
-                {location.groups.map((group) => (
+                {workspaceFolders(location.groups).map((workspace) => (
                   <details
-                    key={group.key}
-                    className="project-tree"
+                    key={workspace.key}
+                    className="workspace-folder-tree"
                     open={
                       !!search ||
-                      (projectExpansion[group.key] ??
-                        (group.items.some(selected) ||
-                          pendingIn(group.target).some((p) => p.id === model.preparing?.id)))
+                      (workspaceExpansion[workspace.key] ??
+                        workspace.groups.some(
+                          (group) =>
+                            group.items.some(selected) ||
+                            pendingIn(group.target).some((p) => p.id === model.preparing?.id),
+                        ))
                     }
                     onClick={(event) =>
                       toggleNavigationBranch(event, (expanded) => {
                         if (!search)
-                          setProjectExpansion((old) => ({ ...old, [group.key]: expanded }));
+                          setWorkspaceExpansion((old) => ({ ...old, [workspace.key]: expanded }));
                       })
                     }
                   >
-                    {group.target.projectId ? (
-                      <ProjectSummary
-                        name={model.projectName(group.target)}
-                        detail={group.items.length || ''}
-                        saveName={(name) => model.renameProject(group.target, name)}
-                        remove={!removed ? () => void askProjectRemoval(group.target) : undefined}
-                        restore={
-                          removedProjects.some((p) => projectKey(p.target) === group.key)
-                            ? () => {
-                                const p = removedProjects.find(
-                                  (p) => projectKey(p.target) === group.key,
-                                )!;
-                                void model.restoreProject(p).catch((e) => setError(e.message));
-                              }
-                            : undefined
+                    <summary className="workspace-folder-heading">
+                      <ChevronRight className="workspace-folder-caret" size={13} aria-hidden="true" />
+                      <FolderOpen size={14} />
+                      <span>{workspace.title}</span>
+                      <small>{workspace.groups.length}</small>
+                      {!archived && !removed && !search && (
+                        <button
+                          type="button"
+                          className="icon-btn workspace-folder-add"
+                          aria-label={'在' + workspace.title + '中新建项目'}
+                          title="新建项目文件夹"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (location.server && newProject) newProject();
+                            else setProjectSetup(projectSetupComputers(locationKey, location));
+                          }}
+                        >
+                          <Plus size={14} />
+                        </button>
+                      )}
+                    </summary>
+                    <div className="workspace-folder-projects">
+                    {workspace.groups.map((group) => (
+                      <details
+                        key={group.key}
+                        className="project-tree"
+                        open={
+                          !!search ||
+                          (projectExpansion[group.key] ??
+                            (group.items.some(selected) ||
+                              pendingIn(group.target).some((p) => p.id === model.preparing?.id)))
                         }
-                        newConversation={
-                          !removed && group.available
-                            ? () => {
-                                setNewTarget(group.target);
-                                setNewOpen(true);
-                              }
-                            : undefined
+                        onClick={(event) =>
+                          toggleNavigationBranch(event, (expanded) => {
+                            if (!search)
+                              setProjectExpansion((old) => ({ ...old, [group.key]: expanded }));
+                          })
                         }
-                      />
-                    ) : (
-                      <summary>
-                        <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
-                        <FolderOpen size={15} />
-                        <span>未分组</span>
-                        <small>{group.items.length}</small>
-                      </summary>
-                    )}
-                    <div className="unified-project-chats">
+                      >
+                        {group.target.projectId ? (
+                          <ProjectSummary
+                            name={model.projectName(group.target)}
+                            detail={group.items.length || ''}
+                            saveName={(name) => model.renameProject(group.target, name)}
+                            remove={!removed ? () => void askProjectRemoval(group.target) : undefined}
+                            restore={
+                              removedProjects.some((p) => projectKey(p.target) === group.key)
+                                ? () => {
+                                    const p = removedProjects.find(
+                                      (p) => projectKey(p.target) === group.key,
+                                    )!;
+                                    void model.restoreProject(p).catch((e) => setError(e.message));
+                                  }
+                                : undefined
+                            }
+                            newConversation={
+                              !removed && group.available
+                                ? () => {
+                                    setNewTarget(group.target);
+                                    setNewOpen(true);
+                                  }
+                                : undefined
+                            }
+                          />
+                        ) : (
+                          <summary>
+                            <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
+                            <FolderOpen size={15} />
+                            <span>未分组</span>
+                            <small>{group.items.length}</small>
+                          </summary>
+                        )}
+                        <div className="unified-project-chats">
                       {pendingIn(group.target).map((p) => (
                         <button
                           key={p.id}
@@ -1640,6 +1647,9 @@ export function UnifiedConversationNavigation({
                         !removed &&
                         group.target.origin === 'remote' &&
                         group.available && <RemoteSessionImports target={group.target} />}
+                        </div>
+                      </details>
+                    ))}
                     </div>
                   </details>
                 ))}

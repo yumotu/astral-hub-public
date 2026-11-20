@@ -333,14 +333,13 @@ export function dshMessagePresentation(message, { showThinking = false } = {}) {
   };
 }
 
-export function dshSessionView(state, { stopPending = false, summary = false } = {}) {
+export function dshSessionView(state, { stopPending = false } = {}) {
   const messages = [],
     tools = [];
   let status = 'done',
     phase = '',
     error = '';
   const addMessage = (e, role, blocks) => {
-    if (summary) return;
     const output = blocks
       .filter((b) => b.type === 'text')
       .map((b) => b.text)
@@ -360,9 +359,9 @@ export function dshSessionView(state, { stopPending = false, summary = false } =
       });
   };
   for (const e of state.events) {
-    if (e.type === 'user/message' && !summary) addMessage(e, 'user', e.data.content);
-    else if (e.type === 'assistant/message' && !summary) addMessage(e, 'assistant', e.data.content);
-    else if (e.type === 'tool/call' && !summary)
+    if (e.type === 'user/message') addMessage(e, 'user', e.data.content);
+    else if (e.type === 'assistant/message') addMessage(e, 'assistant', e.data.content);
+    else if (e.type === 'tool/call')
       tools.push({
         id: e.data.callId,
         name: e.data.name,
@@ -370,7 +369,7 @@ export function dshSessionView(state, { stopPending = false, summary = false } =
         status: 'running',
         time: e.time,
       });
-    else if (e.type === 'tool/result' && !summary) {
+    else if (e.type === 'tool/result') {
       const tool = tools.findLast((t) => t.id === e.data.callId);
       if (tool)
         Object.assign(tool, {

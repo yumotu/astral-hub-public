@@ -73,119 +73,84 @@ export function ToolLog({
   const workbench = useFileWorkbench();
   const [restored, setRestored] = useState<string[]>([]),
     [error, setError] = useState(''),
-    [busy, setBusy] = useState(''),
-    [open, setOpen] = useState(false),
-    [expanded, setExpanded] = useState<Record<string, boolean>>({});
+    [busy, setBusy] = useState('');
   if (!tools?.length) return null;
   return (
     <>
-      <details
-        className="tool-log"
-        open={open}
-        onToggle={(event) => {
-          if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
-        }}
-      >
+      <details className="tool-log">
         <summary>执行记录 · {tools.length}</summary>
-        {open &&
-          tools.map((t) => (
-            <div className="tool-row" key={t.id}>
-              {t.name === 'bash' ? <Terminal size={14} /> : <FileText size={14} />}
-              <span>
-                <b>
-                  {toolLabels[t.name] || (t.name.startsWith('custom_') ? '电脑插件' : t.name)}
-                  {t.name !== 'bash' && t.path !== '.' ? ` · ${t.path}` : ''}
-                </b>
-                <small>
-                  {t.status === 'error' ? '失败' : t.status === 'running' ? '执行中' : '已完成'}
-                  {t.summary ? ' · ' + t.summary : ''}
-                  {t.exitCode !== undefined ? ` · 退出码 ${t.exitCode}` : ''}
-                </small>
-                {workbench &&
-                  (t.projectId || projectId) &&
-                  ['project_read', 'project_edit', 'project_write'].includes(t.name) &&
-                  t.path && (
-                    <button
-                      className="text-link"
-                      onClick={() =>
-                        workbench.openFile({
-                          projectId: (t.projectId || projectId)!,
-                          path: t.path,
-                          ...(t.backupId ? { backupId: t.backupId } : {}),
-                        })
-                      }
-                    >
-                      在侧栏打开文件
-                    </button>
+        {tools.map((t) => (
+          <div className="tool-row" key={t.id}>
+            {t.name === 'bash' ? <Terminal size={14} /> : <FileText size={14} />}
+            <span>
+              <b>
+                {toolLabels[t.name] || (t.name.startsWith('custom_') ? '电脑插件' : t.name)}
+                {t.name !== 'bash' && t.path !== '.' ? ` · ${t.path}` : ''}
+              </b>
+              <small>
+                {t.status === 'error' ? '失败' : t.status === 'running' ? '执行中' : '已完成'}
+                {t.summary ? ' · ' + t.summary : ''}
+                {t.exitCode !== undefined ? ` · 退出码 ${t.exitCode}` : ''}
+              </small>
+              {workbench &&
+                (t.projectId || projectId) &&
+                ['project_read', 'project_edit', 'project_write'].includes(t.name) &&
+                t.path && (
+                  <button
+                    className="text-link"
+                    onClick={() =>
+                      workbench.openFile({
+                        projectId: (t.projectId || projectId)!,
+                        path: t.path,
+                        ...(t.backupId ? { backupId: t.backupId } : {}),
+                      })
+                    }
+                  >
+                    在侧栏打开文件
+                  </button>
+                )}
+              {t.name === 'bash' && (
+                <details className="bash-output" open={t.status === 'running' || undefined}>
+                  <summary>命令与输出</summary>
+                  <pre className="bash-command">
+                    <code>$ {t.command}</code>
+                  </pre>
+                  {t.output && (
+                    <pre className="bash-terminal" aria-label="命令输出">
+                      {t.output}
+                    </pre>
                   )}
-                {t.name === 'bash' && (
-                  <details
-                    className="bash-output"
-                    open={expanded[t.id] ?? t.status === 'running'}
-                    onToggle={(event) => {
-                      if (event.target === event.currentTarget) {
-                        const value = event.currentTarget.open;
-                        setExpanded((old) => ({ ...old, [t.id]: value }));
-                      }
-                    }}
-                  >
-                    <summary>命令与输出</summary>
-                    {(expanded[t.id] ?? t.status === 'running') && (
-                      <>
-                        <pre className="bash-command">
-                          <code>$ {t.command}</code>
-                        </pre>
-                        {t.output && (
-                          <pre className="bash-terminal" aria-label="命令输出">
-                            {t.output}
-                          </pre>
-                        )}
-                      </>
-                    )}
-                  </details>
-                )}
-                {t.name !== 'bash' && (t.arguments || t.output) && (
-                  <details
-                    className="tool-output"
-                    open={expanded[t.id] ?? false}
-                    onToggle={(event) => {
-                      if (event.target === event.currentTarget) {
-                        const value = event.currentTarget.open;
-                        setExpanded((old) => ({ ...old, [t.id]: value }));
-                      }
-                    }}
-                  >
-                    <summary>查看详情</summary>
-                    {expanded[t.id] && (
-                      <>
-                        {t.arguments && <pre>{t.arguments}</pre>}
-                        {t.output && <pre>{t.output}</pre>}
-                      </>
-                    )}
-                  </details>
-                )}
-              </span>
-              {t.backupId && projectId && settings && (
-                <button
-                  className="text-link"
-                  disabled={!!busy || restored.includes(t.backupId)}
-                  onClick={() => {
-                    setBusy(t.backupId!);
-                    setError('');
-                    void api(settings, `/pi/projects/${t.projectId || projectId}/restore`, {
-                      backupId: t.backupId,
-                    })
-                      .then(() => setRestored((x) => [...x, t.backupId!]))
-                      .catch((e) => setError(e.message))
-                      .finally(() => setBusy(''));
-                  }}
-                >
-                  {restored.includes(t.backupId) ? <Check size={14} /> : <RotateCcw size={14} />}{' '}
-                  {restored.includes(t.backupId) ? '已恢复' : '恢复此修改'}
-                </button>
+                </details>
               )}
-            </div>
-          ))}
+              {t.name !== 'bash' && (t.arguments || t.output) && (
+                <details className="tool-output">
+                  <summary>查看详情</summary>
+                  {t.arguments && <pre>{t.arguments}</pre>}
+                  {t.output && <pre>{t.output}</pre>}
+                </details>
+              )}
+            </span>
+            {t.backupId && projectId && settings && (
+              <button
+                className="text-link"
+                disabled={!!busy || restored.includes(t.backupId)}
+                onClick={() => {
+                  setBusy(t.backupId!);
+                  setError('');
+                  void api(settings, `/pi/projects/${t.projectId || projectId}/restore`, {
+                    backupId: t.backupId,
+                  })
+                    .then(() => setRestored((x) => [...x, t.backupId!]))
+                    .catch((e) => setError(e.message))
+                    .finally(() => setBusy(''));
+                }}
+              >
+                {restored.includes(t.backupId) ? <Check size={14} /> : <RotateCcw size={14} />}{' '}
+                {restored.includes(t.backupId) ? '已恢复' : '恢复此修改'}
+              </button>
+            )}
+          </div>
+        ))}
         {error && <p className="error">{error}</p>}
       </details>
     </>

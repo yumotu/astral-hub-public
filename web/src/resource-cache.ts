@@ -23,12 +23,6 @@ function displayPath(path: string) {
     path,
   );
 }
-function containsLearningMaterial(path: string, value: unknown) {
-  return (
-    path.startsWith('/learning/lessons/') &&
-    !!(value as { lesson?: { sections?: unknown } } | null)?.lesson?.sections
-  );
-}
 export function flushResourceCaches() {
   if (timer) clearTimeout(timer);
   timer = undefined;
@@ -38,8 +32,7 @@ export function flushResourceCaches() {
     let chars = 64;
     for (const row of rows.slice().sort((a, b) => b.at - a.at)) {
       const [owner, path] = JSON.parse(row.key);
-      if (owner !== scope || !displayPath(path) || containsLearningMaterial(path, row.value))
-        continue;
+      if (owner !== scope || !displayPath(path)) continue;
       const record = { path, at: row.at, ttl: row.ttl, value: row.value };
       const length = JSON.stringify(record).length + 1;
       if (chars + length > maxStoredChars) continue;
@@ -162,7 +155,6 @@ export async function warmResourceCache(s: Settings) {
         if (
           typeof row.path === 'string' &&
           displayPath(row.path) &&
-          !containsLearningMaterial(row.path, row.value) &&
           Number.isFinite(row.at) &&
           row.at <= Date.now() &&
           Date.now() - row.at < retention &&
@@ -190,7 +182,6 @@ export async function warmResourceCache(s: Settings) {
 }
 export const peekAPI = <T>(s: Settings, path: string): T | undefined =>
   resourceCache.peek(resourceKey(s, path)) as T | undefined;
-export const guardAPI = (s: Settings, path: string) => resourceCache.guard(resourceKey(s, path));
 export function setAPICache(s: Settings, path: string, value: unknown) {
   resourceCache.set(resourceKey(s, path), value, Date.now(), cacheTTL(path) || 30000);
 }

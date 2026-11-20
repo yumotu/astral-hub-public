@@ -57,14 +57,12 @@ function fakeClient(account, state) {
       });
       return { destination: path, uid: 900 };
     },
-    async messageDelete(uid) {
-      (state.deletes ||= []).push({ address: account.address, uid });
+    async messageDelete() {
       return true;
     },
     async search(query) {
       state.searches ||= [];
       state.searches.push(query);
-      if (state.beforeSearch) await state.beforeSearch(account);
       return (state.uids || [101, 102]).filter(
         (uid) => !query.uid || uid <= Number(query.uid.split(':')[1]),
       );
@@ -76,7 +74,6 @@ function fakeClient(account, state) {
     async fetchOne(uid, query) {
       state.fetches.push({ uid, source: !!query.source });
       if (query.source) {
-        if (state.beforeSource) await state.beforeSource(account);
         return {
           uid,
           source: Buffer.from(state.source || rawEmail),
@@ -132,8 +129,6 @@ async function fixture(t, options = {}) {
       smtpFactory: () => ({
         sendMail: async (message) => {
           mailState.sends.push(message);
-          if (mailState.smtpError) throw new Error('Synthetic interrupted SMTP');
-          if (mailState.beforeSmtp) await mailState.beforeSmtp();
           return { messageId: '<sent@test.example>' };
         },
       }),
@@ -681,106 +676,6 @@ test('async IMAP client factory connects for account verification and mailbox re
   assert.equal(boxes.body.mailboxes[0].path, 'INBOX');
   assert.deepEqual(calls, ['qq', 'qq']);
 });
-test('rebind isolates reply and composition draft UIDs from the replacement mailbox', async (t) => {
-  const { request, mailState, app } = await fixture(t);
-  await request('/mail/account', { address: 'a@gmail.com', appPassword: 'test-password' });
-  const composition = newMail();
-  assert.equal((await request('/mail/messages/101/save-draft', { text: 'draft A' })).status, 200);
-  assert.equal((await request('/mail/compose/draft', composition)).status, 200);
-  await request('/mail/account', { address: 'b@gmail.com', appPassword: 'different-password' });
-  assert.equal(app.store.db.prepare('SELECT count(*) AS n FROM mail_drafts').get().n, 0);
-  assert.equal(app.store.db.prepare('SELECT count(*) AS n FROM mail_compositions').get().n, 0);
-  assert.equal((await request('/mail/messages/101/save-draft', { text: 'draft B' })).status, 200);
-  assert.equal((await request('/mail/compose/draft', composition)).status, 200);
-  assert.deepEqual(mailState.deletes || [], []);
-  assert.ok(app.store.db.prepare('SELECT revision FROM mail_drafts').get().revision);
-});
-
-test('legacy replies persist one SMTP attempt for concurrent IDs, retries and unknown results', async (t) => {
-  const { request, mailState, app } = await fixture(t);
-  await request('/mail/account', { address: 'a@gmail.com', appPassword: 'test-password' });
-  const data = { id: randomUUID(), text: 'confirmed reply', confirm: true };
-  let release, entered;
-  const started = new Promise((resolve) => {
-    entered = resolve;
-  });
-  mailState.beforeSmtp = () =>
-    new Promise((resolve) => {
-      release = resolve;
-      entered();
-    });
-  const firstSend = request('/mail/messages/101/send', data);
-  await started;
-  const pendingSend = await request('/mail/messages/101/send', data);
-  assert.equal(pendingSend.status, 409);
-  assert.equal(pendingSend.body.state, 'sending');
-  release();
-  assert.equal((await firstSend).body.ok, true);
-  mailState.beforeSmtp = null;
-  const results = await Promise.all([
-    request('/mail/messages/101/send', data),
-    request('/mail/messages/101/send', data),
-  ]);
-  assert.ok(
-    results.every((r) => r.status === 200 || (r.status === 409 && r.body.state === 'sending')),
-  );
-  assert.equal(mailState.sends.length, 1);
-  assert.equal((await request('/mail/messages/101/send', data)).body.ok, true);
-  assert.equal(
-    (await request('/mail/messages/101/send', { ...data, text: 'changed' })).status,
-    409,
-  );
-  mailState.smtpError = true;
-  const unknown = { text: 'legacy request without ID', confirm: true };
-  assert.equal((await request('/mail/messages/102/send', unknown)).body.state, 'unknown');
-  mailState.smtpError = false;
-  assert.equal((await request('/mail/messages/102/send', unknown)).body.state, 'unknown');
-  assert.equal(mailState.sends.length, 2);
-  app.store.db.prepare("UPDATE mail_reply_sends SET state='sending' WHERE state='unknown'").run();
-  assert.equal((await request('/mail/messages/102/send', unknown)).body.state, 'sending');
-  assert.equal(mailState.sends.length, 2);
-});
-
-test('rebind while reading rejects reply send and draft writeback before side effects', async (t) => {
-  for (const action of ['send', 'save-draft']) {
-    const { request, mailState } = await fixture(t);
-    await request('/mail/account', { address: 'a@gmail.com', appPassword: 'test-password' });
-    mailState.beforeSource = async () => {
-      mailState.beforeSource = null;
-      assert.equal(
-        (
-          await request('/mail/account', {
-            address: 'b@gmail.com',
-            appPassword: 'different-password',
-          })
-        ).status,
-        200,
-      );
-    };
-    const result = await request('/mail/messages/101/' + action, {
-      text: 'old thread',
-      ...(action === 'send' ? { confirm: true } : {}),
-    });
-    assert.equal(result.status, 409);
-    assert.match(result.body.error, /账号已改变/);
-    assert.equal(mailState.sends.length, 0);
-    assert.equal(mailState.appends.length, 0);
-  }
-});
-
-test('old-client INBOX observation never seeds a cursor with the replacement revision', async (t) => {
-  const { request, mailState, app } = await fixture(t);
-  await request('/mail/account', { address: 'a@gmail.com', appPassword: 'test-password' });
-  mailState.beforeSearch = async () => {
-    mailState.beforeSearch = null;
-    await request('/mail/account', { address: 'b@gmail.com', appPassword: 'different-password' });
-  };
-  assert.equal((await request('/mail/messages?refresh=1')).status, 409);
-  assert.equal(app.store.db.prepare('SELECT count(*) AS n FROM mail_notice_cursors').get().n, 0);
-  assert.equal((await request('/mail/messages?refresh=1')).status, 200);
-  assert.equal(app.store.db.prepare('SELECT count(*) AS n FROM mail_notice_cursors').get().n, 1);
-});
-
 const newMail = () => ({
   id: randomUUID(),
   to: ['colleague@example.com'],

@@ -1,3 +1,5 @@
 [
-  { "id": "workspace", "name": "Server projects", "root": "/projects/workspace", "serverPath": "/projects/workspace", "readOnly": false, "description": "Projects stored in the deployment's project volume" }
+  {"id":"workspace","name":"服务器项目目录","root":"/projects/workspace","serverPath":"/opt/astral-projects","readOnly":false,"description":"可上传、创建和修改的服务器本地项目"},
+  {"id":"astral-hub","name":"星屿应用源码","root":"/projects/astral-hub","serverPath":"/opt/astral-hub","readOnly":false,"description":"当前部署的后端、网页源码和文档，支持读取和修改"},
+  {"id":"server-workspace","name":"原有服务器工作区","root":"/projects/server-workspace","serverPath":"/root/workspace","readOnly":false,"description":"服务器已有工作目录，支持读取和修改"}
 ]

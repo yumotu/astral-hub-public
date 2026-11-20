@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Menu, PanelRight, Plus, RefreshCw, Settings2, X } from 'lucide-react';
 import { api, dateLabel } from './data';
-import { peekAPI, setAPICache, invalidateAPI, warmResourceCache, guardAPI } from './resource-cache';
+import { peekAPI, setAPICache, invalidateAPI, warmResourceCache } from './resource-cache';
 import {
   dshDisplayPath,
   dshDirectoryPath,
@@ -646,7 +646,6 @@ export function DshRemoteWorkspace({
     setConversation((current) => (current?.id === selected ? current : null));
     setSyncError('');
     const sync = async () => {
-      const generation = guardAPI(settings, dshDisplayPath(selected));
       try {
         const r = await api<{ conversation: DshConversation }>(
           settings,
@@ -656,14 +655,14 @@ export function DshRemoteWorkspace({
           false,
           { fresh: true, timeout: 10000, signal: abort.signal },
         );
-        if (live && generation.current()) {
+        if (live) {
           setSyncError('');
           setConversation(r.conversation);
           setAPICache(settings, dshDisplayPath(selected), dshDisplaySnapshot(r.conversation));
           setConversations((old) => [r.conversation, ...old.filter((c) => c.id !== selected)]);
         }
       } catch (e) {
-        if (live && generation.current()) {
+        if (live) {
           if ([401, 403, 404].includes((e as Error & { status?: number }).status || 0)) {
             invalidateAPI(settings, dshDisplayPath(selected), true);
             setConversation(null);
@@ -671,7 +670,6 @@ export function DshRemoteWorkspace({
           setSyncError((e as Error).message);
         }
       } finally {
-        generation.release();
         if (live) timer = setTimeout(sync, document.hidden ? 12000 : 650);
       }
     };

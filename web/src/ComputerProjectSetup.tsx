@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FolderPlus, Monitor, RefreshCw } from 'lucide-react';
 import { ConversationDialog } from './ConversationMenu';
 import { matchesLocalProjectComputer } from '../../shared/computer-project-setup.mjs';
-import type { LocalComputerStatus } from './desktop-bridge';
+import type { LocalComputerPermission, LocalComputerStatus } from './desktop-bridge';
 import type { Settings } from './types';
 import './computer-project-setup.css';
 
@@ -98,8 +98,9 @@ function ProjectSetupDetails({
   const identity = { server, owner };
   const [status, setStatus] = useState<LocalComputerStatus | null>(null);
   const [checking, setChecking] = useState(!!bridge && computer.target.origin === 'computer');
-  const [write, setWrite] = useState(false),
-    [execute, setExecute] = useState(false);
+  const [fullAccess, setFullAccess] = useState(true),
+    [write, setWrite] = useState(true),
+    [execute, setExecute] = useState(true);
   const [error, setError] = useState(''),
     [notice, setNotice] = useState('');
   useEffect(() => {
@@ -147,7 +148,24 @@ function ProjectSetupDetails({
         setStatus(current);
         throw Error('本机连接已变化，请在所选电脑上添加项目，再刷新目录。');
       }
-      const next = await bridge.grant({ ...identity, allowWrite: write, allowExecute: execute });
+      const permissions: LocalComputerPermission[] = fullAccess
+        ? [
+            'file.read',
+            'file.write',
+            'terminal.execute',
+            'network.outbound',
+            'plugin.install',
+            'dsh.workspace',
+            'computer.background',
+          ]
+        : (['file.read', ...(write ? ['file.write'] : []), ...(execute ? ['terminal.execute'] : [])] as LocalComputerPermission[]);
+      const next = await bridge.grant({
+        ...identity,
+        permissionProfile: fullAccess ? 'full-workspace' : 'legacy',
+        permissions,
+        allowWrite: permissions.includes('file.write'),
+        allowExecute: permissions.includes('terminal.execute'),
+      });
       if (next.cancelled) return;
       setStatus(next);
       window.dispatchEvent(new Event('astral:computer-changed'));
@@ -175,22 +193,41 @@ function ProjectSetupDetails({
           <label className="computer-project-setup-option">
             <input
               type="checkbox"
-              checked={write}
+              checked={fullAccess}
               disabled={busy}
-              onChange={(e) => setWrite(e.target.checked)}
+              onChange={(e) => {
+                setFullAccess(e.target.checked);
+                if (e.target.checked) {
+                  setWrite(true);
+                  setExecute(true);
+                }
+              }}
             />
-            允许修改新项目文件
+            新项目授予完整工作权限
           </label>
-          <label className="computer-project-setup-option">
-            <input
-              type="checkbox"
-              checked={execute}
-              disabled={busy}
-              onChange={(e) => setExecute(e.target.checked)}
-            />
-            允许新项目终端与 Agent 执行命令
-          </label>
-          {execute && (
+          {!fullAccess && (
+            <>
+              <label className="computer-project-setup-option">
+                <input
+                  type="checkbox"
+                  checked={write}
+                  disabled={busy}
+                  onChange={(e) => setWrite(e.target.checked)}
+                />
+                允许修改新项目文件
+              </label>
+              <label className="computer-project-setup-option">
+                <input
+                  type="checkbox"
+                  checked={execute}
+                  disabled={busy}
+                  onChange={(e) => setExecute(e.target.checked)}
+                />
+                允许新项目终端与 Agent 执行命令
+              </label>
+            </>
+          )}
+          {(fullAccess || execute) && (
             <p className="field-help">
               命令使用此电脑当前系统用户的权限和网络；项目目录不会限制已授权 Shell。
             </p>

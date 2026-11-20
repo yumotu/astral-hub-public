@@ -10,20 +10,6 @@ export function createReadCache({
     pending = new Map();
   let epoch = 0;
   const versions = new Map();
-  const guards = new Map();
-  function guard(key) {
-    const token = { valid: true };
-    if (!guards.has(key)) guards.set(key, new Set());
-    guards.get(key).add(token);
-    return {
-      current: () => token.valid,
-      release: () => {
-        const tokens = guards.get(key);
-        tokens?.delete(token);
-        if (!tokens?.size) guards.delete(key);
-      },
-    };
-  }
   const clone = (value) => structuredClone(value);
   function trim() {
     let bytes = [...entries.values()].reduce((n, row) => n + row.bytes, 0);
@@ -65,11 +51,6 @@ export function createReadCache({
     }
   }
   function invalidate(match = (key) => true) {
-    for (const [key, tokens] of guards)
-      if (match(key)) {
-        for (const token of tokens) token.valid = false;
-        guards.delete(key);
-      }
     for (const key of new Set([...entries.keys(), ...pending.keys()]))
       if (match(key)) {
         entries.delete(key);
@@ -83,12 +64,9 @@ export function createReadCache({
     entries.clear();
     pending.clear();
     versions.clear();
-    for (const tokens of guards.values()) for (const token of tokens) token.valid = false;
-    guards.clear();
     onChange();
   }
   return {
-    guard,
     read,
     peek,
     set,

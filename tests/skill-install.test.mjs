@@ -106,7 +106,7 @@ test('slash install requests select the host import tool instead of invoking a s
   assert.match(skillRequest('/skills 停用 pdf-reader'), /停用 pdf-reader/);
 });
 test('only Pi relaxes namespace profiles; the app retains Docker default profiles', async () => {
-  const compose = await readFile(new URL('../deploy/compose.yml', import.meta.url), 'utf8');
+  const compose = await readFile(new URL('../deploy/compose.tunnel.yml', import.meta.url), 'utf8');
   const [app, pi] = compose.split('\n  pi:\n');
   assert.match(app, /security_opt: \[no-new-privileges:true\]/);
   assert.doesNotMatch(app, /seccomp:unconfined|apparmor:unconfined/);

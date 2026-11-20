@@ -33,57 +33,6 @@ const entry = z
       .optional(),
   })
   .strict();
-let database;
-function serializedPreparationWrite(key, legacy, work) {
-  if (typeof indexedDB === 'undefined')
-    return Promise.reject(Error('本地草稿存储不可用，请保留当前内容。'));
-  database ||= new Promise((resolve, reject) => {
-    const request = indexedDB.open('astral-conversation-preparations-v1', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('writes');
-    request.onerror = () => {
-      database = undefined;
-      reject(request.error);
-    };
-    request.onblocked = () => {
-      database = undefined;
-      reject(Error('本地草稿存储正在升级，请关闭其他页面后重试。'));
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      db.onversionchange = () => {
-        db.close();
-        database = undefined;
-      };
-      resolve(db);
-    };
-  });
-  return database.then(
-    (db) =>
-      new Promise((resolve, reject) => {
-        const transaction = db.transaction('writes', 'readwrite');
-        let result, failure;
-        transaction.oncomplete = () => resolve(result);
-        transaction.onabort = transaction.onerror = () =>
-          reject(failure || transaction.error || Error('本地草稿保存失败。'));
-        // Read and write the actual journal in the same transaction. Locking IDB
-        // while reading a different tab's localStorage cache is not atomic.
-        const store = transaction.objectStore('writes');
-        const request = store.get(key);
-        request.onsuccess = () => {
-          try {
-            const current = request.result === undefined ? legacy() : request.result;
-            const value = work(current);
-            if (value.persist !== false || request.result === undefined)
-              store.put(value.entries, key);
-            result = value.result;
-          } catch (e) {
-            failure = e;
-            transaction.abort();
-          }
-        };
-      }),
-  );
-}
 /** Local intent only. A restored entry never resumes a create/send by itself. */
 export function createConversationPreparationJournal(storage, scope) {
   const key = scope + ':preparations';
@@ -100,15 +49,13 @@ export function createConversationPreparationJournal(storage, scope) {
         state: v.state === 'handed' ? 'handed' : 'unknown',
         error:
           v.state === 'handed'
-            ? '发送交接尚未确认，请核对对话记录；不会自动重复发送。'
+            ? '消息已交给原发送流程，请核对对话记录。'
             : '正在核对上次创建结果，草稿已保留。',
       }));
   } catch {}
-  let stagedWrite;
-  // Mutations stage in memory; the enclosing IDB transaction commits the array.
   function save(next) {
+    storage.setItem(key, JSON.stringify(next));
     entries = next;
-    stagedWrite = next;
   }
   const find = (id) => entries.find((v) => v.id === id);
   function patch(id, value) {
@@ -118,9 +65,8 @@ export function createConversationPreparationJournal(storage, scope) {
     save(entries.map((v) => (v.id === id ? next : v)));
     return next;
   }
-  const methods = {
+  return {
     list: () => entries,
-    hydrate: () => entries,
     begin(id, value) {
       const old = find(id);
       if (old) return old;
@@ -199,160 +145,4 @@ export function createConversationPreparationJournal(storage, scope) {
     },
     remove: (id) => save(entries.filter((v) => v.id !== id)),
   };
-  const text = (value) => JSON.stringify([value?.draft, value?.message]);
-  let baseline = new Map();
-  try {
-    baseline = new Map(
-      z
-        .array(entry)
-        .max(40)
-        .parse(JSON.parse(storage.getItem(key) || '[]'))
-        .map((value) => [value.id, value]),
-    );
-  } catch {}
-  let pending = Promise.resolve();
-  const seen = new Set(entries.map((value) => value.id));
-  const editorTransitions = new Map();
-  return /** @type {Record<string, (...args: any[]) => any>} */ (
-    Object.fromEntries(
-      Object.entries(methods).map(([name, method]) => {
-        if (name === 'list') return [name, method];
-        /** @param {...any} args */
-        const write = (...args) => {
-          const run = pending.then(async () => {
-            const local = find(args[0]);
-            const before = entries,
-              previousBaseline = baseline;
-            const unsaved = entries.filter(
-              (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
-            );
-            try {
-              let durable;
-              const result = await serializedPreparationWrite(
-                key,
-                () => JSON.parse(storage.getItem(key) || '[]'),
-                (stored) => {
-                  stagedWrite = undefined;
-                  const fresh = z.array(entry).max(40).parse(stored);
-                  const current = fresh.find((value) => value.id === args[0]);
-                  if (!['begin', 'remove', 'claim', 'hydrate'].includes(name) && !current)
-                    throw Error('本地草稿已在其他页面移除；当前输入仍保留，请先复制内容。');
-                  // Hydration can finish before React displays the new draft.
-                  // Compare with the text the editor actually showed, not only
-                  // the journal's refreshed baseline, inside this transaction.
-                  const expectedDraft =
-                    name === 'draft'
-                      ? args[2]
-                      : name === 'queue'
-                        ? args[3]
-                        : name === 'edit'
-                          ? args[1]
-                          : undefined;
-                  // A queued send may commit while its old input is still
-                  // displayed. Accept that one local transition only if the
-                  // exact resulting draft/message is still durable.
-                  const transition = editorTransitions.get(args[0]);
-                  const followsOwnEdit =
-                    name === 'draft' &&
-                    transition?.from === expectedDraft &&
-                    transition?.to === text(current);
-                  if (
-                    typeof expectedDraft === 'string' &&
-                    current?.draft !== expectedDraft &&
-                    !followsOwnEdit
-                  )
-                    throw Error(
-                      '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
-                    );
-                  if (
-                    current &&
-                    !['begin', 'resolve', 'fail'].includes(name) &&
-                    text(current) !== text(baseline.get(args[0]))
-                  )
-                    throw Error(
-                      '此草稿已在其他页面修改，未覆盖其内容；请保留当前输入后重新打开核对。',
-                    );
-                  if (
-                    local &&
-                    !['draft', 'remove', 'begin'].includes(name) &&
-                    text(local) !== text(baseline.get(args[0]))
-                  )
-                    throw Error('当前输入尚未保存，请先复制内容或重新保存草稿。');
-                  const retained = entries.filter(
-                    (value) => value.id !== args[0] && text(value) !== text(baseline.get(value.id)),
-                  );
-                  const confirmationRequired = new Set(
-                    entries.filter((value) => value.resumeRequired).map((value) => value.id),
-                  );
-                  entries = fresh.map((value) =>
-                    confirmationRequired.has(value.id) ||
-                    (!seen.has(value.id) && value.id !== (name === 'begin' ? args[0] : null))
-                      ? { ...value, resumeRequired: true }
-                      : value,
-                  );
-                  const result =
-                    current?.state === 'handed' &&
-                    ['creating', 'resume', 'resolve', 'fail'].includes(name)
-                      ? current
-                      : method(...args);
-                  durable = stagedWrite || fresh;
-                  const previous = baseline;
-                  baseline = new Map(entries.map((value) => [value.id, value]));
-                  for (const value of retained) {
-                    if (previous.has(value.id)) baseline.set(value.id, previous.get(value.id));
-                    else baseline.delete(value.id);
-                    entries = entries.filter((item) => item.id !== value.id).concat(value);
-                  }
-                  return { entries: durable, result, persist: stagedWrite !== undefined };
-                },
-              );
-              for (const value of durable) seen.add(value.id);
-              if (name === 'queue') {
-                const next = durable.find((value) => value.id === args[0]);
-                if (local && next)
-                  editorTransitions.set(args[0], { from: local.draft, to: text(next) });
-              } else if (name === 'draft' || name === 'remove' || name === 'edit')
-                editorTransitions.delete(args[0]);
-              // Optional startup preview only. A stale/failed mirror must never
-              // roll back a committed journal or become the next writer's source.
-              try {
-                storage.setItem(key, JSON.stringify(durable));
-              } catch {}
-              return name === 'hydrate' ? entries : result;
-            } catch (e) {
-              entries = before;
-              baseline = previousBaseline;
-              for (const value of unsaved)
-                entries = entries.filter((item) => item.id !== value.id).concat(value);
-              if (local && name === 'draft') {
-                const retained = entry.parse({
-                  ...local,
-                  draft: args[1],
-                  resumeRequired: true,
-                  error: e.message,
-                });
-                entries = entries.some((value) => value.id === local.id)
-                  ? entries.map((value) => (value.id === local.id ? retained : value))
-                  : [...entries, retained];
-              } else if (local && name === 'claim') {
-                entries = entries.map((value) =>
-                  value.id === local.id
-                    ? {
-                        ...value,
-                        resumeRequired: true,
-                        error: '本地保存失败，消息尚未发送。内容已保留，请重试继续或放弃本地草稿。',
-                      }
-                    : value,
-                );
-              }
-              throw e;
-            }
-          });
-          pending = run.catch(() => {});
-          return run;
-        };
-        return [name, write];
-      }),
-    )
-  );
 }

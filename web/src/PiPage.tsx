@@ -972,19 +972,9 @@ function ServerPiPage({
       localStorage.setItem(viewKey + ':project', projectId);
     } catch {}
   }, [conversation, projectId, viewKey]);
-  const refreshGeneration = useRef(0);
   async function refresh() {
-    const generation = ++refreshGeneration.current;
-    const live = () => alive.current && refreshGeneration.current === generation;
-    const failed = (e: Error) => {
-      if (live()) setError(e.message);
-    };
-    await Promise.all([
-      api<Status>(settings, '/pi/status', undefined, undefined, false, { fresh: true })
-        .then((s) => {
-          if (live()) setStatus(s);
-        })
-        .catch(failed),
+    const [s, c] = await Promise.all([
+      api<Status>(settings, '/pi/status', undefined, undefined, false, { fresh: true }),
       api<{ conversations: Conversation[] }>(
         settings,
         '/pi/conversations?archived=include',
@@ -992,43 +982,31 @@ function ServerPiPage({
         undefined,
         false,
         { fresh: true },
-      )
-        .then((c) => {
-          if (live()) setConversations(c.conversations);
-        })
-        .catch(failed),
-      api<{ preferences: { defaultProjectId: string | null } }>(
-        settings,
-        '/pi/preferences',
-        undefined,
-        undefined,
-        false,
-        { fresh: true },
-      )
-        .then((p) => {
-          if (live()) {
-            setDefaultProjectId(p.preferences.defaultProjectId);
-            setPreferencesReady(true);
-          }
-        })
-        .catch(failed),
+      ),
     ]);
+    setStatus(s);
+    setConversations(c.conversations);
+    const p = await api<{ preferences: { defaultProjectId: string | null } }>(
+      settings,
+      '/pi/preferences',
+      undefined,
+      undefined,
+      false,
+      { fresh: true },
+    );
+    setDefaultProjectId(p.preferences.defaultProjectId);
+    setPreferencesReady(true);
   }
   useEffect(() => {
-    const generation = ++refreshGeneration.current;
     if (!session) return;
-    let active = true;
-    const live = () => active && refreshGeneration.current === generation;
-    api<Status>(settings, '/pi/status')
-      .then((s) => {
-        if (live()) setStatus(s);
-      })
-      .catch((e) => {
-        if (live()) setError(e.message);
-      });
-    api<{ conversations: Conversation[] }>(settings, '/pi/conversations?archived=include')
-      .then((c) => {
-        if (live()) {
+    let live = true;
+    Promise.all([
+      api<Status>(settings, '/pi/status'),
+      api<{ conversations: Conversation[] }>(settings, '/pi/conversations?archived=include'),
+    ])
+      .then(([s, c]) => {
+        if (live) {
+          setStatus(s);
           setConversations(c.conversations);
           const restored = restoredConversation.current;
           restoredConversation.current = null;
@@ -1048,7 +1026,7 @@ function ServerPiPage({
             )
               .then((history) => {
                 if (
-                  live() &&
+                  live &&
                   currentConversation.current === restored &&
                   !history.conversation &&
                   !history.turns.length
@@ -1062,75 +1040,27 @@ function ServerPiPage({
         }
       })
       .catch((e) => {
-        if (live()) setError(e.message);
+        if (live) setError(e.message);
       });
     api<{ preferences: { defaultProjectId: string | null } }>(settings, '/pi/preferences')
       .then((r) => {
-        if (live()) {
+        if (live) {
           setDefaultProjectId(r.preferences.defaultProjectId);
           setPreferencesReady(true);
         }
       })
       .catch((e) => {
-        if (live()) setError(e.message);
+        if (live) setError(e.message);
       });
     api<{ projects: ServerProject[] }>(settings, '/pi/projects')
       .then((r) => {
-        if (active) setProjects(r.projects);
+        if (live) setProjects(r.projects);
       })
       .catch(() => {});
     return () => {
-      active = false;
-      refreshGeneration.current++;
+      live = false;
     };
   }, [session, settings]);
-  useEffect(() => {
-    if (!session || status?.available) return;
-    let live = true,
-      busy = false,
-      attempts = 0;
-    let nextAt = Date.now() + 2000;
-    let timer: ReturnType<typeof setTimeout>;
-    const retry = async () => {
-      if (!live || busy || attempts >= 5) return;
-      clearTimeout(timer);
-      if (document.hidden) return;
-      if (Date.now() < nextAt) {
-        timer = setTimeout(() => void retry(), Math.max(1000, nextAt - Date.now()));
-        return;
-      }
-      busy = true;
-      attempts++;
-      try {
-        const value = await api<Status>(settings, '/pi/status', undefined, undefined, false, {
-          fresh: true,
-        });
-        if (live) setStatus(value);
-        if (value.available) return;
-      } catch (e) {
-        if (live) setError((e as Error).message);
-      } finally {
-        busy = false;
-      }
-      nextAt = Date.now() + Math.min(30000, 2000 * 2 ** attempts);
-      if (live && attempts < 5) timer = setTimeout(() => void retry(), nextAt - Date.now());
-    };
-    const wake = () => {
-      if (!busy && !document.hidden && attempts >= 5) attempts = 0;
-      void retry();
-    };
-    timer = setTimeout(() => void retry(), 2000);
-    window.addEventListener('focus', wake);
-    window.addEventListener('online', wake);
-    document.addEventListener('visibilitychange', wake);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-      window.removeEventListener('focus', wake);
-      window.removeEventListener('online', wake);
-      document.removeEventListener('visibilitychange', wake);
-    };
-  }, [session, settings, status?.available]);
   useEffect(() => {
     if (!session) return;
     let live = true;
@@ -1184,75 +1114,57 @@ function ServerPiPage({
     setCompacting(false);
     setFailedTools([]);
     setEmptyConversation(false);
-    let retries = 0;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = () =>
-      api<{
-        turns: PiTurn[];
-        conversation?: Conversation | null;
-        sessionContext?: PiSessionContext | null;
-      }>(settings, `/pi/conversations/${conversation}`, undefined, undefined, false, {
-        fresh: retries > 0,
+    api<{
+      turns: PiTurn[];
+      conversation?: Conversation | null;
+      sessionContext?: PiSessionContext | null;
+    }>(settings, `/pi/conversations/${conversation}`)
+      .then((r) => {
+        if (live) {
+          setTurns((old) =>
+            [...new Map([...old, ...r.turns].map((t) => [t.id, t])).values()].sort(
+              (a, b) => (a.seq || 0) - (b.seq || 0),
+            ),
+          );
+          setMore(r.turns.length === 50);
+          if (r.conversation) {
+            setConversations((old) => [
+              ...old.filter((c) => c.id !== r.conversation!.id),
+              r.conversation!,
+            ]);
+            setProjectId(r.conversation.projectId || '');
+            if (!r.turns.length)
+              setAccess(savedOperation(conversation).access || r.conversation.access || 'read');
+          }
+          setEmptyConversation(
+            !r.turns.length &&
+              !r.conversation &&
+              !tasksRef.current.some((t) => t.conversationId === conversation),
+          );
+          setSessionContext((old) => mergeSessionContext(old, r.sessionContext, conversation));
+          if (r.turns.length) {
+            setProjectId(r.turns[0].projectId || '');
+            const running = tasksRef.current.find(
+              (t) => t.conversationId === conversation && taskPending(t) && !t.parentId,
+            );
+            setAccess(
+              running?.access ||
+                drafts.current.get(conversation)?.access ||
+                savedOperation(conversation).access ||
+                r.turns.at(-1)?.access ||
+                'read',
+            );
+          }
+        }
       })
-        .then((r) => {
-          if (live) {
-            setTurns((old) =>
-              [...new Map([...old, ...r.turns].map((t) => [t.id, t])).values()].sort(
-                (a, b) => (a.seq || 0) - (b.seq || 0),
-              ),
-            );
-            setMore(r.turns.length === 50);
-            if (r.conversation) {
-              setConversations((old) => [
-                ...old.filter((c) => c.id !== r.conversation!.id),
-                r.conversation!,
-              ]);
-              setProjectId(r.conversation.projectId || '');
-              if (!r.turns.length)
-                setAccess(savedOperation(conversation).access || r.conversation.access || 'read');
-            }
-            setEmptyConversation(
-              !r.turns.length &&
-                !r.conversation &&
-                !tasksRef.current.some((t) => t.conversationId === conversation),
-            );
-            setSessionContext((old) => mergeSessionContext(old, r.sessionContext, conversation));
-            if (r.turns.length) {
-              setProjectId(r.turns[0].projectId || '');
-              const running = tasksRef.current.find(
-                (t) => t.conversationId === conversation && taskPending(t) && !t.parentId,
-              );
-              setAccess(
-                running?.access ||
-                  drafts.current.get(conversation)?.access ||
-                  savedOperation(conversation).access ||
-                  r.turns.at(-1)?.access ||
-                  'read',
-              );
-            }
-          }
-        })
-        .catch((e) => {
-          if (live) {
-            setError(e.message);
-            if (retries < 3) {
-              retries++;
-              timer = setTimeout(
-                () => {
-                  if (live) void load();
-                },
-                2000 * 2 ** (retries - 1),
-              );
-            }
-          }
-        })
-        .finally(() => {
-          if (live) setLoadingHistory(false);
-        });
-    void load();
+      .catch((e) => {
+        if (live) setError(e.message);
+      })
+      .finally(() => {
+        if (live) setLoadingHistory(false);
+      });
     return () => {
       live = false;
-      clearTimeout(timer);
     };
   }, [conversation, session, settings]);
   const settledKey = currentTasks

@@ -84,6 +84,8 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
           location: 'computer',
           hostId: d.id,
           projectId: p.id,
+          workspaceId: d.id,
+          workspaceName: '本机工作区',
           locationName: d.name,
           projectName: p.name,
           ...(p.originalName ? { originalName: p.originalName } : {}),
@@ -123,6 +125,8 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
             origin: 'server',
             projectId: p.id,
             location: 'server',
+            ...(p.sourceId ? { workspaceId: p.sourceId } : { workspaceId: 'server' }),
+            ...(p.sourceName ? { workspaceName: p.sourceName } : { workspaceName: '服务器项目目录' }),
             locationName: '服务器',
             projectName: p.displayName || p.name || p.id,
             ...(p.originalName ? { originalName: p.originalName } : {}),
@@ -133,13 +137,10 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
     return items;
   }
   async function loadTargets(actor) {
-    const [items, outcomes] = await Promise.all([
-      piTargets(actor),
-      Promise.allSettled(
-        (dshRemote.status(actor.id).chatAvailable
-          ? dshRemote.status(actor.id).connections
-          : []
-        ).map(async (c) => {
+    const items = await piTargets(actor);
+    if (dshRemote.status(actor.id).chatAvailable) {
+      const outcomes = await Promise.allSettled(
+        dshRemote.status(actor.id).connections.map(async (c) => {
           const catalogue = await request(actor, `/api/agent/remote/connections/${c.id}/catalogue`);
           return catalogue.workspaces.map((w) => ({
             origin: 'remote',
@@ -152,9 +153,9 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
             ...(w.originalName ? { originalName: w.originalName } : {}),
           }));
         }),
-      ),
-    ]);
-    for (const r of outcomes) if (r.status === 'fulfilled') items.push(...r.value);
+      );
+      for (const r of outcomes) if (r.status === 'fulfilled') items.push(...r.value);
+    }
     cachedTargets.set(actor.id, items);
     targetReads.set(actor.id, now());
     return items;

@@ -327,7 +327,7 @@ test('deferred history and selected Pi or paired computer creation do not wait f
       '["conversation_handoff_v1"]',
     );
   f.app.store.db
-    .prepare('INSERT INTO relay_projects VALUES(?,?,?,?,?,?)')
+    .prepare('INSERT INTO relay_projects(device_id,id,name,allow_write,allow_execute,revoked) VALUES(?,?,?,?,?,?)')
     .run(deviceId, projectId, 'Existing project', 1, 1, 0);
   f.holdDirectory();
   const prompt = async (promise) => {
@@ -468,7 +468,7 @@ for (const location of ['server', 'computer'])
         '["conversation_handoff_v1"]',
       );
       f.app.store.db
-        .prepare('INSERT INTO relay_projects VALUES(?,?,?,?,?,?)')
+        .prepare('INSERT INTO relay_projects(device_id,id,name,allow_write,allow_execute,revoked) VALUES(?,?,?,?,?,?)')
         .run(id, projectId, 'Same project name', 1, 1, 0);
     }
     const result = await f.own('/assistant/conversations');
@@ -490,6 +490,8 @@ for (const location of ['server', 'computer'])
         location: 'computer',
         hostId: id,
         projectId,
+        workspaceId: id,
+        workspaceName: '本机工作区',
         locationName: 'Same computer name',
         projectName: 'Same project name',
       })),

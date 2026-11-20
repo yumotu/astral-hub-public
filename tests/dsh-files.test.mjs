@@ -61,7 +61,7 @@ async function fixture(t, { oldPlugin = false } = {}) {
   await req('/tools', { enabled: true });
   t.after(async () => { service.close(); engine.close(); plugin.dispose(); server.closeAllConnections(); await new Promise(r => server.close(r)); db.close(); await rm(root, { recursive: true, force: true }); });
   return {
-    root, db, service, files, chat, workspace, plugin, agent, base, endpoint, conversation, path, req, upload,
+    root, db, service, files, workspace, plugin, agent, base, endpoint, conversation, path, req, upload,
     async prompt(ids = []) { const id = randomUUID(), r = await req('/prompt', { id, text: 'synthetic human input', attachments: ids }); assert.equal(r.status, 200, JSON.stringify(r)); return id; },
     tool: (name, args = {}, callId = randomUUID()) => plugin.file(name, args, { agent, callId, signal: new AbortController().signal }),
     end: () => emit('turn/end', { turn, reason: { kind: 'completed' } }),
@@ -194,124 +194,6 @@ test('an old native plugin rejects attachments before prompt admission and does 
   assert.equal(view.messages.length, 0); assert.equal(view.actions.find(a => a.id === id).state, 'rejected');
   assert.equal((await f.req('/files/' + file.id, null, 'alice', 'DELETE')).status, 200);
 });
-test('deleting a draft excludes concurrent DSH binding and does not leave dangling history', async t => {
-  const f = await fixture(t), file = await f.upload('race.txt', Buffer.from('draft'));
-  const paused = Promise.withResolvers(), started = Promise.withResolvers();
-  const delayed = createChatFiles(f.db, { root: join(f.root, 'storage'), removeFile: async (...args) => {
-    started.resolve(); await paused.promise; return rm(...args);
-  } });
-  const removing = delayed.remove('alice', dshFileScope('alice', f.conversation), file.id);
-  await started.promise;
-  const requestId = randomUUID();
-  const rejected = await f.req('/prompt', { id: requestId, text: 'do not bind deleted source', attachments: [file.id] });
-  assert.equal(rejected.status, 409);
-  assert.equal(f.db.prepare('SELECT count(*) n FROM dsh_task_files WHERE file_id=?').get(file.id).n, 0);
-  paused.resolve(); await removing;
-  assert.equal(f.db.prepare('SELECT count(*) n FROM pi_files WHERE id=?').get(file.id).n, 0);
-  assert.equal((await f.req()).status, 200);
-});
-for (const rejection of ['remoteRejected', 'localRejected', 'unknown']) test(`DSH attachment retention after ${rejection}`, async t => {
-  const f = await fixture(t), file = await f.upload('receipt.txt', Buffer.from('draft'));
-  const taskId = randomUUID();
-  f.chat.prompt = async () => { throw Object.assign(Error('synthetic prompt outcome'), rejection === 'unknown' ? {} : { [rejection]: true }); };
-  const rejected = await f.req('/prompt', { id: taskId, text: 'synthetic', attachments: [file.id] });
-  assert.equal(rejected.status, 500);
-  const count = f.db.prepare("SELECT count(*) n FROM dsh_task_files WHERE task_id=? AND kind='input'").get(taskId).n;
-  assert.equal(count, rejection === 'unknown' ? 1 : 0);
-  const removed = await f.req('/files/' + file.id, null, 'alice', 'DELETE');
-  assert.equal(removed.status, rejection === 'unknown' ? 409 : 200);
-  assert.equal((await f.req()).status, 200);
-});
-
-test('interrupted deletion marks survive reopening and can be explicitly cleaned without binding missing bytes', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'astral-delete-recovery-'));
-  let db = new DatabaseSync(join(root, 'db.sqlite'));
-  db.exec('CREATE TABLE pi_turns(owner TEXT,conversation_id TEXT,attachments TEXT,artifacts TEXT);');
-  const owner = 'alice', conversation = randomUUID(), scope = dshFileScope(owner, conversation);
-  const store = createChatFiles(db, { root: join(root, 'storage') });
-  const file = await store.save(owner, scope, 'interrupted.txt', Buffer.from('draft'));
-  // Model a crash immediately after committing the marker, before filesystem deletion.
-  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run(owner, file.id);
-  db.close(); db = new DatabaseSync(join(root, 'db.sqlite'));
-  const reopened = createChatFiles(db, { root: join(root, 'storage') });
-  const bridge = createDshFiles(db, { files: () => reopened, task: () => null, active: () => false });
-  assert.throws(() => bridge.bind(owner, conversation, randomUUID(), [file.id]), { status: 409 });
-  await reopened.remove(owner, scope, file.id);
-  assert.equal(reopened.list(owner, scope).length, 0);
-  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions').get().n, 0);
-  const missing = await reopened.save(owner, scope, 'missing.txt', Buffer.from('draft'));
-  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run(owner, missing.id);
-  await rm(join(root, 'storage', hash(owner), scope, missing.id));
-  db.close(); db = new DatabaseSync(join(root, 'db.sqlite'));
-  await createChatFiles(db, { root: join(root, 'storage') }).remove(owner, scope, missing.id);
-  assert.equal(db.prepare('SELECT count(*) n FROM pi_files').get().n, 0);
-  db.close(); await rm(root, { recursive: true, force: true });
-});
-
-test('failed filesystem deletion remains blocked for binding but permits explicit cleanup', async t => {
-  const f = await fixture(t), file = await f.upload('failed-delete.txt', Buffer.from('draft'));
-  const scope = dshFileScope('alice', f.conversation);
-  const broken = createChatFiles(f.db, { root: join(f.root, 'storage'), removeFile: async () => { throw Error('synthetic disk error'); } });
-  await assert.rejects(broken.remove('alice', scope, file.id), { status: 409 });
-  assert.throws(() => f.files.selected('alice', scope, [file.id]), { status: 409 });
-  assert.equal((await f.req('/files/' + file.id, null, 'alice', 'DELETE')).status, 200);
-  assert.equal(f.db.prepare('SELECT count(*) n FROM pi_file_deletions').get().n, 0);
-});
-
-test('deleting a conversation cleans its failed attachment deletion intents without touching other scopes', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-')), db = new DatabaseSync(':memory:');
-  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
-  db.exec('CREATE TABLE pi_turns(owner TEXT,conversation_id TEXT,attachments TEXT,artifacts TEXT);');
-  const files = createChatFiles(db, { root }), scope = randomUUID(), otherScope = randomUUID();
-  const target = await files.save('alice', scope, 'failed.txt', Buffer.from('target'));
-  const sibling = await files.save('alice', scope, 'sibling.txt', Buffer.from('sibling'));
-  const otherConversation = await files.save('alice', otherScope, 'other.txt', Buffer.from('other'));
-  const otherOwner = await files.save('bob', scope, 'bob.txt', Buffer.from('bob'));
-  const broken = createChatFiles(db, { root, removeFile: async () => { throw Error('synthetic disk error'); } });
-  await assert.rejects(broken.remove('alice', scope, target.id), { status: 409 });
-  for (const [owner, file] of [['alice', sibling], ['alice', otherConversation], ['bob', otherOwner]])
-    db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run(owner, file.id);
-  await files.removeConversation('alice', scope);
-  assert.equal(files.list('alice', scope).length, 0);
-  assert.deepEqual(db.prepare('SELECT owner,file_id FROM pi_file_deletions ORDER BY owner').all().map(row => ({ ...row })), [
-    { owner: 'alice', file_id: otherConversation.id }, { owner: 'bob', file_id: otherOwner.id },
-  ]);
-  assert.equal(files.list('alice', otherScope).length, 1);
-  assert.equal(files.list('bob', scope).length, 1);
-  await assert.rejects(readFile(join(root, hash('alice'), scope, target.id)), { code: 'ENOENT' });
-  assert.equal((await readFile(join(root, hash('alice'), otherScope, otherConversation.id))).toString(), 'other');
-  assert.equal((await readFile(join(root, hash('bob'), scope, otherOwner.id))).toString(), 'bob');
-});
-
-test('failed conversation directory deletion preserves attachment metadata and deletion intents', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-fail-')), db = new DatabaseSync(':memory:');
-  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
-  const files = createChatFiles(db, { root }), scope = randomUUID();
-  const file = await files.save('alice', scope, 'retain.txt', Buffer.from('retain'));
-  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run('alice', file.id);
-  const broken = createChatFiles(db, { root, removeFile: async () => { throw Error('synthetic directory error'); } });
-  await assert.rejects(broken.removeConversation('alice', scope), /synthetic directory error/);
-  assert.equal(files.list('alice', scope).length, 1);
-  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions WHERE owner=? AND file_id=?').get('alice', file.id).n, 1);
-  assert.equal((await readFile(join(root, hash('alice'), scope, file.id))).toString(), 'retain');
-});
-
-test('conversation attachment metadata and deletion intents are cleaned in one transaction', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'astral-delete-conversation-atomic-')), db = new DatabaseSync(':memory:');
-  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
-  const files = createChatFiles(db, { root }), scope = randomUUID();
-  const file = await files.save('alice', scope, 'atomic.txt', Buffer.from('atomic'));
-  db.prepare('INSERT INTO pi_file_deletions VALUES(?,?)').run('alice', file.id);
-  db.exec("CREATE TRIGGER keep_cleanup BEFORE DELETE ON pi_files BEGIN SELECT RAISE(ABORT,'synthetic metadata error'); END;");
-  await assert.rejects(files.removeConversation('alice', scope), /synthetic metadata error/);
-  assert.equal(files.list('alice', scope).length, 1);
-  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions WHERE owner=? AND file_id=?').get('alice', file.id).n, 1);
-  db.exec('DROP TRIGGER keep_cleanup');
-  await files.removeConversation('alice', scope);
-  assert.equal(files.list('alice', scope).length, 0);
-  assert.equal(db.prepare('SELECT count(*) n FROM pi_file_deletions').get().n, 0);
-});
-
 test('DSH previews do not consume the independent upload or delete rate budget', async t => {
   const f = await fixture(t);
   for (let i=0;i<25;i++) assert.equal((await f.req('/files')).status,200);

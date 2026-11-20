@@ -81,113 +81,111 @@ function ProcessGroup({ items, active }: { items: Activity[]; active: boolean })
         <small>{items.length} 步</small>
         <ChevronDown size={13} className="process-chevron" />
       </summary>
-      {expanded && (
-        <div className="process-steps">
-          {items.map((item, index) => {
-            const target: { label: string; url?: string } =
-              item.kind === 'tool'
-                ? activityTarget(item)
-                : { label: item.text.replace(/\s+/g, ' ').slice(0, 160) };
-            return (
-              <details
-                className={`process-step ${item.kind === 'tool' && item.status === 'error' ? 'has-error' : ''}`}
-                key={item.kind === 'tool' ? item.id : index}
-              >
-                <summary>
-                  <StepIcon item={item} active={running} />
-                  <span className="process-step-label">
-                    {item.kind === 'thinking' ? '思考' : toolLabels[item.name] || item.name}
+      <div className="process-steps">
+        {items.map((item, index) => {
+          const target: { label: string; url?: string } =
+            item.kind === 'tool'
+              ? activityTarget(item)
+              : { label: item.text.replace(/\s+/g, ' ').slice(0, 160) };
+          return (
+            <details
+              className={`process-step ${item.kind === 'tool' && item.status === 'error' ? 'has-error' : ''}`}
+              key={item.kind === 'tool' ? item.id : index}
+            >
+              <summary>
+                <StepIcon item={item} active={running} />
+                <span className="process-step-label">
+                  {item.kind === 'thinking' ? '思考' : toolLabels[item.name] || item.name}
+                </span>
+                {target.url ? (
+                  <a
+                    className="process-step-target"
+                    href={target.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    referrerPolicy="no-referrer"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {target.label}
+                  </a>
+                ) : (
+                  <span className="process-step-target" title={target.label}>
+                    {target.label}
                   </span>
-                  {target.url ? (
-                    <a
-                      className="process-step-target"
-                      href={target.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      referrerPolicy="no-referrer"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      {target.label}
-                    </a>
-                  ) : (
-                    <span className="process-step-target" title={target.label}>
-                      {target.label}
-                    </span>
-                  )}
-                  {item.kind === 'tool' && (
-                    <span className="sr-only">
+                )}
+                {item.kind === 'tool' && (
+                  <span className="sr-only">
+                    {item.status === 'running'
+                      ? running
+                        ? '执行中'
+                        : '执行结果未确认'
+                      : item.status === 'error'
+                        ? '失败'
+                        : '完成'}
+                  </span>
+                )}
+                <ChevronDown size={11} className="step-chevron" />
+              </summary>
+              <div className="process-step-body">
+                {item.kind === 'thinking' ? (
+                  <pre>{item.text}</pre>
+                ) : (
+                  <>
+                    <span className="process-result-state">
                       {item.status === 'running'
                         ? running
                           ? '执行中'
                           : '执行结果未确认'
                         : item.status === 'error'
-                          ? '失败'
-                          : '完成'}
+                          ? '执行失败'
+                          : '执行完成'}
+                      {item.exitCode !== undefined ? ` · 退出码 ${item.exitCode}` : ''}
                     </span>
-                  )}
-                  <ChevronDown size={11} className="step-chevron" />
-                </summary>
-                <div className="process-step-body">
-                  {item.kind === 'thinking' ? (
-                    <pre>{item.text}</pre>
-                  ) : (
-                    <>
-                      <span className="process-result-state">
+                    {workbench &&
+                      item.projectId &&
+                      item.path &&
+                      ['project_read', 'project_write', 'project_edit'].includes(item.name) && (
+                        <button
+                          className="text-link"
+                          onClick={() =>
+                            workbench.openFile({
+                              projectId: item.projectId!,
+                              path: item.path,
+                              ...(item.backupId ? { backupId: item.backupId } : {}),
+                            })
+                          }
+                        >
+                          在侧栏打开文件
+                        </button>
+                      )}
+                    {item.arguments && (
+                      <>
+                        <small>调用参数</small>
+                        <pre>{item.arguments}</pre>
+                      </>
+                    )}
+                    {item.output && (
+                      <>
+                        <small>返回结果</small>
+                        <pre>{item.output}</pre>
+                      </>
+                    )}
+                    {!item.output && !item.arguments && (
+                      <span className="field-help">
                         {item.status === 'running'
                           ? running
-                            ? '执行中'
-                            : '执行结果未确认'
-                          : item.status === 'error'
-                            ? '执行失败'
-                            : '执行完成'}
-                        {item.exitCode !== undefined ? ` · 退出码 ${item.exitCode}` : ''}
+                            ? '等待工具返回…'
+                            : '未收到工具结果。'
+                          : item.summary || '本条记录未包含详细输出。'}
                       </span>
-                      {workbench &&
-                        item.projectId &&
-                        item.path &&
-                        ['project_read', 'project_write', 'project_edit'].includes(item.name) && (
-                          <button
-                            className="text-link"
-                            onClick={() =>
-                              workbench.openFile({
-                                projectId: item.projectId!,
-                                path: item.path,
-                                ...(item.backupId ? { backupId: item.backupId } : {}),
-                              })
-                            }
-                          >
-                            在侧栏打开文件
-                          </button>
-                        )}
-                      {item.arguments && (
-                        <>
-                          <small>调用参数</small>
-                          <pre>{item.arguments}</pre>
-                        </>
-                      )}
-                      {item.output && (
-                        <>
-                          <small>返回结果</small>
-                          <pre>{item.output}</pre>
-                        </>
-                      )}
-                      {!item.output && !item.arguments && (
-                        <span className="field-help">
-                          {item.status === 'running'
-                            ? running
-                              ? '等待工具返回…'
-                              : '未收到工具结果。'
-                            : item.summary || '本条记录未包含详细输出。'}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </div>
-              </details>
-            );
-          })}
-        </div>
-      )}
+                    )}
+                  </>
+                )}
+              </div>
+            </details>
+          );
+        })}
+      </div>
     </details>
   );
 }

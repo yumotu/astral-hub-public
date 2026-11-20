@@ -74,7 +74,6 @@ const draftSaveSchema = z
   .strict();
 const sendSchema = z
   .object({
-    id: z.string().uuid().optional(),
     mailbox: mailboxSchema.default('INBOX'),
     text: z.string().trim().min(1).max(20000),
     confirm: z.literal(true),
@@ -250,19 +249,6 @@ export function createMail(
   );`);
   db.exec(`CREATE TABLE IF NOT EXISTS mail_send_confirmations(token TEXT PRIMARY KEY,owner TEXT NOT NULL,payload TEXT NOT NULL,expires_at INTEGER NOT NULL,state TEXT NOT NULL,result TEXT,composition_id TEXT NOT NULL,UNIQUE(owner,composition_id));
     CREATE TABLE IF NOT EXISTS mail_compositions(owner TEXT NOT NULL,id TEXT NOT NULL,mailbox TEXT NOT NULL,uid INTEGER NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(owner,id));`);
-  for (const table of ['mail_drafts', 'mail_compositions']) {
-    if (
-      !db
-        .prepare(`PRAGMA table_info(${table})`)
-        .all()
-        .some((c) => c.name === 'revision')
-    )
-      db.exec(`ALTER TABLE ${table} ADD COLUMN revision TEXT NOT NULL DEFAULT ''`);
-  }
-  db.exec(`CREATE TABLE IF NOT EXISTS mail_reply_sends(
-    owner TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,result TEXT,
-    PRIMARY KEY(owner,id));`);
-  const clientRevisions = new WeakMap();
   const composeLocks = new Set();
   db.exec(`CREATE TABLE IF NOT EXISTS mail_cache(
     owner TEXT NOT NULL, cache_key TEXT NOT NULL, revision TEXT NOT NULL,
@@ -512,24 +498,14 @@ export function createMail(
     });
   }
 
-  function assertRevision(owner, stamp) {
-    if (!row(owner) || revision(owner) !== stamp)
-      throw fail(409, '邮箱账号已改变，请重新加载邮件并确认操作。');
-  }
-
   async function withAccount(owner, work) {
-    const stamp = revision(owner);
     const accountValue = secret(owner);
     const factory = imapFactory ?? defaultFactory ?? defaultClient;
     let client;
     try {
       client = await factory(accountValue);
-      clientRevisions.set(client, stamp);
       await client.connect();
-      assertRevision(owner, stamp);
-      const result = await work(client, accountValue);
-      assertRevision(owner, stamp);
-      return result;
+      return await work(client, accountValue);
     } catch (error) {
       throw mapImapError(error);
     } finally {
@@ -568,15 +544,12 @@ export function createMail(
       'INSERT INTO mail_accounts(owner,provider,address,secret,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET provider=excluded.provider,address=excluded.address,secret=excluded.secret,updated_at=excluded.updated_at',
     ).run(owner, p.provider, p.address, encrypt(appPassword), time, time);
     clearCache(owner);
-    db.prepare('DELETE FROM mail_drafts WHERE owner=?').run(owner);
-    db.prepare('DELETE FROM mail_compositions WHERE owner=?').run(owner);
     return account(owner);
   }
 
   function removeAccount(owner) {
     clearCache(owner);
     db.prepare('DELETE FROM mail_accounts WHERE owner=?').run(owner);
-    db.prepare('DELETE FROM mail_drafts WHERE owner=?').run(owner);
     db.prepare('DELETE FROM mail_compositions WHERE owner=?').run(owner);
     db.prepare('DELETE FROM mail_send_confirmations WHERE owner=?').run(owner);
   }
@@ -672,61 +645,21 @@ export function createMail(
               ...(p.before ? { before: new Date(p.before + 'T00:00:00.000Z') } : {}),
               ...(cursor ? { uid: '1:' + (cursor.uid - 1) } : {}),
             };
-            const observe =
-              p.mailbox === 'INBOX' && !p.q && !p.unread && !p.since && !p.before && !p.cursor;
-            // RFC 9394 bounds returned UIDs; INBOX observation still needs the full set.
-            const partial =
-              !observe &&
-              client.capabilities?.has('PARTIAL') &&
-              (client.capabilities.has('ESEARCH') ||
-                client.enabled?.has('IMAP4REV2') ||
-                (client.capabilities.has('IMAP4rev2') && !client.capabilities.has('IMAP4rev1')));
+            // UID 0 is invalid; a cursor ending at 1 has no older messages.
             const found = await client.search(Object.keys(search).length ? search : { all: true }, {
               uid: true,
-              ...(partial ? { returnOptions: ['COUNT', { partial: `-${p.limit + 1}:-1` }] } : {}),
             });
-            let values = found,
-              count;
-            if (partial) {
-              const invalid = () => fail(502, '邮箱分页搜索返回无效，请重试。');
-              if (
-                !Number.isInteger(found?.count) ||
-                found.count < 0 ||
-                found.count > 0xffffffff ||
-                found.partial?.range !== `-${p.limit + 1}:-1` ||
-                typeof found.partial?.messages !== 'string' ||
-                found.partial.messages.length > (p.limit + 1) * 22
-              )
-                throw invalid();
-              count = found.count;
-              values = [];
-              for (const part of found.partial.messages ? found.partial.messages.split(',') : []) {
-                if (!/^[1-9]\d{0,9}(?::[1-9]\d{0,9})?$/.test(part)) throw invalid();
-                const [first, last = first] = part.split(':').map(Number);
-                const low = Math.min(first, last),
-                  high = Math.max(first, last);
-                if (high > 0xffffffff || high - low + 1 > p.limit + 1 - values.length)
-                  throw invalid();
-                for (let uid = low; uid <= high; uid++) values.push(uid);
-              }
-              if (
-                new Set(values).size !== values.length ||
-                values.length !== Math.min(count, p.limit + 1) ||
-                values.some((uid) => cursor && uid >= cursor.uid)
-              )
-                throw invalid();
-            }
-            if (!Array.isArray(values)) throw fail(502, '邮箱搜索未返回结果，请重试。');
+            if (!Array.isArray(found)) throw fail(502, '邮箱搜索未返回结果，请重试。');
             const uids = [
               ...new Set(
-                values.filter(
+                found.filter(
                   (uid) => Number.isInteger(uid) && uid > 0 && (!cursor || uid < cursor.uid),
                 ),
               ),
             ].sort((a, b) => a - b);
-            count ??= uids.length;
             const recent = uids.slice(-p.limit).reverse();
-            if (observe) await observeInbox(owner, client, uids);
+            if (p.mailbox === 'INBOX' && !p.q && !p.unread && !p.since && !p.before && !p.cursor)
+              await observeInbox(owner, client, uids);
             const messages = [];
             const fields = {
               uid: true,
@@ -761,7 +694,7 @@ export function createMail(
               mailbox: p.mailbox,
               uidValidity:
                 client.mailbox?.uidValidity == null ? null : String(client.mailbox.uidValidity),
-              total: cursor?.total ?? count,
+              total: cursor?.total ?? uids.length,
               hasMore: !!validity && uids.length > recent.length,
               scannedFrom: recent.at(-1) ?? null,
               nextCursor:
@@ -771,7 +704,7 @@ export function createMail(
                         uid: recent.at(-1),
                         validity,
                         scope,
-                        total: cursor?.total ?? count,
+                        total: cursor?.total ?? uids.length,
                       }),
                     ).toString('base64url')
                   : null,
@@ -963,54 +896,46 @@ export function createMail(
     return info.message;
   }
 
-  function savedDraft(owner, mailbox, uid, stamp) {
+  function savedDraft(owner, mailbox, uid) {
     return db
       .prepare(
-        'SELECT draft_mailbox AS draftMailbox,draft_uid AS draftUid FROM mail_drafts WHERE owner=? AND source_mailbox=? AND source_uid=? AND revision=?',
+        'SELECT draft_mailbox AS draftMailbox,draft_uid AS draftUid FROM mail_drafts WHERE owner=? AND source_mailbox=? AND source_uid=?',
       )
-      .get(owner, mailbox, uid, stamp);
+      .get(owner, mailbox, uid);
   }
 
-  async function removeSavedDraft(owner, mailbox, uid, stamp) {
-    assertRevision(owner, stamp);
-    const old = savedDraft(owner, mailbox, uid, stamp);
+  async function removeSavedDraft(owner, mailbox, uid) {
+    const old = savedDraft(owner, mailbox, uid);
     if (!old) return;
     try {
       await withAccount(owner, async (client) => {
-        assertRevision(owner, stamp);
         await client.mailboxOpen(old.draftMailbox);
-        assertRevision(owner, stamp);
         await client.messageDelete(old.draftUid, { uid: true });
       });
     } catch {}
-    db.prepare(
-      'DELETE FROM mail_drafts WHERE owner=? AND source_mailbox=? AND source_uid=? AND revision=?',
-    ).run(owner, mailbox, uid, stamp);
+    db.prepare('DELETE FROM mail_drafts WHERE owner=? AND source_mailbox=? AND source_uid=?').run(
+      owner,
+      mailbox,
+      uid,
+    );
   }
 
   async function saveDraftToGmail(owner, input, rawUid) {
     const p = draftSaveSchema.parse(input);
     const uid = uidSchema.parse(rawUid);
-    const stamp = revision(owner);
     limit(owner, 'write', 10);
     const message = await readMessage(owner, { mailbox: p.mailbox }, uid);
-    assertRevision(owner, stamp);
     const to = message.replyTo || message.fromAddress;
     if (!to) throw fail(422, '这封邮件没有可回复的发件人。');
     const subject = replySubject(message.subject);
     return withAccount(owner, async (client, accountValue) => {
-      assertRevision(owner, stamp);
       const draftMailbox = await findDrafts(client, accountValue.provider);
-      assertRevision(owner, stamp);
-      const old = savedDraft(owner, p.mailbox, uid, stamp);
+      const old = savedDraft(owner, p.mailbox, uid);
       if (old) {
         try {
           await client.mailboxOpen(old.draftMailbox);
-          assertRevision(owner, stamp);
           await client.messageDelete(old.draftUid, { uid: true });
-        } catch (error) {
-          assertRevision(owner, stamp);
-        }
+        } catch {}
       }
       await client.mailboxOpen(draftMailbox);
       const raw = await buildRaw({
@@ -1020,13 +945,11 @@ export function createMail(
         text: p.text,
         messageId: message.messageId,
       });
-      assertRevision(owner, stamp);
       const result = await client.append(draftMailbox, raw, ['\\Draft']);
-      assertRevision(owner, stamp);
       if (!result?.uid) throw fail(502, '邮箱未返回草稿编号，请稍后重试。');
       db.prepare(
-        'INSERT INTO mail_drafts(owner,source_mailbox,source_uid,draft_mailbox,draft_uid,updated_at,revision) VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,source_mailbox,source_uid) DO UPDATE SET draft_mailbox=excluded.draft_mailbox,draft_uid=excluded.draft_uid,updated_at=excluded.updated_at,revision=excluded.revision',
-      ).run(owner, p.mailbox, uid, draftMailbox, result.uid, new Date(now()).toISOString(), stamp);
+        'INSERT INTO mail_drafts(owner,source_mailbox,source_uid,draft_mailbox,draft_uid,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner,source_mailbox,source_uid) DO UPDATE SET draft_mailbox=excluded.draft_mailbox,draft_uid=excluded.draft_uid,updated_at=excluded.updated_at',
+      ).run(owner, p.mailbox, uid, draftMailbox, result.uid, new Date(now()).toISOString());
       return { draftUid: result.uid, draftMailbox, to, subject };
     });
   }
@@ -1034,38 +957,14 @@ export function createMail(
   async function sendReply(owner, input, rawUid) {
     const p = sendSchema.parse(input);
     const uid = uidSchema.parse(rawUid);
-    const stamp = revision(owner);
-    const digest = createHash('sha256')
-      .update(JSON.stringify([stamp, p.mailbox, uid, p.text]))
-      .digest('hex');
-    // Legacy clients have no request ID: identical confirmed content is one durable attempt.
-    const id = p.id || digest;
-    const existing = db
-      .prepare('SELECT * FROM mail_reply_sends WHERE owner=? AND id=?')
-      .get(owner, id);
-    if (existing) {
-      if (existing.digest !== digest) throw fail(409, '发送请求编号已用于其他内容，请重新确认。');
-      if (existing.state === 'sent') return JSON.parse(existing.result);
-      return {
-        ok: false,
-        state: existing.state,
-        error: '发送已提交，结果待核对；请检查邮箱，不会自动重复发送。',
-      };
-    }
     limit(owner, 'send', 5);
     const message = await readMessage(owner, { mailbox: p.mailbox }, uid);
-    assertRevision(owner, stamp);
     const to = message.replyTo || message.fromAddress;
     if (!to) throw fail(422, '这封邮件没有可回复的发件人。');
     const subject = replySubject(message.subject);
     const accountValue = secret(owner);
-    const claimed = db
-      .prepare("INSERT OR IGNORE INTO mail_reply_sends VALUES(?,?,?,'sending',NULL)")
-      .run(owner, id, digest).changes;
-    if (!claimed) return sendReply(owner, input, rawUid);
     let info;
     try {
-      assertRevision(owner, stamp);
       info = await createSmtp(accountValue).sendMail({
         from: accountValue.address,
         to,
@@ -1076,35 +975,17 @@ export function createMail(
           : {}),
       });
     } catch {
-      db.prepare("UPDATE mail_reply_sends SET state='unknown' WHERE owner=? AND id=?").run(
-        owner,
-        id,
-      );
-      return {
-        ok: false,
-        state: 'unknown',
-        error: 'SMTP 返回中断，发送结果待核对。请先检查邮箱，不要重复发送。',
-      };
+      throw fail(502, '邮箱发送失败，请检查 SMTP 设置和网络。');
     }
-    const result = { ok: true, messageId: info?.messageId || null, to, subject };
-    db.prepare("UPDATE mail_reply_sends SET state='sent',result=? WHERE owner=? AND id=?").run(
-      JSON.stringify(result),
-      owner,
-      id,
-    );
-    // SMTP may finish after a rebind; never clean a draft in the replacement mailbox.
-    if (row(owner) && revision(owner) === stamp)
-      await removeSavedDraft(owner, p.mailbox, uid, stamp);
-    return result;
+    await removeSavedDraft(owner, p.mailbox, uid);
+    return { ok: true, messageId: info?.messageId || null, to, subject };
   }
 
   async function envelope(owner, input) {
-    const stamp = revision(owner);
     const p = composeSchema.parse(input),
       a = secret(owner);
-    if (!p.reply) return { ...p, from: a.address, revision: stamp };
+    if (!p.reply) return { ...p, from: a.address };
     const message = await readMessage(owner, { mailbox: p.reply.mailbox }, p.reply.uid);
-    assertRevision(owner, stamp);
     const to = message.replyTo || message.fromAddress;
     if (!to) throw fail(422, '这封邮件没有可回复的发件人。');
     if (p.to.length !== 1 || p.to[0].toLowerCase() !== to.toLowerCase())
@@ -1112,27 +993,21 @@ export function createMail(
     return {
       ...p,
       from: a.address,
-      revision: stamp,
       ...(message.messageId ? { inReplyTo: message.messageId, references: message.messageId } : {}),
     };
   }
   async function composeDraft(owner, input) {
     limit(owner, 'write', 10);
-    const stamp = revision(owner);
     const p = await envelope(owner, input),
       lock = `${owner}:${p.id}`;
     if (composeLocks.has(lock)) throw fail(409, '此草稿正在保存，请等待结果。');
     composeLocks.add(lock);
     try {
       return await withAccount(owner, async (client, a) => {
-        assertRevision(owner, stamp);
         const mailbox = await findDrafts(client, a.provider);
-        assertRevision(owner, stamp);
         const old = db
-          .prepare(
-            'SELECT mailbox,uid FROM mail_compositions WHERE owner=? AND id=? AND revision=?',
-          )
-          .get(owner, p.id, stamp);
+          .prepare('SELECT mailbox,uid FROM mail_compositions WHERE owner=? AND id=?')
+          .get(owner, p.id);
         const raw = await buildRaw({
           from: p.from,
           to: p.to,
@@ -1140,17 +1015,14 @@ export function createMail(
           text: p.text,
           messageId: p.inReplyTo,
         });
-        assertRevision(owner, stamp);
         const result = await client.append(mailbox, raw, ['\\Draft']);
-        assertRevision(owner, stamp);
         if (!result?.uid) throw fail(502, '邮箱未返回草稿编号，请先检查草稿箱再重试。');
-        db.prepare('INSERT OR REPLACE INTO mail_compositions VALUES(?,?,?,?,?,?)').run(
+        db.prepare('INSERT OR REPLACE INTO mail_compositions VALUES(?,?,?,?,?)').run(
           owner,
           p.id,
           mailbox,
           result.uid,
           new Date(now()).toISOString(),
-          stamp,
         );
         let warning;
         if (old && !(old.mailbox === mailbox && old.uid === result.uid))
@@ -1217,8 +1089,7 @@ export function createMail(
     if (row.expires_at <= now()) throw fail(409, '发送确认已过期，请重新检查内容。');
     const data = JSON.parse(decrypt(row.payload)),
       a = secret(owner);
-    if (a.address !== data.from || data.revision !== revision(owner))
-      throw fail(409, '邮箱账号已更改或确认已失效，请重新检查发件人。');
+    if (a.address !== data.from) throw fail(409, '邮箱账号已更改，请重新检查发件人。');
     limit(owner, 'send', 5);
     const claimed = db
       .prepare(
@@ -1446,9 +1317,8 @@ export function createMail(
   let assistantTicking = false;
   async function observeInbox(owner, client, uids) {
     if (!notify || client.mailbox?.uidValidity == null) return;
-    const stamp = clientRevisions.get(client);
-    assertRevision(owner, stamp);
-    const validity = String(client.mailbox.uidValidity),
+    const stamp = revision(owner),
+      validity = String(client.mailbox.uidValidity),
       old = db.prepare('SELECT * FROM mail_notice_cursors WHERE owner=?').get(owner),
       latest = uids.at(-1) || 0;
     const save = (uid) =>
@@ -1823,10 +1693,7 @@ export function createMail(
       else if (action[2] === 'draft') json(200, await draft(owner, body, action[1]));
       else if (action[2] === 'save-draft')
         json(200, await saveDraftToGmail(owner, body, action[1]));
-      else {
-        const result = await sendReply(owner, body, action[1]);
-        json(result.ok ? 200 : 409, result);
-      }
+      else json(200, await sendReply(owner, body, action[1]));
       return true;
     }
     throw fail(404, '邮件接口不存在。');

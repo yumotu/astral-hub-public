@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { LoaderCircle, Menu, PanelRight } from 'lucide-react';
 import { AssistantComposer } from './AssistantComposer';
 import { AssistantComposerActions } from './AssistantComposerActions';
@@ -32,15 +32,6 @@ export function usePreparedConversation({
   latest.current = { model, restoreDraft, send };
   const [verified, setVerified] = useState('');
   const identity = JSON.stringify([prep?.id, origin, nativeId]);
-  const handoffIdentity = useRef(identity);
-  handoffIdentity.current = identity;
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   useEffect(() => {
     setVerified('');
     if (
@@ -97,37 +88,24 @@ export function usePreparedConversation({
     )
       return;
     const current = latest.current;
-    void (async () => {
-      let value;
+    let value;
+    try {
+      value = current.model!.claimPreparation(prep.id);
+    } catch {
+      return;
+    }
+    if (!value) return;
+    const saved = () => {
+      current.restoreDraft(value.draft);
+      current.model!.finishPreparation(value.id);
+    };
+    if (value.message) {
       try {
-        value = await current.model!.claimPreparation(prep.id);
+        void Promise.resolve(current.send(value.message, saved)).catch(() => {});
       } catch {
-        return;
+        /* Durable intent remains recoverable. */
       }
-      if (
-        !value ||
-        !mounted.current ||
-        handoffIdentity.current !== identity ||
-        latest.current.model?.preparing?.id !== value.id
-      )
-        return;
-      const saved = () => {
-        if (
-          !mounted.current ||
-          handoffIdentity.current !== identity ||
-          latest.current.model?.preparing?.id !== value.id
-        )
-          return;
-        void current.model!.finishPreparation(value.id, current.restoreDraft).catch(() => {});
-      };
-      if (value.message) {
-        try {
-          await current.send(value.message, saved);
-        } catch {
-          /* Durable intent remains recoverable. */
-        }
-      } else saved();
-    })();
+    } else saved();
   }, [ready, origin, nativeId, prep?.id, prep?.state, prep?.resumeRequired, verified, identity]);
 }
 
@@ -165,109 +143,20 @@ export function PreparingConversation({
         : prep.state === 'handed'
           ? '发送交接尚未确认，正文仍保留。'
           : '对话尚未准备完成，内容已保留。';
-  const [input, setInput] = useState(prep.draft);
-  const inputValue = useRef(prep.draft);
-  const inputVersion = useRef(0);
-  const inputPreparation = useRef<string | null>(prep.id);
-  const inputActivity = useRef({ id: prep.id, pending: 0, failed: false });
-  const [inputRevision, setInputRevision] = useState(0);
-  inputPreparation.current = prep.id;
-  useEffect(() => {
-    inputPreparation.current = prep.id;
-    return () => {
-      inputPreparation.current = null;
-    };
-  }, [prep.id]);
-  useLayoutEffect(() => {
-    if (inputActivity.current.id !== prep.id) {
-      inputActivity.current = { id: prep.id, pending: 0, failed: false };
-      inputValue.current = prep.draft;
-      setInput(prep.draft);
-      inputVersion.current++;
-    } else if (
-      !inputActivity.current.pending &&
-      !inputActivity.current.failed &&
-      inputValue.current !== prep.draft
-    ) {
-      // Adopt a different window's saved text before painting, only when this
-      // editor has no unfinished or rejected local change to preserve.
-      inputValue.current = prep.draft;
-      setInput(prep.draft);
-      inputVersion.current++;
-    }
-  }, [prep.id, prep.draft, inputRevision]);
   const change = (value: string) => {
-    const expectedDraft = inputValue.current;
-    inputValue.current = value;
-    setInput(value);
-    const version = ++inputVersion.current;
-    const activity = inputActivity.current;
-    const id = prep.id;
-    activity.pending++;
-    void model
-      .preparationDraft(id, value, expectedDraft)
-      .then(() => {
-        if (inputPreparation.current === id && version === inputVersion.current) {
-          activity.failed = false;
-          setError('');
-        }
-      })
-      .catch((e) => {
-        if (inputPreparation.current === id && version === inputVersion.current) {
-          activity.failed = true;
-          setError((e as Error).message);
-        }
-      })
-      .finally(() => {
-        activity.pending--;
-        if (inputPreparation.current === id) setInputRevision((value) => value + 1);
-      });
-  };
-  const edit = async () => {
-    const version = inputVersion.current;
-    const id = prep.id;
-    const expectedDraft = inputValue.current;
-    const activity = inputActivity.current;
-    activity.pending++;
     try {
-      await model.preparationEdit(id, expectedDraft);
-      if (inputPreparation.current !== id || inputVersion.current !== version) return;
-      const value = (prep.message?.text || '') + (expectedDraft ? '\n\n' + expectedDraft : '');
-      inputValue.current = value;
-      setInput(value);
-      activity.failed = false;
+      model.preparationDraft(prep.id, value);
       setError('');
-    } catch (e) {
-      if (inputPreparation.current === id && inputVersion.current === version) {
-        activity.failed = true;
-        setError((e as Error).message);
-      }
-    } finally {
-      activity.pending--;
-      if (inputPreparation.current === id) setInputRevision((value) => value + 1);
+    } catch {
+      setError('草稿暂时无法保存，请保留当前内容后重试。');
     }
   };
-  const submit = async () => {
-    const version = inputVersion.current;
-    const id = prep.id;
-    const expectedDraft = inputValue.current;
-    const activity = inputActivity.current;
-    activity.pending++;
+  const submit = () => {
     try {
-      await model.preparationQueue(id, expectedDraft, expectedDraft);
-      if (inputPreparation.current !== id || inputVersion.current !== version) return;
-      inputValue.current = '';
-      setInput('');
-      activity.failed = false;
+      model.preparationQueue(prep.id, prep.draft);
       setError('');
     } catch (e) {
-      if (inputPreparation.current === id && inputVersion.current === version) {
-        activity.failed = true;
-        setError((e as Error).message);
-      }
-    } finally {
-      activity.pending--;
-      if (inputPreparation.current === id) setInputRevision((value) => value + 1);
+      setError((e as Error).message);
     }
   };
   return (
@@ -320,7 +209,16 @@ export function PreparingConversation({
                   <p className="field-help">首条消息已保留，准备完成后发送。</p>
                 )}
                 {prep.message && prep.state !== 'handed' && (
-                  <button className="text-link" onClick={edit}>
+                  <button
+                    className="text-link"
+                    onClick={() => {
+                      try {
+                        model.preparationEdit(prep.id);
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
                     编辑待发送消息
                   </button>
                 )}
@@ -340,9 +238,9 @@ export function PreparingConversation({
                 {prep.state === 'ready' && prep.resumeRequired && (
                   <button
                     className="secondary"
-                    onClick={async () => {
+                    onClick={() => {
                       try {
-                        await model.resumePreparation(prep.id);
+                        model.resumePreparation(prep.id);
                       } catch {
                         setError('本地保存失败，请保留内容后重试。');
                       }
@@ -368,9 +266,9 @@ export function PreparingConversation({
                   <button
                     type="button"
                     className="text-link"
-                    onClick={async () => {
+                    onClick={() => {
                       try {
-                        await model.discardPreparation(prep.id);
+                        model.discardPreparation(prep.id);
                       } catch {
                         setError('本地草稿暂时无法移除，内容仍保留，请稍后重试。');
                       }
@@ -393,7 +291,7 @@ export function PreparingConversation({
           <AssistantComposer
             area={area}
             history={history}
-            value={input}
+            value={prep.draft}
             onValue={change}
             send={submit}
             upload={async () => setError('对话连接完成后可上传附件，文字草稿会保留。')}
@@ -409,7 +307,7 @@ export function PreparingConversation({
               changeThinking={() => {}}
               thinkingDisabled
               thinkingDisabledReason="连接完成后可选择主机支持的思考强度。"
-              insertVoice={(text) => change(input + text)}
+              insertVoice={(text) => change(prep.draft + text)}
               terminal={() => {}}
               terminalDisabled
               terminalDisabledReason="连接完成后可打开终端。"
@@ -420,9 +318,9 @@ export function PreparingConversation({
               commandsDisabled
               commandsDisabledReason="连接完成后可使用主机命令。"
               working={false}
-              hasContent={!!input.trim()}
+              hasContent={!!prep.draft.trim()}
               stop={() => {}}
-              sendDisabled={!input.trim() || !!prep.message || prep.state === 'handed'}
+              sendDisabled={!prep.draft.trim() || !!prep.message || prep.state === 'handed'}
               sendDisabledReason={
                 prep.message ? '首条消息已保留，可先编辑补充或修改待发送消息。' : '请输入消息。'
               }

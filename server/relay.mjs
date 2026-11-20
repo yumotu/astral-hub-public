@@ -4,6 +4,13 @@ import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import { digest, fail } from './accounts.mjs';
 import { createRelayWorkspace } from './relay-workspace.mjs';
+import {
+  COMPUTER_PERMISSION_VERSION,
+  FULL_WORKSPACE_PERMISSIONS,
+  isFullWorkspace,
+  normalizeComputerPermissions,
+  permissionsFromLegacy,
+} from '../shared/computer-permissions.mjs';
 const uuid = z.string().uuid(),
   access = z.enum(['read', 'edit']);
 const PROJECT_MODEL_MAX_BYTES = 16 * 1024 * 1024;
@@ -11,7 +18,7 @@ export function createRelay(db, { body, config, options = {} }) {
   const now = options.now ?? Date.now,
     providerFetch = options.relayFetch ?? config.fetch;
   db.exec(`CREATE TABLE IF NOT EXISTS relay_pairings(hash TEXT PRIMARY KEY,owner TEXT NOT NULL,expires INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS relay_devices(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,platform TEXT NOT NULL,root_label TEXT NOT NULL,allow_write INTEGER NOT NULL,token_hash TEXT NOT NULL UNIQUE,expires INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen INTEGER NOT NULL,created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS relay_devices(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,platform TEXT NOT NULL,root_label TEXT NOT NULL,allow_write INTEGER NOT NULL,token_hash TEXT NOT NULL UNIQUE,expires INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen INTEGER NOT NULL,created_at TEXT NOT NULL,permission_version INTEGER NOT NULL DEFAULT 1,permissions TEXT NOT NULL DEFAULT '[]');
   CREATE TABLE IF NOT EXISTS relay_jobs(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,input TEXT NOT NULL,access TEXT NOT NULL,status TEXT NOT NULL,lease_until INTEGER,output TEXT NOT NULL DEFAULT '',tools TEXT NOT NULL DEFAULT '[]',error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE INDEX IF NOT EXISTS relay_queue ON relay_jobs(device_id,status,created_at);`);
   const deviceColumns = new Set(
     db
@@ -22,6 +29,8 @@ export function createRelay(db, { body, config, options = {} }) {
   for (const [name, type] of [
     ['agent_version', 'TEXT'],
     ['capabilities', "TEXT NOT NULL DEFAULT '[]'"],
+    ['permission_version', 'INTEGER NOT NULL DEFAULT 1'],
+    ['permissions', "TEXT NOT NULL DEFAULT '[]'"],
   ])
     if (!deviceColumns.has(name)) db.exec(`ALTER TABLE relay_devices ADD COLUMN ${name} ${type}`);
   const rate = new Map(),
@@ -58,6 +67,8 @@ export function createRelay(db, { body, config, options = {} }) {
     platform: d.platform,
     rootLabel: d.root_label,
     allowWrite: !!d.allow_write,
+    permissionVersion: d.permission_version || COMPUTER_PERMISSION_VERSION,
+    permissions: normalizeComputerPermissions(JSON.parse(d.permissions || '[]')),
     lastSeen: new Date(d.last_seen).toISOString(),
     online: now() - d.last_seen < 45000,
     createdAt: d.created_at,
@@ -142,6 +153,10 @@ export function createRelay(db, { body, config, options = {} }) {
             platform: z.enum(['darwin', 'win32', 'linux']),
             rootLabel: z.string().trim().min(1).max(100),
             allowWrite: z.boolean(),
+            allowExecute: z.boolean().optional(),
+            permissionVersion: z.number().int().min(1).max(10).optional(),
+            permissionProfile: z.enum(['legacy', 'full-workspace']).optional(),
+            permissions: z.array(z.string().min(1).max(64)).max(16).optional(),
           })
           .strict()
           .parse(await body(req));
@@ -149,25 +164,36 @@ export function createRelay(db, { body, config, options = {} }) {
           .prepare('SELECT * FROM relay_pairings WHERE hash=? AND expires>?')
           .get(digest(p.code), now());
         if (!invitation) throw fail(403, '配对码无效或已过期。');
-        const id = randomUUID(),
+        const requestedPermissions = normalizeComputerPermissions(
+            p.permissions ??
+              (p.permissionProfile === 'full-workspace'
+                ? FULL_WORKSPACE_PERMISSIONS
+                : permissionsFromLegacy({
+                    allowWrite: p.allowWrite,
+                    allowExecute: p.allowExecute,
+                  })),
+          ),
+          id = randomUUID(),
           token = randomBytes(32).toString('base64url');
         db.exec('BEGIN IMMEDIATE');
         try {
           const used = db.prepare('DELETE FROM relay_pairings WHERE hash=?').run(digest(p.code));
           if (used.changes !== 1) throw fail(403, '配对码已经使用。');
           db.prepare(
-            'INSERT INTO relay_devices(id,owner,name,platform,root_label,allow_write,token_hash,expires,last_seen,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO relay_devices(id,owner,name,platform,root_label,allow_write,token_hash,expires,last_seen,created_at,permission_version,permissions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
           ).run(
             id,
             invitation.owner,
             p.name,
             p.platform,
             p.rootLabel,
-            Number(p.allowWrite),
+            Number(p.allowWrite || requestedPermissions.includes('file.write')),
             digest(token),
             now() + 90 * 86400000,
             now(),
             new Date(now()).toISOString(),
+            p.permissionVersion || COMPUTER_PERMISSION_VERSION,
+            JSON.stringify(requestedPermissions),
           );
           db.exec('COMMIT');
         } catch (e) {
@@ -179,6 +205,9 @@ export function createRelay(db, { body, config, options = {} }) {
           token,
           model: config.model,
           expiresAt: new Date(now() + 90 * 86400000).toISOString(),
+          permissionVersion: p.permissionVersion || COMPUTER_PERMISSION_VERSION,
+          permissions: requestedPermissions,
+          permissionProfile: isFullWorkspace(requestedPermissions) ? 'full-workspace' : 'legacy',
         });
         return true;
       }
