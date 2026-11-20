@@ -187,7 +187,6 @@ jobs:
           path: |
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
-            release/android-verification.json
       - run: |
           version=$(node -p "require('./package.json').version")
           mkdir -p release
