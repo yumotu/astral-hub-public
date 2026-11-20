@@ -18,13 +18,17 @@ export function permissionsFromLegacy({ allowWrite = false, allowExecute = false
     ...(allowExecute ? ['terminal.execute', 'plugin.install'] : []),
   ];
 }
+function samePermissions(left, right) {
+  return left.length === right.length && left.every((permission, index) => permission === right[index]);
+}
 export function permissionsForGrant(grant = {}) {
   const permissions = Array.isArray(grant.permissions)
     ? [...new Set(grant.permissions.filter((value) => typeof value === 'string'))]
     : [];
-  return permissions.length
-    ? permissions
-    : permissionsFromLegacy({ allowWrite: grant.allowWrite, allowExecute: grant.allowExecute });
+  if (grant.permissionProfile === 'full-workspace') return [...FULL_WORKSPACE_PERMISSIONS];
+  if (grant.permissionProfile === 'legacy' || !permissions.length)
+    return permissionsFromLegacy({ allowWrite: grant.allowWrite, allowExecute: grant.allowExecute });
+  return permissions;
 }
 export function hasComputerPermission(grant, permission) {
   return permissionsForGrant(grant).includes(permission);
@@ -50,6 +54,13 @@ export async function localGrant(
   const grantPermissions = permissions?.length
     ? permissions
     : permissionsFromLegacy({ allowWrite, allowExecute });
+  const legacy = permissionsFromLegacy({ allowWrite, allowExecute });
+  const permissionProfile = grantPermissions.length === FULL_WORKSPACE_PERMISSIONS.length &&
+      FULL_WORKSPACE_PERMISSIONS.every((permission) => grantPermissions.includes(permission))
+    ? 'full-workspace'
+    : samePermissions(grantPermissions, legacy)
+      ? 'legacy'
+      : 'custom';
   return {
     id: randomUUID(),
     name: name || basename(actual) || '本机项目',
@@ -60,6 +71,7 @@ export async function localGrant(
     allowExecute: grantPermissions.includes('terminal.execute'),
     permissionVersion: COMPUTER_PERMISSION_VERSION,
     permissions: grantPermissions,
+    permissionProfile,
   };
 }
 export async function saveConfig(path, config, { create = false } = {}) {
@@ -89,6 +101,10 @@ export async function loadConfig(path) {
   }
   for (const project of p.projects) {
     const permissions = permissionsForGrant(project);
+    project.permissionProfile ||= permissions.length === FULL_WORKSPACE_PERMISSIONS.length &&
+        FULL_WORKSPACE_PERMISSIONS.every((permission) => permissions.includes(permission))
+      ? 'full-workspace'
+      : 'legacy';
     project.permissionVersion ||= COMPUTER_PERMISSION_VERSION;
     project.permissions = permissions;
     project.allowWrite = permissions.includes('file.write');
@@ -100,6 +116,11 @@ export async function loadConfig(path) {
     : p.fullWorkspace
       ? [...FULL_WORKSPACE_PERMISSIONS]
       : permissionsFromLegacy({ allowWrite: p.allowWrite, allowExecute: p.allowExecute });
+  p.permissionProfile ||= p.fullWorkspace ||
+      (p.permissions.length === FULL_WORKSPACE_PERMISSIONS.length &&
+        FULL_WORKSPACE_PERMISSIONS.every((permission) => p.permissions.includes(permission)))
+    ? 'full-workspace'
+    : 'legacy';
   if (p.projects.length > 32 || new Set(p.projects.map((p) => p.id)).size !== p.projects.length)
     throw Error('本机项目配置不正确。');
   return p;

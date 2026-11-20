@@ -28,12 +28,13 @@ export function permissionsFromLegacy({ allowWrite = false, allowExecute = false
 
 export function permissionsForGrant(grant = {}) {
   const permissions = normalizeComputerPermissions(grant.permissions);
-  return permissions.length
-    ? permissions
-    : permissionsFromLegacy({
-        allowWrite: grant.allowWrite,
-        allowExecute: grant.allowExecute,
-      });
+  if (grant.permissionProfile === 'full-workspace') return [...FULL_WORKSPACE_PERMISSIONS];
+  if (grant.permissionProfile === 'legacy' || !permissions.length)
+    return permissionsFromLegacy({
+      allowWrite: grant.allowWrite,
+      allowExecute: grant.allowExecute,
+    });
+  return permissions;
 }
 
 export function hasComputerPermission(grant, permission) {
