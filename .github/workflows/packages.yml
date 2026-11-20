@@ -153,7 +153,8 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           apk="android/app/build/outputs/apk/debug/app-debug.apk"
-          apksigner_output=$(apksigner verify --verbose --print-certs "$apk" 2>&1)
+          signer="${ANDROID_HOME:?ANDROID_HOME is required}/build-tools/35.0.0/apksigner"
+          apksigner_output=$("$signer" verify --verbose --print-certs "$apk" 2>&1)
           printf '%s\n' "$apksigner_output"
           cert=$(printf '%s\n' "$apksigner_output" | sed -nE 's/.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f:]+).*/\1/p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
           [[ "$cert" =~ ^[a-f0-9]{64}$ ]]
