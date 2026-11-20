@@ -29,7 +29,7 @@ OLD_IMAGE_IDS = ['sha256:5fb5c2b60b2424fd280928e4f6525787224076ca5462ed1a0333829
 LAYERS = ['compose.0.8.10.yml', 'compose.0.8.10-sandbox.yml', 'compose.0.8.11-relay.yml',
           'compose.0.8.12-dsh.yml', 'compose.0.8.12-dsh2.yml', 'compose.0.8.12-dsh3.yml', 'compose.0.8.12-dsh4.yml', 'compose.0.8.15.yml', 'compose.0.8.15-r1.yml', 'compose.computer-session-recovery.yml', 'compose.0.8.18.yml', 'compose.0.8.19.yml', 'compose.0.8.20.yml']
 OVERRIDE = 'compose.0.9.1.yml'
-SOURCE_COMMIT = '1bbfcb61ecd1df9b885036ba57bbbb1da3cb6d79'
+SOURCE_COMMIT = '5d25fa1f0afb083375572cf9ac8976448e7aa85a'
 SOURCE_REPOSITORY = 'https://github.com/yumotu/astral-hub-public'
 DSH_IMAGE = 'sha256:415d6203a155f055907c74d6752b0fccb9b4e29f9a5b62e7e7bc7e60dbf98b39'
 CONFIGS = ['.env', '.env.example', 'AGENTS.md', 'deploy/pi/projects.json',
