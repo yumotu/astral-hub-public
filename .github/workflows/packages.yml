@@ -147,6 +147,21 @@ jobs:
         working-directory: android
       - name: Verify the APK uses the retained signing key
         run: bash scripts/android-debug-signing.sh verify android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Generate Android release provenance
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          signer="${ANDROID_HOME:?ANDROID_HOME is required}/build-tools/35.0.0/apksigner"
+          apksigner_output=$("$signer" verify --verbose --print-certs "$apk" 2>&1)
+          printf '%s\n' "$apksigner_output"
+          cert=$(printf '%s\n' "$apksigner_output" | sed -nE 's/.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f:]+).*/\1/p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          [[ "$cert" =~ ^[a-f0-9]{64}$ ]]
+          schemes=$(printf '%s\n' "$apksigner_output" | sed -nE 's/.*Verified using (v[1-4]) scheme.*:[[:space:]]*true/\1/p' | sort -u | paste -sd, -)
+          [[ "$schemes" =~ ^v[1-4](,v[1-4])*$ ]]
+          apk_sha=$(sha256sum "$apk" | awk '{print $1}')
+          node --input-type=module -e 'import { writeFileSync } from "node:fs"; const [version,commit,certificateSha256,schemes,apkSha256]=process.argv.slice(1); writeFileSync("release/android-verification.json", JSON.stringify({version,commit,integrity:true,certificateSha256,schemes:schemes.split(","),apkSha256}, null, 2)+"\n")' "$version" "$RELEASE_COMMIT" "$cert" "$schemes" "$apk_sha"
       - name: Reserve runner space for Android system and data images
         run: bash scripts/android-emulator-space.sh
       - name: Enable emulator acceleration
@@ -180,7 +195,9 @@ jobs:
         with:
           name: astral-android-debug
           if-no-files-found: error
-          path: release/*.apk
+          path: |
+            release/*.apk
+            release/android-verification.json
   pi-runtime:
     if: ${{ !inputs.android_only }}
     needs: web-and-tests
