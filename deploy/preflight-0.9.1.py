@@ -182,7 +182,7 @@ try:
     linux_tests = test_group('linux', tests, 242)
     project_tests = test_group('project-management', ['tests/project-management.test.mjs', 'tests/app-project-management.test.mjs'], 18)
     startup_tests = test_group('startup-cache', ['tests/dsh-app-tools.test.mjs', 'tests/read-cache.test.mjs', 'tests/dsh-display-cache.test.mjs'], 29)
-    permission_tests = test_group('runtime-permissions', ['tests/computer-workspace.test.mjs', 'tests/computer-task-lifecycle.test.mjs', 'tests/sandbox-network.test.mjs'], 20)
+    permission_tests = test_group('runtime-permissions', ['tests/computer-workspace.test.mjs', 'tests/computer-task-lifecycle.test.mjs', 'tests/sandbox-network.test.mjs'], 13)
     pr_tests = test_group('merged-pr-regressions', ['tests/realtime-recovery.test.mjs', 'tests/pi-independent-loading.test.mjs', 'tests/mail.test.mjs', 'tests/dsh-files.test.mjs', 'tests/read-cache.test.mjs'], 77)
     release_tests = test_group('release-regressions', ['tests/app-feature-integration.test.mjs', 'tests/learning-postcheck.test.mjs', 'tests/learning.test.mjs', 'tests/learning-materials.test.mjs', 'tests/learning-answer-rendering.test.mjs', 'tests/conversation-preparation.test.mjs', 'tests/conversation-preparation-lifecycle.test.mjs', 'tests/conversation-preparation-concurrency.test.mjs', 'tests/dsh-extension-api.test.mjs', 'tests/dsh-extensions.test.mjs'], 98)
     release_tests += test_pi_learning()
