@@ -280,6 +280,34 @@ html[data-mobile-viewport] .mail-digest-overlay .mail-digest {
   color: var(--muted);
   font-size: 12px;
 }
+.mail-agent-live-hint {
+  margin-top: 6px;
+}
+.mail-agent-activity {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.mail-agent-activity li {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.mail-agent-activity li > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
 .mail-agent-examples {
   display: flex;
   flex-wrap: wrap;

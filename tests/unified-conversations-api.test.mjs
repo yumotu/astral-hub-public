@@ -9,7 +9,13 @@ import { createRemoteIdentity, remoteFingerprint } from '../server/dsh-remote-cl
 
 // These tests exercise actual HTTP/auth/native admission routes. The Pi bridge
 // and Remote host are deterministic protocol fixtures, not real model runs.
-async function fixture(t, { location = 'computer' } = {}) {
+async function fixture(
+  t,
+  {
+    location = 'computer',
+    piProjects = [{ id: 'workspace', name: 'Pi project', readOnly: true }],
+  } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), 'astral-unified-api-'));
   const admin = 'synthetic-unified-admin-token-1234567890';
   const peer = createRemoteIdentity();
@@ -83,10 +89,7 @@ async function fixture(t, { location = 'computer' } = {}) {
       token: 'synthetic-bridge-token',
       fetch: async (url, options) => {
         if (url.endsWith('/health')) return Response.json({ ready: true, nativeSessions: false });
-        if (url.endsWith('/projects'))
-          return Response.json({
-            projects: [{ id: 'workspace', name: 'Pi project', readOnly: true }],
-          });
+        if (url.endsWith('/projects')) return Response.json({ projects: piProjects });
         if (url.endsWith('/schedules/pending')) return Response.json({ runs: [] });
         if (url.endsWith('/run/stream')) {
           piRuns.push(JSON.parse(options.body));
@@ -436,6 +439,43 @@ test('independent target endpoint is authenticated, owner scoped and validates t
   const other = await f.req('/assistant/targets', undefined, f.other.token);
   assert.equal(other.status, 200);
   assert.ok(!other.body.targets.some((v) => v.origin === 'remote'));
+});
+
+test('server target directory uses source projects as folders without duplicate levels', async (t) => {
+  const f = await fixture(t, {
+    piProjects: [
+      { id: 'workspace', name: '服务器项目目录', source: true, readOnly: false },
+      {
+        id: 'users',
+        name: 'users',
+        source: false,
+        sourceId: 'workspace',
+        readOnly: false,
+      },
+      { id: 'astral-hub', name: '星屿应用源码', source: true, readOnly: false },
+    ],
+  });
+  const response = await f.own('/assistant/targets?backend=pi');
+  assert.equal(response.status, 200);
+  const projects = response.body.targets.filter((target) => target.origin === 'server');
+  const workspace = projects.find((target) => target.projectId === 'workspace');
+  const users = projects.find((target) => target.projectId === 'users');
+  const source = projects.find((target) => target.projectId === 'astral-hub');
+  assert.deepEqual(
+    {
+      workspaceId: workspace.workspaceId,
+      workspaceName: workspace.workspaceName,
+    },
+    { workspaceId: 'workspace', workspaceName: '服务器项目目录' },
+  );
+  assert.deepEqual(
+    { workspaceId: users.workspaceId, workspaceName: users.workspaceName },
+    { workspaceId: 'workspace', workspaceName: '服务器项目目录' },
+  );
+  assert.deepEqual(
+    { workspaceId: source.workspaceId, workspaceName: source.workspaceName },
+    { workspaceId: 'astral-hub', workspaceName: '星屿应用源码' },
+  );
 });
 
 for (const location of ['server', 'computer'])

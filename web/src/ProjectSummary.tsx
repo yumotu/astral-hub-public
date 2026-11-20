@@ -19,6 +19,8 @@ export function ProjectSummary({
   newConversation,
   remove,
   restore,
+  className,
+  caretClassName,
 }: {
   name: string;
   detail?: ReactNode;
@@ -26,12 +28,15 @@ export function ProjectSummary({
   newConversation?: () => void;
   remove?: () => void;
   restore?: () => void;
+  className?: string;
+  caretClassName?: string;
 }) {
   const [rename, setRename] = useState(false);
   return (
     <>
       <ManagementSummary
         name={name}
+        className={className}
         menuLabel={'项目“' + name + '”的操作'}
         title="长按或右键管理项目"
         actions={[
@@ -45,7 +50,11 @@ export function ProjectSummary({
             : []),
         ]}
       >
-        <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
+        <ChevronRight
+          className={caretClassName || 'project-tree-caret'}
+          size={14}
+          aria-hidden="true"
+        />
         <FolderOpen size={15} />
         <span>{name}</span>
         <small>{detail}</small>

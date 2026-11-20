@@ -119,14 +119,26 @@ export function unifiedAdapters(db, { community, relay, dshRemote, now = Date.no
     if (community.piReady) {
       try {
         const { projects } = await community.unified.projects(actor);
+        const names = new Map(
+          projects.map((p) => [p.id, p.displayName || p.name || p.id]),
+        );
         items.unshift(
           independentServerTarget,
           ...projects.map((p) => ({
             origin: 'server',
             projectId: p.id,
             location: 'server',
-            ...(p.sourceId ? { workspaceId: p.sourceId } : { workspaceId: 'server' }),
-            ...(p.sourceName ? { workspaceName: p.sourceName } : { workspaceName: '服务器项目目录' }),
+            // A source project is its own top-level folder. Child projects
+            // retain sourceId so the UI can place them below that folder.
+            // The old fallback grouped every project under a synthetic
+            // "服务器项目目录" folder and then rendered the same project
+            // again as a child, producing duplicate levels.
+            workspaceId: p.sourceId || p.id,
+            workspaceName:
+              (p.sourceId && (p.sourceName || names.get(p.sourceId))) ||
+              p.displayName ||
+              p.name ||
+              p.id,
             locationName: '服务器',
             projectName: p.displayName || p.name || p.id,
             ...(p.originalName ? { originalName: p.originalName } : {}),

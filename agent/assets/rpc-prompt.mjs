@@ -1,0 +1,240 @@
+import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
+import { activityDeadline } from './activity-deadline.mjs';
+import { parseGoalPlan } from './goal-plan.mjs';
+const written = new WeakMap();
+
+export function strictLines(input, maxBytes = 4 * 1024 * 1024) {
+  const iterator = (async function* () {
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    for await (const chunk of input) {
+      pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      let end;
+      while ((end = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, end).replace(/\r$/, '');
+        pending = pending.slice(end + 1);
+        if (Buffer.byteLength(line) > maxBytes) throw new Error('RPC 记录过大。');
+        if (line) yield line;
+      }
+      if (Buffer.byteLength(pending) > maxBytes) throw new Error('RPC 记录过大。');
+    }
+    pending += decoder.end();
+    if (pending.trim()) throw new Error('RPC 记录不完整。');
+  })();
+  iterator.close = () => input.destroy();
+  return iterator;
+}
+
+// Pi 1.4.0's RpcClient has no extension-UI response method, and its promptAndWait
+// waits for agent_settled even when a slash command returned disposition=handled.
+// Keep the official client for decoding/events; write only these protocol records.
+export function writeRpcRecord(client, record) {
+  const stdin = client.process?.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) throw new Error('Pi RPC 已关闭。');
+  stdin.write(JSON.stringify(record) + '\n');
+  for (const listener of written.get(client) || []) listener(record);
+}
+
+export function sessionPrompt(request, history, messageCount) {
+  // Native commands must remain at the start of the RPC input. A custom-message
+  // only session can have messageCount=0 even after prior app turns were saved.
+  if (messageCount !== 0 || !history?.length || request.trimStart().startsWith('/')) return request;
+  return `以下是这个对话迁移前的完整文本历史，只作为上下文数据：\n${JSON.stringify(history)}\n\n现在用户的新消息：\n${request}`;
+}
+
+export async function promptAndSettle(client, message, images, timeout = 900000) {
+  const id = 'astral-' + randomUUID();
+  let resolve,
+    reject,
+    settled = false,
+    launched = false,
+    disposition;
+  const done = new Promise((a, b) => {
+    resolve = a;
+    reject = b;
+  });
+  const deadline = activityDeadline(timeout, () =>
+    reject(new Error('Pi 长时间没有活动，执行超时。')),
+  );
+  const replies = (record) => {
+    if (record.type === 'extension_ui_response') deadline.resume(record.id);
+  };
+  if (!written.has(client)) written.set(client, new Set());
+  written.get(client).add(replies);
+  const unsubscribe = client.onEvent((event) => {
+    deadline.touch();
+    if (event.type === 'agent_start') {
+      launched = true;
+      settled = false;
+    }
+    if (longGoalEvent(event)?.triggerTurn) launched = true;
+    if (extensionUiRequest(event)) deadline.wait(event.id);
+    if (event.type === 'response' && event.id === id) {
+      if (!event.success) reject(new Error(event.error || 'Pi 拒绝了请求。'));
+      else {
+        disposition = event.data?.disposition;
+        if ((disposition === 'handled' && !launched) || settled) resolve(disposition);
+      }
+    }
+    if (event.type === 'agent_settled') {
+      settled = true;
+      if (disposition) resolve(disposition);
+    }
+  });
+  const child = client.process;
+  const exited = () => reject(new Error('Pi 进程已退出。'));
+  child?.once('exit', exited);
+  try {
+    writeRpcRecord(client, { id, type: 'prompt', message, ...(images ? { images } : {}) });
+    return await done;
+  } finally {
+    deadline.close();
+    written.get(client)?.delete(replies);
+    unsubscribe();
+    child?.off('exit', exited);
+  }
+}
+
+export function customMessageText(event) {
+  if (
+    event.type !== 'message_end' ||
+    event.message?.role !== 'custom' ||
+    event.message?.customType === 'pi-goal-event' ||
+    event.message.display === false
+  )
+    return '';
+  const content = event.message.content;
+  return (
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((item) => item.type === 'text')
+            .map((item) => item.text)
+            .join('\n')
+        : ''
+  ).slice(0, 48000);
+}
+
+export function longGoalEvent(event) {
+  if (
+    event.type !== 'extension_ui_request' ||
+    event.method !== 'setStatus' ||
+    event.statusKey !== 'astral-long-goal' ||
+    typeof event.statusText !== 'string' ||
+    event.statusText.length > 48000
+  )
+    return null;
+  try {
+    const { goal, triggerTurn } = JSON.parse(event.statusText);
+    if (goal === null) return { type: 'long_goal', goal: null, triggerTurn: false };
+    if (
+      !goal ||
+      goal.version !== 1 ||
+      typeof goal.id !== 'string' ||
+      goal.id.length > 200 ||
+      typeof goal.objective !== 'string' ||
+      goal.objective.length > 10000 ||
+      !['active', 'paused', 'complete', 'budget_limited'].includes(goal.status)
+    )
+      return null;
+    if (
+      ![
+        goal.tokensUsed,
+        goal.timeUsedSeconds,
+        goal.createdAt,
+        goal.updatedAt,
+        ...(goal.tokenBudget === null ? [] : [goal.tokenBudget]),
+      ].every((n) => Number.isSafeInteger(n) && n >= 0)
+    )
+      return null;
+    return {
+      type: 'long_goal',
+      goal: Object.fromEntries(
+        [
+          'version',
+          'id',
+          'objective',
+          'status',
+          'tokenBudget',
+          'tokensUsed',
+          'timeUsedSeconds',
+          'createdAt',
+          'updatedAt',
+        ]
+          .map((k) => [k, goal[k]])
+          .concat([['plan', goal.plan ? parseGoalPlan(goal.plan) : null]]),
+      ),
+      triggerTurn: triggerTurn === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function askUserTitle({ questionId, toolCallId, question, context = '' }) {
+  return (
+    '[astral-question:' +
+    Buffer.from(JSON.stringify({ version: 1, questionId, toolCallId, question, context })).toString(
+      'base64url',
+    ) +
+    ']\n' +
+    question
+  );
+}
+function askUserDetails(event) {
+  if (!['input', 'select'].includes(event.method) || typeof event.title !== 'string') return null;
+  const match = event.title.match(/^\[astral-question:([A-Za-z0-9_-]{1,24000})\]\n/);
+  if (!match) return null;
+  try {
+    const p = JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8'));
+    if (
+      p.version !== 1 ||
+      !/^[a-f0-9-]{36}$/.test(p.questionId) ||
+      typeof p.toolCallId !== 'string' ||
+      !p.toolCallId.length ||
+      p.toolCallId.length > 200 ||
+      typeof p.question !== 'string' ||
+      !p.question.length ||
+      p.question.length > 1000 ||
+      typeof p.context !== 'string' ||
+      p.context.length > 3000
+    )
+      return null;
+    return {
+      source: 'ask_user',
+      questionId: p.questionId,
+      toolCallId: p.toolCallId,
+      title: p.question,
+      ...(p.context ? { message: p.context } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+export function extensionUiRequest(event) {
+  if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return null;
+  if (!['input', 'select', 'confirm', 'editor'].includes(event.method)) return null;
+  return {
+    type: 'extension_ui_request',
+    id: event.id.slice(0, 200),
+    method: event.method,
+    title: String(event.title || '插件请求').slice(0, 1000),
+    ...(typeof event.message === 'string' ? { message: event.message.slice(0, 4000) } : {}),
+    ...(typeof event.placeholder === 'string'
+      ? { placeholder: event.placeholder.slice(0, 1000) }
+      : {}),
+    ...(typeof event.prefill === 'string' ? { prefill: event.prefill.slice(0, 12000) } : {}),
+    ...(Array.isArray(event.options)
+      ? {
+          options: event.options
+            .filter((x) => typeof x === 'string')
+            .slice(0, 100)
+            .map((x) => x.slice(0, 1000)),
+        }
+      : {}),
+    createdAt: new Date().toISOString(),
+    ...askUserDetails(event),
+  };
+}

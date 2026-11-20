@@ -1165,19 +1165,40 @@ export function UnifiedConversationNavigation({
     );
   const workspaceKey = (target: ConversationTarget) => {
     const identity = target.connectionId || target.deviceId || target.origin;
-    const value = target.workspaceId || target.workspacePath || 'unassigned';
+    // A target without an explicit workspace is already a project folder for
+    // computers and DPH workspaces. Using a shared "unassigned" bucket here
+    // created an extra folder level and then rendered every project again
+    // below it. Null-project server conversations remain truly ungrouped.
+    const value =
+      target.workspaceId || target.workspacePath || target.projectId || 'unassigned';
     return JSON.stringify([target.origin, identity, value]);
   };
   const workspaceName = (target: ConversationTarget) =>
     target.workspaceName ||
     (target.workspacePath ? target.workspacePath.split('/').filter(Boolean).at(-1) : '') ||
-    '未分组';
+    (target.projectId ? model.projectName(target) : '未分组');
   function workspaceFolders(groups: typeof filteredGroups) {
-    const folders = new Map<string, { key: string; title: string; target: ConversationTarget; groups: typeof filteredGroups }>();
+    const folders = new Map<
+      string,
+      {
+        key: string;
+        title: string;
+        target: ConversationTarget;
+        rootProjectId: string | null;
+        groups: typeof filteredGroups;
+      }
+    >();
     for (const group of groups) {
+      if (!group.target.projectId) continue;
       const key = workspaceKey(group.target);
       if (!folders.has(key))
-        folders.set(key, { key, title: workspaceName(group.target), target: group.target, groups: [] });
+        folders.set(key, {
+          key,
+          title: workspaceName(group.target),
+          target: group.target,
+          rootProjectId: group.target.workspaceId || group.target.projectId,
+          groups: [],
+        });
       folders.get(key)!.groups.push(group);
     }
     return [...folders.values()];
@@ -1285,6 +1306,53 @@ export function UnifiedConversationNavigation({
           </>
         }
       />
+    );
+  }
+  function groupConversationContent(group: Group) {
+    return (
+      <>
+        {pendingIn(group.target).map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            className="conversation-preparation-row text-link"
+            onClick={() => {
+              model.selectPreparation(p.id);
+              setPanel(null);
+            }}
+          >
+            {p.message?.text.slice(0, 32) || p.draft.slice(0, 32) || '新对话'}
+            <small>
+              {p.target.origin === 'remote' ? 'DPH' : 'Pi'} ·{' '}
+              {p.state === 'creating'
+                ? '准备中'
+                : p.state === 'ready'
+                  ? p.message
+                    ? '待发送，打开后继续'
+                    : '草稿就绪'
+                  : '草稿已保留'}
+            </small>
+          </button>
+        ))}
+        {!group.available && (
+          <p className="field-help">
+            {removed ? '已从列表移除，文件与历史记录仍保留。' : '主机或项目暂不可用，已有记录仍保留。'}
+          </p>
+        )}
+        {search ? (
+          group.items.map((c) => row(c))
+        ) : (
+          <ProjectConversationList>
+            {group.items.map((c) => row(c))}
+          </ProjectConversationList>
+        )}
+        {!group.items.length && !removed && group.available && (
+          <p className="field-help">长按或右键项目可新建对话。</p>
+        )}
+        {!archived && !removed && group.target.origin === 'remote' && group.available && (
+          <RemoteSessionImports target={group.target} />
+        )}
+      </>
     );
   }
   function showArchive(value: boolean) {
@@ -1509,150 +1577,164 @@ export function UnifiedConversationNavigation({
                       : '点击电脑旁的加号添加工作区文件夹。'}
                   </p>
                 )}
-                {workspaceFolders(location.groups).map((workspace) => (
-                  <details
-                    key={workspace.key}
-                    className="workspace-folder-tree"
-                    open={
-                      !!search ||
-                      (workspaceExpansion[workspace.key] ??
-                        workspace.groups.some(
-                          (group) =>
-                            group.items.some(selected) ||
-                            pendingIn(group.target).some((p) => p.id === model.preparing?.id),
-                        ))
-                    }
-                    onClick={(event) =>
-                      toggleNavigationBranch(event, (expanded) => {
-                        if (!search)
-                          setWorkspaceExpansion((old) => ({ ...old, [workspace.key]: expanded }));
-                      })
-                    }
-                  >
-                    <summary className="workspace-folder-heading">
-                      <ChevronRight className="workspace-folder-caret" size={13} aria-hidden="true" />
+                {location.groups.some((group) => !group.target.projectId) && (
+                  <div className="unified-unassigned-chats">
+                    <div className="unified-unassigned-heading">
                       <FolderOpen size={14} />
-                      <span>{workspace.title}</span>
-                      <small>{workspace.groups.length}</small>
-                      {!archived && !removed && !search && (
-                        <button
-                          type="button"
-                          className="icon-btn workspace-folder-add"
-                          aria-label={'在' + workspace.title + '中新建项目'}
-                          title="新建项目文件夹"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            if (location.server && newProject) newProject();
-                            else setProjectSetup(projectSetupComputers(locationKey, location));
-                          }}
-                        >
-                          <Plus size={14} />
-                        </button>
-                      )}
-                    </summary>
-                    <div className="workspace-folder-projects">
-                    {workspace.groups.map((group) => (
-                      <details
-                        key={group.key}
-                        className="project-tree"
-                        open={
-                          !!search ||
-                          (projectExpansion[group.key] ??
-                            (group.items.some(selected) ||
-                              pendingIn(group.target).some((p) => p.id === model.preparing?.id)))
-                        }
-                        onClick={(event) =>
-                          toggleNavigationBranch(event, (expanded) => {
-                            if (!search)
-                              setProjectExpansion((old) => ({ ...old, [group.key]: expanded }));
-                          })
-                        }
-                      >
-                        {group.target.projectId ? (
-                          <ProjectSummary
-                            name={model.projectName(group.target)}
-                            detail={group.items.length || ''}
-                            saveName={(name) => model.renameProject(group.target, name)}
-                            remove={!removed ? () => void askProjectRemoval(group.target) : undefined}
-                            restore={
-                              removedProjects.some((p) => projectKey(p.target) === group.key)
-                                ? () => {
-                                    const p = removedProjects.find(
-                                      (p) => projectKey(p.target) === group.key,
-                                    )!;
-                                    void model.restoreProject(p).catch((e) => setError(e.message));
-                                  }
-                                : undefined
-                            }
-                            newConversation={
-                              !removed && group.available
-                                ? () => {
-                                    setNewTarget(group.target);
-                                    setNewOpen(true);
-                                  }
-                                : undefined
-                            }
-                          />
-                        ) : (
-                          <summary>
-                            <ChevronRight className="project-tree-caret" size={14} aria-hidden="true" />
-                            <FolderOpen size={15} />
-                            <span>未分组</span>
-                            <small>{group.items.length}</small>
-                          </summary>
-                        )}
-                        <div className="unified-project-chats">
-                      {pendingIn(group.target).map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className="conversation-preparation-row text-link"
-                          onClick={() => {
-                            model.selectPreparation(p.id);
-                            setPanel(null);
-                          }}
-                        >
-                          {p.message?.text.slice(0, 32) || p.draft.slice(0, 32) || '新对话'}
-                          <small>
-                            {p.target.origin === 'remote' ? 'DPH' : 'Pi'} ·{' '}
-                            {p.state === 'creating'
-                              ? '准备中'
-                              : p.state === 'ready'
-                                ? p.message
-                                  ? '待发送，打开后继续'
-                                  : '草稿就绪'
-                                : '草稿已保留'}
-                          </small>
-                        </button>
-                      ))}
-                      {!group.available && (
-                        <p className="field-help">
-                          {removed
-                            ? '已从列表移除，文件与历史记录仍保留。'
-                            : '主机或项目暂不可用，已有记录仍保留。'}
-                        </p>
-                      )}
-                      {search ? (
-                        group.items.map((c) => row(c))
-                      ) : (
-                        <ProjectConversationList>
-                          {group.items.map((c) => row(c))}
-                        </ProjectConversationList>
-                      )}
-                      {!group.items.length && !removed && group.available && (
-                        <p className="field-help">长按或右键项目可新建对话。</p>
-                      )}
-                      {!archived &&
-                        !removed &&
-                        group.target.origin === 'remote' &&
-                        group.available && <RemoteSessionImports target={group.target} />}
-                        </div>
-                      </details>
-                    ))}
+                      <span>独立对话</span>
+                      <small>
+                        {location.groups
+                          .filter((group) => !group.target.projectId)
+                          .reduce((count, group) => count + group.items.length, 0) || ''}
+                      </small>
                     </div>
-                  </details>
-                ))}
+                    {location.groups
+                      .filter((group) => !group.target.projectId)
+                      .map((group) => (
+                        <div className="unified-project-chats" key={group.key}>
+                          {groupConversationContent(group)}
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {workspaceFolders(location.groups).map((workspace) => {
+                  const root = workspace.groups.find(
+                    (group) => group.target.projectId === workspace.rootProjectId,
+                  );
+                  const childGroups = root
+                    ? workspace.groups.filter((group) => group.key !== root.key)
+                    : workspace.groups;
+                  return (
+                    <details
+                      key={workspace.key}
+                      className="workspace-folder-tree"
+                      open={
+                        !!search ||
+                        (workspaceExpansion[workspace.key] ??
+                          workspace.groups.some(
+                            (group) =>
+                              group.items.some(selected) ||
+                              pendingIn(group.target).some((p) => p.id === model.preparing?.id),
+                          ))
+                      }
+                      onClick={(event) =>
+                        toggleNavigationBranch(event, (expanded) => {
+                          if (!search)
+                            setWorkspaceExpansion((old) => ({ ...old, [workspace.key]: expanded }));
+                        })
+                      }
+                    >
+                      {root ? (
+                        <ProjectSummary
+                          name={workspace.title}
+                          detail={workspace.groups.reduce(
+                            (count, group) => count + group.items.length,
+                            0,
+                          ) || ''}
+                          className="workspace-folder-heading"
+                          caretClassName="workspace-folder-caret"
+                          saveName={(name) => model.renameProject(root.target, name)}
+                          remove={!removed ? () => void askProjectRemoval(root.target) : undefined}
+                          restore={
+                            removedProjects.some((p) => projectKey(p.target) === root.key)
+                              ? () => {
+                                  const p = removedProjects.find(
+                                    (item) => projectKey(item.target) === root.key,
+                                  );
+                                  if (p) void model.restoreProject(p).catch((e) => setError(e.message));
+                                }
+                              : undefined
+                          }
+                          newConversation={
+                            !removed && root.available
+                              ? () => {
+                                  setNewTarget(root.target);
+                                  setNewOpen(true);
+                                }
+                              : undefined
+                          }
+                        />
+                      ) : (
+                        <summary className="workspace-folder-heading">
+                          <ChevronRight
+                            className="workspace-folder-caret"
+                            size={13}
+                            aria-hidden="true"
+                          />
+                          <FolderOpen size={14} />
+                          <span>{workspace.title}</span>
+                          <small>{workspace.groups.length}</small>
+                          {!archived && !removed && !search && (
+                            <button
+                              type="button"
+                              className="icon-btn workspace-folder-add"
+                              aria-label={'在' + workspace.title + '中新建项目'}
+                              title="新建项目文件夹"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (location.server && newProject) newProject();
+                                else setProjectSetup(projectSetupComputers(locationKey, location));
+                              }}
+                            >
+                              <Plus size={14} />
+                            </button>
+                          )}
+                        </summary>
+                      )}
+                      <div className="workspace-folder-projects">
+                        {root && <div className="unified-project-chats">{groupConversationContent(root)}</div>}
+                        {childGroups.map((group) => (
+                          <details
+                            key={group.key}
+                            className="project-tree"
+                            open={
+                              !!search ||
+                              (projectExpansion[group.key] ??
+                                (group.items.some(selected) ||
+                                  pendingIn(group.target).some((p) => p.id === model.preparing?.id)))
+                            }
+                            onClick={(event) =>
+                              toggleNavigationBranch(event, (expanded) => {
+                                if (!search)
+                                  setProjectExpansion((old) => ({ ...old, [group.key]: expanded }));
+                              })
+                            }
+                          >
+                            <ProjectSummary
+                              name={model.projectName(group.target)}
+                              detail={group.items.length || ''}
+                              saveName={(name) => model.renameProject(group.target, name)}
+                              remove={!removed ? () => void askProjectRemoval(group.target) : undefined}
+                              restore={
+                                removedProjects.some((p) => projectKey(p.target) === group.key)
+                                  ? () => {
+                                      const p = removedProjects.find(
+                                        (item) => projectKey(item.target) === group.key,
+                                      );
+                                      if (p)
+                                        void model.restoreProject(p).catch((e) => setError(e.message));
+                                    }
+                                  : undefined
+                              }
+                              newConversation={
+                                !removed && group.available
+                                  ? () => {
+                                      setNewTarget(group.target);
+                                      setNewOpen(true);
+                                    }
+                                  : undefined
+                              }
+                            />
+                            <div className="unified-project-chats">
+                              {groupConversationContent(group)}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    </details>
+                  );
+                })}
               </div>
             </details>
           ))}

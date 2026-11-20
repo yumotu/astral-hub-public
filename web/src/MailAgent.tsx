@@ -10,6 +10,18 @@ import { PiMarkdown } from './PiMarkdown';
 import { useComposerSize } from './mobile-viewport';
 import type { Settings } from './types';
 
+function mailToolLabel(name: string) {
+  if (name === 'mail_manage') return '邮件整理工具';
+  if (name === 'mail_read') return '读取邮件';
+  return name.replaceAll('_', ' ');
+}
+
+function mailToolStatus(status: string) {
+  if (status === 'running') return '执行中';
+  if (status === 'error') return '失败';
+  return '已完成';
+}
+
 export function MailAgent({
   settings,
   open,
@@ -208,6 +220,22 @@ export function MailAgent({
                 {active && <LoaderCircle className="spin" size={14} />}{' '}
                 {task.phase || taskLabel(task)}
               </p>
+              {active && !task.output && !task.tools.length && (
+                <p className="mail-agent-live-hint">已开始读取邮件，首个结果返回后会显示处理进度。</p>
+              )}
+              {!!task.tools.length && (
+                <ul className="mail-agent-activity" aria-label="邮件 Agent 执行进度">
+                  {task.tools.slice(-6).map((tool) => (
+                    <li key={tool.id}>
+                      <span>
+                        {tool.status === 'running' && <LoaderCircle className="spin" size={13} />}{' '}
+                        {mailToolLabel(tool.name)}
+                      </span>
+                      <small>{mailToolStatus(tool.status)}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {task.output && <PiMarkdown text={task.output} />}
               {task.error && (
                 <p role="alert" className="error">

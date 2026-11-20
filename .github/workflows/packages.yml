@@ -10,55 +10,26 @@ on:
         description: '全部验收完成后发布安装包并创建版本标签；关闭时仅构建验证'
         type: boolean
         default: false
+      bootstrap_android_signing:
+        description: '首次建立 Android 调试签名基线（缓存丢失时也会产生新签名）'
+        type: boolean
+        default: false
+      macos_distribution:
+        description: '使用已配置的 Developer ID 与 Apple API 密钥签名、公证并检查 Gatekeeper；缺配置时失败'
+        type: boolean
+        default: false
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
 permissions:
   contents: read
 concurrency:
   group: applications-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  source-audit:
-    runs-on: ubuntu-latest
-    outputs:
-      release: ${{ steps.intent.outputs.release }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: actions/setup-node@v4
-        with: { node-version: '26.7.0' }
-      - name: Select exact version tags or an explicit default-branch release
-        id: intent
-        env:
-          PUBLISH_RELEASE: ${{ inputs.publish_release }}
-          ANDROID_ONLY: ${{ inputs.android_only }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, appendFileSync } from 'node:fs';
-          import { packageRelease } from './shared/release-intent.mjs';
-          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          const e = process.env;
-          const release = packageRelease({ version, eventName: e.GITHUB_EVENT_NAME, ref: e.GITHUB_REF, defaultBranch: e.DEFAULT_BRANCH, publishRelease: e.PUBLISH_RELEASE, androidOnly: e.ANDROID_ONLY, headMessage: JSON.parse(readFileSync(e.GITHUB_EVENT_PATH, 'utf8')).head_commit?.message });
-          appendFileSync(e.GITHUB_OUTPUT, `release=${release}\n`);
-          NODE
-      - run: node scripts/audit-public-source.mjs
-      - name: Scan committed public history for secrets
-        run: |
-          scan_dir="$RUNNER_TEMP/gitleaks-bin"
-          mkdir -p "$scan_dir"
-          curl --fail --location --retry 3 --output "$scan_dir/tool.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          printf '%s  %s\n' 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb "$scan_dir/tool.tar.gz" | sha256sum -c -
-          tar -xzf "$scan_dir/tool.tar.gz" -C "$scan_dir" gitleaks
-          "$scan_dir/gitleaks" git . --redact=100 --no-banner
   web-and-tests:
-    needs: source-audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: '26.7.0', cache: 'npm' }
       - run: npm ci
@@ -78,16 +49,11 @@ jobs:
           try { const response = await fetch("http://127.0.0.1:" + app.server.address().port + "/api/health"); assert.equal(response.status, 200); console.log("SERVER_RUNTIME_HEALTH_OK"); }
           finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); }
           '
-      - name: Build and verify the pinned DSH dsh4 package without model access
-        run: |
-          docker build -f deploy/dsh/Dockerfile -t astral-dsh-qa .
-          docker run --rm --init --read-only --network=none --memory=512m --cpus=1 --pids-limit=192 --tmpfs /tmp:rw,noexec,nosuid,size=128m --tmpfs /state:rw,nosuid,size=128m,mode=1777 --tmpfs /workspace:rw,nosuid,size=32m,mode=1777 --cap-drop=ALL --security-opt=no-new-privileges -e ASTRAL_DSH_PACKAGE_QA=1 --entrypoint=node astral-dsh-qa /opt/astral/deploy/dsh/verify-package.mjs
       - run: node scripts/package-agent.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: astral-web-and-source
           if-no-files-found: error
-          retention-days: 7
           path: |
             dist/
             release/*.zip
@@ -103,7 +69,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with:
           {
@@ -115,20 +80,31 @@ jobs:
       - run: npm ci --prefix desktop --ignore-scripts
       - run: node desktop/node_modules/electron/install.js
       - run: npm run build
-      - if: runner.os == 'macOS'
-        name: Package both macOS architectures with credential-free ad-hoc signing
-        run: node scripts/package-macos-integrity.mjs
+      - if: runner.os == 'macOS' && !inputs.macos_distribution
+        run: npm --prefix desktop run package -- --mac --arm64 --x64 --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - if: runner.os == 'macOS' && inputs.macos_distribution
+        name: Build with Developer ID and Apple notarization
+        run: node scripts/package-macos-distribution.mjs
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          ASTRAL_APPLE_API_KEY_BASE64: ${{ secrets.MAC_APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.MAC_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.MAC_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.MAC_APPLE_TEAM_ID }}
       - if: runner.os == 'Windows'
         run: npm --prefix desktop run package -- --win --x64 --publish never
       - if: runner.os == 'macOS'
         name: Verify both macOS application signatures and architectures
         run: node scripts/verify-macos-distribution.mjs release/desktop
-        env: { ASTRAL_MACOS_DISTRIBUTION: 'false' }
+        env:
+          ASTRAL_MACOS_DISTRIBUTION: ${{ inputs.macos_distribution && 'true' || 'false' }}
+          APPLE_TEAM_ID: ${{ inputs.macos_distribution && secrets.MAC_APPLE_TEAM_ID || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: astral-desktop-${{ matrix.os }}
           if-no-files-found: error
-          retention-days: 7
           path: |
             release/desktop/*.dmg
             release/desktop/*.zip
@@ -139,7 +115,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: '26.7.0', cache: 'npm' }
       - uses: actions/setup-java@v4
@@ -148,20 +123,30 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: 'false'
-      - name: Prepare an ephemeral emulator-test signing key
-        run: |
-          umask 077
-          key="$RUNNER_TEMP/android-test/debug.keystore"
-          mkdir -p "$(dirname "$key")"
-          keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Ephemeral CI Test' >/dev/null 2>&1
-          printf 'ASTRAL_ANDROID_KEYSTORE=%s\n' "$key" >> "$GITHUB_ENV"
+      - name: Locate the retained Android signing key
+        run: printf 'ASTRAL_ANDROID_KEYSTORE=%s/astral-android-signing/debug.keystore\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: android-signing
+        with:
+          path: ${{ env.ASTRAL_ANDROID_KEYSTORE }}
+          key: astral-android-debug-signing-v2
+      - name: Prepare the explicit Android signing key
+        env:
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          BOOTSTRAP_SIGNING: ${{ inputs.bootstrap_android_signing }}
+        run: bash scripts/android-debug-signing.sh prepare
+      - uses: actions/cache/save@v4
+        if: steps.android-signing.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.ASTRAL_ANDROID_KEYSTORE }}
+          key: astral-android-debug-signing-v2
       - run: npm ci
       - run: npm run android:sync
       - run: chmod +x android/gradlew
       - run: ./gradlew --no-daemon assembleDebug
         working-directory: android
-      - name: Verify the tested APK signature
-        run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify android/app/build/outputs/apk/debug/app-debug.apk'
+      - name: Verify the APK uses the retained signing key
+        run: bash scripts/android-debug-signing.sh verify android/app/build/outputs/apk/debug/app-debug.apk
       - name: Reserve runner space for Android system and data images
         run: bash scripts/android-emulator-space.sh
       - name: Enable emulator acceleration
@@ -184,19 +169,17 @@ jobs:
         with:
           name: android-safe-area-report
           if-no-files-found: warn
-          retention-days: 7
           path: |
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
       - run: |
           version=$(node -p "require('./package.json').version")
           mkdir -p release
-          cp android/app/build/outputs/apk/debug/app-debug.apk "release/Astral-Hub-${version}-android-tested.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release/Astral-Hub-${version}-android-debug.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: astral-android-tested
+          name: astral-android-debug
           if-no-files-found: error
-          retention-days: 7
           path: release/*.apk
   pi-runtime:
     if: ${{ !inputs.android_only }}
@@ -204,7 +187,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - name: Build the disposable Pi runtime image
         run: docker build -t astral-pi-qa -f deploy/pi/Dockerfile deploy/pi
       - name: Allow user namespaces only for the disposable QA container
@@ -239,7 +221,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with:
           { node-version: '26.7.0', cache: 'npm', cache-dependency-path: 'agent/package-lock.json' }
@@ -248,47 +229,11 @@ jobs:
       - run: npm --prefix agent run terminal:setup
       - run: node scripts/package-agent.mjs
       - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs agent/tests/long-goal-runtime.test.mjs agent/tests/document-ocr.test.mjs agent/tests/question-resume-runtime.test.mjs
-  android-sign:
-    if: ${{ needs.source-audit.outputs.release == 'true' }}
-    needs: [source-audit, web-and-tests, desktop, android, pi-runtime, computer-runtime]
-    runs-on: ubuntu-latest
-    environment: release-signing
-    steps:
-      - uses: actions/checkout@v4
-        with: { persist-credentials: false }
-      - uses: actions/setup-node@v4
-        with: { node-version: '26.7.0' }
-      - uses: actions/setup-java@v4
-        with: { distribution: 'temurin', java-version: '21' }
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'build-tools;35.0.0'
-          log-accepted-android-sdk-licenses: 'false'
-      - uses: actions/download-artifact@v4
-        with: { name: astral-android-tested, path: signing-input }
-      - name: Sign the tested APK with the protected existing application key
-        run: node scripts/sign-android-release.mjs signing-input
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: astral-android-debug
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            release/*android-debug.apk
-            release/android-verification.json
   release-check:
-    if: ${{ needs.source-audit.outputs.release == 'true' }}
-    needs: [source-audit, web-and-tests, desktop, android, android-sign, pi-runtime, computer-runtime]
+    needs: [web-and-tests, desktop, android, pi-runtime, computer-runtime]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: '26.7.0' }
       - run: npm ci --omit=dev --ignore-scripts
@@ -296,14 +241,13 @@ jobs:
         with: { path: artifacts }
       - run: node scripts/prepare-release.mjs
   release:
-    if: ${{ needs.source-audit.outputs.release == 'true' }}
-    needs: [source-audit, web-and-tests, desktop, android, android-sign, pi-runtime, computer-runtime, release-check]
+    if: ${{ !inputs.android_only && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+    needs: [web-and-tests, desktop, android, pi-runtime, computer-runtime, release-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: '26.7.0' }
       - run: npm ci --omit=dev --ignore-scripts

@@ -1,7 +1,0 @@
-services:
-  app:
-    image: astral-hub:0.9.1
-  dsh:
-    image: astral-dsh:0.8.12-dsh4
-  pi:
-    image: astral-pi:1.4.0-v0820-learning1
