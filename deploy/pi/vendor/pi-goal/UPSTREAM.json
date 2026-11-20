@@ -1,0 +1,14 @@
+{
+  "package": "pi-goal",
+  "version": "0.1.7",
+  "source": "https://registry.npmjs.org/pi-goal/-/pi-goal-0.1.7.tgz",
+  "integrity": "sha512-gSgt/cdZVYGlR+EXgg33N+up2hlz6mx0xRoEODN6Cnf2Xc0FrR7E5RLZkZModz/iKOXhzp96+s7q8rIdRn/0VA==",
+  "license": "MIT",
+  "files": {
+    "index.ts": "66eb8f896134cd5c4a2f04a1016ba285a9e193e47aa921558a9fe17285aece1f",
+    "goal-state.ts": "1f671e4e95947df42fdda7734b5a91c1c5665f8b5e78176f79a842ae54abb7b3",
+    "usage.ts": "afcd41e916608a7573c66e94523dde4ed5f68698e136fcdc0546aea50959fbeb",
+    "LICENSE": "c0a992d41b009a2c7a367002d80fedb0efff1292e0b8956526e0279d75ad09ee"
+  },
+  "adaptation": "Unmodified upstream source; Astral compatibility and RPC lifecycle live in long-goal.mjs."
+}

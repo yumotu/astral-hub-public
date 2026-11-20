@@ -1,0 +1,71 @@
+.desktop-window-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  z-index: 10000;
+  background: var(--surface);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  -webkit-app-region: drag;
+}
+.desktop-window-bar > div {
+  display: flex;
+  gap: 3px;
+  -webkit-app-region: no-drag;
+}
+.desktop-window-bar button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  -webkit-app-region: no-drag;
+}
+.desktop-window-bar button::before {
+  content: '';
+  grid-area: 1 / 1;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #0002;
+}
+.desktop-window-bar button svg {
+  grid-area: 1 / 1;
+  color: #222;
+  z-index: 1;
+  opacity: 0;
+}
+.desktop-window-bar button:hover svg,
+.desktop-window-bar button:focus-visible svg {
+  opacity: 1;
+}
+.desktop-window-bar .window-close::before {
+  background: #ff6058;
+}
+.desktop-window-bar .window-minimize::before {
+  background: #febc2e;
+}
+.desktop-window-bar .window-restore::before {
+  background: #28c840;
+}
+.desktop-window-bar button:disabled {
+  opacity: 0.5;
+}
+:root[data-desktop-fullscreen] #root {
+  padding-top: 32px;
+}
+:root[data-desktop-fullscreen] .shell {
+  min-height: calc(100dvh - 32px);
+}
+:root[data-desktop-fullscreen] .sidebar {
+  top: 32px;
+}
+:root[data-desktop-fullscreen] .workspace:is(.assistant-workspace, .mail-workspace) {
+  height: calc(var(--app-viewport-height, 100dvh) - 32px);
+  top: calc(var(--app-viewport-top, 0px) + 32px);
+}

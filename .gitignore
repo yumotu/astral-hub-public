@@ -1,0 +1,25 @@
+node_modules/
+desktop/web/
+desktop/runtime/
+web/public/pdfjs/
+web/public/downloads/Astral-Remote-Pi-Agent-*.zip
+dist/
+.env
+data/
+release/
+*.log
+.DS_Store
+android/.gradle/
+android/local.properties
+android/**/build/
+android/**/capacitor-cordova-android-plugins/
+*.keystore
+*.jks
+*.p8
+*.p12
+*.pfx
+
+.device-ai.json
+
+# Generated dependency notices are rebuilt from installed packages.
+web/public/licenses/

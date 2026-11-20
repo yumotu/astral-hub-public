@@ -1,0 +1,6 @@
+.voice-input { position: static; flex: 0 0 auto; }
+.voice-button.listening { color: var(--danger, #c34545); background: color-mix(in srgb, currentColor 10%, transparent); }
+.voice-status { position: absolute; z-index: 10; left: 8px; right: 8px; bottom: calc(100% + 8px); padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface, #fff); box-shadow: 0 6px 24px #0002; color: var(--text); text-align: left; max-height: 200px; overflow: auto; }
+.voice-status > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.voice-status p { margin: 6px 0; overflow-wrap: anywhere; }
+.voice-status small { color: var(--muted); font-size: 11px; }

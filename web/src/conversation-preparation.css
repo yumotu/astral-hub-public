@@ -1,0 +1,28 @@
+.conversation-preparation-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.conversation-preparation-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+  padding: 8px 0;
+}
+.conversation-preparation-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.preparing-workspace .chat-panel > .error {
+  max-height: 80px;
+  overflow: auto;
+  margin: 4px 14px;
+}
+
+.conversation-preparation-discard {
+  margin-top: 20px;
+}

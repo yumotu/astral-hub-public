@@ -1,0 +1,28 @@
+{
+  "providers": {
+    "astral-deepseek": {
+      "baseUrl": "https://api.deepseek.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$DEEPSEEK_API_KEY",
+      "authHeader": true,
+      "models": [
+        {
+          "id": "deepseek-flash",
+          "name": "DeepSeek Flash · 星屿",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 64000,
+          "maxTokens": 131072,
+          "samplingParams": { "thinking": { "type": "disabled" } },
+          "compat": {
+            "maxTokensField": "max_tokens",
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "thinkingFormat": "deepseek"
+          }
+        }
+      ]
+    }
+  }
+}

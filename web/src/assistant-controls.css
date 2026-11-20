@@ -1,0 +1,167 @@
+.assistant-composer [aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: help;
+}
+.composer-unavailable-reason {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.composer-unavailable-reason button {
+  margin-left: 8px;
+}
+.assistant-modal > .section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.assistant-modal > .section-title h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.assistant-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 79;
+  background: transparent;
+}
+.assistant-settings-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.assistant-settings-location {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.assistant-settings-panel .assistant-setting-row,
+.assistant-settings-panel > label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  gap: 16px;
+}
+.assistant-setting-row > span {
+  display: grid;
+  gap: 4px;
+}
+.assistant-setting-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.assistant-setting-row input[role='switch'] {
+  appearance: none;
+  width: 38px;
+  min-width: 38px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface-active);
+  position: relative;
+  cursor: pointer;
+}
+.assistant-setting-row input[role='switch']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.16s;
+}
+.assistant-setting-row input[role='switch']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.assistant-setting-row input[role='switch']:checked::before {
+  transform: translateX(16px);
+  background: var(--on-accent);
+}
+.assistant-setting-row input[role='switch']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.question-options {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.question-options > button {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.question-options > button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  box-shadow: inset 3px 0 var(--accent);
+}
+.question-other-answer {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.question-other-answer input {
+  width: 100%;
+  min-width: 0;
+}
+.assistant-statusbar .session-telemetry > summary {
+  flex-wrap: wrap;
+  white-space: normal;
+  row-gap: 7px;
+}
+.assistant-statusbar .session-telemetry > summary .telemetry-counts,
+.assistant-statusbar .session-telemetry > summary .telemetry-secondary,
+.assistant-statusbar .session-telemetry > summary .telemetry-tokens {
+  display: inline-flex;
+}
+.pi-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 0;
+}
+.pi-markdown .katex {
+  font-size: 1.05em;
+}
+@media (max-width: 700px) {
+  .assistant-settings-panel {
+    top: auto !important;
+    left: 12px !important;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(65dvh, var(--app-height, 65dvh)) !important;
+    border-radius: 16px;
+  }
+  .assistant-settings-backdrop {
+    background: #0004;
+  }
+  .assistant-statusbar .session-telemetry {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+.memory-settings .action-row > input { flex: 1; min-width: 120px; }
+.memory-editor, .memory-item { padding: 14px 0; border-top: 1px solid var(--border); }
+.memory-item p, .memory-item blockquote { white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-item .section-title { flex-wrap: wrap; gap: 8px; }
+.memory-item .section-title strong { flex: 1; overflow-wrap: anywhere; }
+.memory-item details { margin-top: 8px; }

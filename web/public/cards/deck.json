@@ -1,0 +1,397 @@
+{
+  "name": "星屿 · 内在星图",
+  "version": "1.0.0",
+  "kind": "original-svg",
+  "cards": [
+    {
+      "id": "major-0",
+      "name": "愚者",
+      "file": "major-0.svg"
+    },
+    {
+      "id": "major-1",
+      "name": "魔术师",
+      "file": "major-1.svg"
+    },
+    {
+      "id": "major-2",
+      "name": "女祭司",
+      "file": "major-2.svg"
+    },
+    {
+      "id": "major-3",
+      "name": "皇后",
+      "file": "major-3.svg"
+    },
+    {
+      "id": "major-4",
+      "name": "皇帝",
+      "file": "major-4.svg"
+    },
+    {
+      "id": "major-5",
+      "name": "教皇",
+      "file": "major-5.svg"
+    },
+    {
+      "id": "major-6",
+      "name": "恋人",
+      "file": "major-6.svg"
+    },
+    {
+      "id": "major-7",
+      "name": "战车",
+      "file": "major-7.svg"
+    },
+    {
+      "id": "major-8",
+      "name": "力量",
+      "file": "major-8.svg"
+    },
+    {
+      "id": "major-9",
+      "name": "隐者",
+      "file": "major-9.svg"
+    },
+    {
+      "id": "major-10",
+      "name": "命运之轮",
+      "file": "major-10.svg"
+    },
+    {
+      "id": "major-11",
+      "name": "正义",
+      "file": "major-11.svg"
+    },
+    {
+      "id": "major-12",
+      "name": "倒吊人",
+      "file": "major-12.svg"
+    },
+    {
+      "id": "major-13",
+      "name": "死神",
+      "file": "major-13.svg"
+    },
+    {
+      "id": "major-14",
+      "name": "节制",
+      "file": "major-14.svg"
+    },
+    {
+      "id": "major-15",
+      "name": "恶魔",
+      "file": "major-15.svg"
+    },
+    {
+      "id": "major-16",
+      "name": "高塔",
+      "file": "major-16.svg"
+    },
+    {
+      "id": "major-17",
+      "name": "星星",
+      "file": "major-17.svg"
+    },
+    {
+      "id": "major-18",
+      "name": "月亮",
+      "file": "major-18.svg"
+    },
+    {
+      "id": "major-19",
+      "name": "太阳",
+      "file": "major-19.svg"
+    },
+    {
+      "id": "major-20",
+      "name": "审判",
+      "file": "major-20.svg"
+    },
+    {
+      "id": "major-21",
+      "name": "世界",
+      "file": "major-21.svg"
+    },
+    {
+      "id": "wands-1",
+      "name": "权杖王牌",
+      "file": "wands-1.svg"
+    },
+    {
+      "id": "wands-2",
+      "name": "权杖二",
+      "file": "wands-2.svg"
+    },
+    {
+      "id": "wands-3",
+      "name": "权杖三",
+      "file": "wands-3.svg"
+    },
+    {
+      "id": "wands-4",
+      "name": "权杖四",
+      "file": "wands-4.svg"
+    },
+    {
+      "id": "wands-5",
+      "name": "权杖五",
+      "file": "wands-5.svg"
+    },
+    {
+      "id": "wands-6",
+      "name": "权杖六",
+      "file": "wands-6.svg"
+    },
+    {
+      "id": "wands-7",
+      "name": "权杖七",
+      "file": "wands-7.svg"
+    },
+    {
+      "id": "wands-8",
+      "name": "权杖八",
+      "file": "wands-8.svg"
+    },
+    {
+      "id": "wands-9",
+      "name": "权杖九",
+      "file": "wands-9.svg"
+    },
+    {
+      "id": "wands-10",
+      "name": "权杖十",
+      "file": "wands-10.svg"
+    },
+    {
+      "id": "wands-11",
+      "name": "权杖侍从",
+      "file": "wands-11.svg"
+    },
+    {
+      "id": "wands-12",
+      "name": "权杖骑士",
+      "file": "wands-12.svg"
+    },
+    {
+      "id": "wands-13",
+      "name": "权杖王后",
+      "file": "wands-13.svg"
+    },
+    {
+      "id": "wands-14",
+      "name": "权杖国王",
+      "file": "wands-14.svg"
+    },
+    {
+      "id": "cups-1",
+      "name": "圣杯王牌",
+      "file": "cups-1.svg"
+    },
+    {
+      "id": "cups-2",
+      "name": "圣杯二",
+      "file": "cups-2.svg"
+    },
+    {
+      "id": "cups-3",
+      "name": "圣杯三",
+      "file": "cups-3.svg"
+    },
+    {
+      "id": "cups-4",
+      "name": "圣杯四",
+      "file": "cups-4.svg"
+    },
+    {
+      "id": "cups-5",
+      "name": "圣杯五",
+      "file": "cups-5.svg"
+    },
+    {
+      "id": "cups-6",
+      "name": "圣杯六",
+      "file": "cups-6.svg"
+    },
+    {
+      "id": "cups-7",
+      "name": "圣杯七",
+      "file": "cups-7.svg"
+    },
+    {
+      "id": "cups-8",
+      "name": "圣杯八",
+      "file": "cups-8.svg"
+    },
+    {
+      "id": "cups-9",
+      "name": "圣杯九",
+      "file": "cups-9.svg"
+    },
+    {
+      "id": "cups-10",
+      "name": "圣杯十",
+      "file": "cups-10.svg"
+    },
+    {
+      "id": "cups-11",
+      "name": "圣杯侍从",
+      "file": "cups-11.svg"
+    },
+    {
+      "id": "cups-12",
+      "name": "圣杯骑士",
+      "file": "cups-12.svg"
+    },
+    {
+      "id": "cups-13",
+      "name": "圣杯王后",
+      "file": "cups-13.svg"
+    },
+    {
+      "id": "cups-14",
+      "name": "圣杯国王",
+      "file": "cups-14.svg"
+    },
+    {
+      "id": "swords-1",
+      "name": "宝剑王牌",
+      "file": "swords-1.svg"
+    },
+    {
+      "id": "swords-2",
+      "name": "宝剑二",
+      "file": "swords-2.svg"
+    },
+    {
+      "id": "swords-3",
+      "name": "宝剑三",
+      "file": "swords-3.svg"
+    },
+    {
+      "id": "swords-4",
+      "name": "宝剑四",
+      "file": "swords-4.svg"
+    },
+    {
+      "id": "swords-5",
+      "name": "宝剑五",
+      "file": "swords-5.svg"
+    },
+    {
+      "id": "swords-6",
+      "name": "宝剑六",
+      "file": "swords-6.svg"
+    },
+    {
+      "id": "swords-7",
+      "name": "宝剑七",
+      "file": "swords-7.svg"
+    },
+    {
+      "id": "swords-8",
+      "name": "宝剑八",
+      "file": "swords-8.svg"
+    },
+    {
+      "id": "swords-9",
+      "name": "宝剑九",
+      "file": "swords-9.svg"
+    },
+    {
+      "id": "swords-10",
+      "name": "宝剑十",
+      "file": "swords-10.svg"
+    },
+    {
+      "id": "swords-11",
+      "name": "宝剑侍从",
+      "file": "swords-11.svg"
+    },
+    {
+      "id": "swords-12",
+      "name": "宝剑骑士",
+      "file": "swords-12.svg"
+    },
+    {
+      "id": "swords-13",
+      "name": "宝剑王后",
+      "file": "swords-13.svg"
+    },
+    {
+      "id": "swords-14",
+      "name": "宝剑国王",
+      "file": "swords-14.svg"
+    },
+    {
+      "id": "pentacles-1",
+      "name": "星币王牌",
+      "file": "pentacles-1.svg"
+    },
+    {
+      "id": "pentacles-2",
+      "name": "星币二",
+      "file": "pentacles-2.svg"
+    },
+    {
+      "id": "pentacles-3",
+      "name": "星币三",
+      "file": "pentacles-3.svg"
+    },
+    {
+      "id": "pentacles-4",
+      "name": "星币四",
+      "file": "pentacles-4.svg"
+    },
+    {
+      "id": "pentacles-5",
+      "name": "星币五",
+      "file": "pentacles-5.svg"
+    },
+    {
+      "id": "pentacles-6",
+      "name": "星币六",
+      "file": "pentacles-6.svg"
+    },
+    {
+      "id": "pentacles-7",
+      "name": "星币七",
+      "file": "pentacles-7.svg"
+    },
+    {
+      "id": "pentacles-8",
+      "name": "星币八",
+      "file": "pentacles-8.svg"
+    },
+    {
+      "id": "pentacles-9",
+      "name": "星币九",
+      "file": "pentacles-9.svg"
+    },
+    {
+      "id": "pentacles-10",
+      "name": "星币十",
+      "file": "pentacles-10.svg"
+    },
+    {
+      "id": "pentacles-11",
+      "name": "星币侍从",
+      "file": "pentacles-11.svg"
+    },
+    {
+      "id": "pentacles-12",
+      "name": "星币骑士",
+      "file": "pentacles-12.svg"
+    },
+    {
+      "id": "pentacles-13",
+      "name": "星币王后",
+      "file": "pentacles-13.svg"
+    },
+    {
+      "id": "pentacles-14",
+      "name": "星币国王",
+      "file": "pentacles-14.svg"
+    }
+  ]
+}

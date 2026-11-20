@@ -1,0 +1,103 @@
+.social-page {
+  min-width: 0;
+}
+.social-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 240px;
+  padding: 28px;
+  text-align: center;
+}
+.social-empty > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.social-empty h2 {
+  margin: 6px 0 0;
+  font-size: 20px;
+}
+.social-empty p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.social-back {
+  display: none;
+}
+@media (max-width: 700px) {
+  .social-page .page-heading.compact {
+    margin-bottom: 20px;
+  }
+  .social-page .page-heading.compact .eyebrow {
+    margin-bottom: 12px;
+  }
+  .social-page .page-heading.compact h1 {
+    font-size: clamp(25px, 7vw, 36px);
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+  .social-page .page-heading.compact p {
+    font-size: 13px;
+    line-height: 1.8;
+  }
+  .social-page .community-toolbar {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+  }
+  .social-page .social-tabs {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+  }
+  .social-page .social-tabs button {
+    flex: 1;
+    padding: 9px 6px;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .social-empty {
+    min-height: 230px;
+    padding: 24px 16px;
+  }
+  .social-chat-layout:not(.has-selection) .chat-panel {
+    display: none;
+  }
+  .social-chat-layout.has-selection .contact-list {
+    display: none;
+  }
+  .social-chat-layout.has-selection .chat-panel {
+    height: calc(100dvh - 240px);
+    min-height: 300px;
+  }
+  .social-chat-layout .contact-list {
+    max-height: none;
+    display: block;
+  }
+  .social-chat-layout .contact-choice {
+    width: 100%;
+    max-width: none;
+  }
+  .social-chat-layout .chat-heading {
+    padding: 12px;
+    flex-shrink: 0;
+  }
+  .social-chat-layout .chat-heading > div {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+  .social-chat-layout .social-back {
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  .social-chat-layout .message-scroll {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+  }
+}

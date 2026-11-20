@@ -1,0 +1,39 @@
+.computer-project-setup-target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.computer-project-setup-target > span {
+  color: var(--muted);
+}
+.pi-management-dialog .computer-project-setup-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.pi-management-dialog .computer-project-setup-option input {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+.computer-project-setup pre {
+  max-width: 100%;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-soft);
+  border-radius: 8px;
+}
+.computer-project-setup ol {
+  padding-left: 22px;
+}
+.computer-project-setup li {
+  margin: 10px 0;
+}
+.computer-project-setup .action-row {
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
