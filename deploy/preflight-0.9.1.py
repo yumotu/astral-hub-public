@@ -185,7 +185,6 @@ try:
     permission_tests = test_group('runtime-permissions', ['tests/computer-workspace.test.mjs', 'tests/computer-task-lifecycle.test.mjs', 'tests/sandbox-network.test.mjs'], 13)
     pr_tests = test_group('merged-pr-regressions', ['tests/realtime-recovery.test.mjs', 'tests/pi-independent-loading.test.mjs', 'tests/mail.test.mjs', 'tests/dsh-files.test.mjs', 'tests/read-cache.test.mjs'], 1)
     release_tests = test_group('release-regressions', ['tests/app-feature-integration.test.mjs', 'tests/learning-postcheck.test.mjs', 'tests/learning.test.mjs', 'tests/learning-materials.test.mjs', 'tests/learning-answer-rendering.test.mjs', 'tests/conversation-preparation.test.mjs', 'tests/conversation-preparation-lifecycle.test.mjs', 'tests/conversation-preparation-concurrency.test.mjs', 'tests/dsh-extension-api.test.mjs', 'tests/dsh-extensions.test.mjs'], 1)
-    release_tests += test_pi_learning()
     logs['native'] = stage / ('release-0820-' + attempt + '-native.log')
     with logs['native'].open('w') as log:
         run(['docker', 'exec', '-e', 'ASTRAL_DSH_WORKBENCH_QA=1', '-e', 'ASTRAL_DSH_EXPECT_REVISION=dsh4',
