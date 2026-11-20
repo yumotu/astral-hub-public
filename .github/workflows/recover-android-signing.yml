@@ -1,0 +1,84 @@
+name: Recover retained Android signing cache privately
+on:
+  workflow_dispatch:
+    inputs:
+      recipient_public_key_base64:
+        description: 'Base64 PEM RSA public key (3072+ bits); never provide a private key'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  recover:
+    if: ${{ github.event.repository.private && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: [self-hosted, Linux, X64, astral-signing-recovery]
+    timeout-minutes: 10
+    steps:
+      - name: Require the original cache-compatible runner layout
+        run: test "$RUNNER_TEMP" = /home/runner/work/_temp
+      - name: Fetch only the pinned recovery helper via the authenticated GitHub API
+        working-directory: ${{ runner.temp }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          /home/runner/actions/externals/node24/bin/node --dns-result-order=ipv4first --input-type=module - <<'NODE'
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const { GITHUB_SHA, GITHUB_REPOSITORY, GITHUB_TOKEN, RUNNER_TEMP, GITHUB_PATH } = process.env;
+          if (GITHUB_REPOSITORY !== 'yumotu/astral-hub' || !/^[0-9a-f]{40}$/.test(GITHUB_SHA)) throw Error('Recovery source mismatch.');
+          for (const [source, destination] of [
+            ['scripts/recover-android-cache.mjs', 'recovery-helper.mjs'],
+          ]) {
+            const r = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${source}?ref=${GITHUB_SHA}`, {
+              headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+              signal: AbortSignal.timeout(60000), redirect: 'error',
+            });
+            if (!r.ok) throw Error('Unable to fetch the pinned private recovery file.');
+            const data = await r.json();
+            if (data.type !== 'file' || data.encoding !== 'base64' || data.size > 131072) throw Error('Invalid recovery source.');
+            const bytes = Buffer.from(data.content, 'base64');
+            const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+            if (blob !== data.sha) throw Error('Recovery source blob mismatch.');
+            writeFileSync(`${RUNNER_TEMP}/${destination}`, bytes, { flag: 'wx', mode: 0o600 });
+          }
+          appendFileSync(GITHUB_PATH, '/home/runner/actions/externals/node24/bin\n');
+          NODE
+      - name: Locate original private cache path
+        run: printf 'ASTRAL_ANDROID_KEYSTORE=%s/astral-android-signing/debug.keystore\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.ASTRAL_ANDROID_KEYSTORE }}
+          key: astral-android-debug-signing-v2
+          fail-on-cache-miss: true
+      - name: Verify original certificate and encrypt to the maintainer public key
+        env:
+          RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key_base64 }}
+        run: |
+          umask 077
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          let key = process.env.RECIPIENT_PUBLIC_KEY;
+          if (typeof key !== 'string' || key.length > 12000) throw Error('Invalid recovery request.');
+          writeFileSync(process.env.RUNNER_TEMP + '/recipient-public.pem', Buffer.from(key, 'base64'), { mode: 0o600, flag: 'wx' });
+          NODE
+          node "$RUNNER_TEMP/recovery-helper.mjs" seal "$ASTRAL_ANDROID_KEYSTORE" "$RUNNER_TEMP/recipient-public.pem" "$RUNNER_TEMP/recovered-signing/signing-backup.encrypted.json"
+      - name: Preserve only the recipient-encrypted envelope in the private job log
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const bytes = readFileSync(process.env.RUNNER_TEMP + '/recovered-signing/signing-backup.encrypted.json');
+          if (bytes.length > 6e6) throw Error('Encrypted recovery envelope is too large.');
+          console.log('ASTRAL_RECOVERY_SHA256:' + createHash('sha256').update(bytes).digest('hex'));
+          console.log('ASTRAL_RECOVERY_ENVELOPE:' + bytes.toString('base64'));
+          NODE
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: encrypted-retained-android-signing
+          path: ${{ runner.temp }}/recovered-signing/signing-backup.encrypted.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove runner-local signing plaintext
+        if: always()
+        run: rm -f "$RUNNER_TEMP/astral-android-signing/debug.keystore" "$RUNNER_TEMP/recipient-public.pem"

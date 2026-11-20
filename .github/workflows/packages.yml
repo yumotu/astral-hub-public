@@ -1,0 +1,271 @@
+name: Build applications
+on:
+  workflow_dispatch:
+    inputs:
+      android_only:
+        description: '仅诊断 Android 交互与键盘；不执行桌面／Pi，不发布版本'
+        type: boolean
+        default: false
+      publish_release:
+        description: '全部验收完成后发布安装包并创建版本标签；关闭时仅构建验证'
+        type: boolean
+        default: false
+      bootstrap_android_signing:
+        description: '首次建立 Android 调试签名基线（缓存丢失时也会产生新签名）'
+        type: boolean
+        default: false
+      macos_distribution:
+        description: '使用已配置的 Developer ID 与 Apple API 密钥签名、公证并检查 Gatekeeper；缺配置时失败'
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: applications-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  web-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0', cache: 'npm' }
+      - run: npm ci
+      - run: node scripts/brand-icons.mjs --check
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/package-source.mjs
+      - run: node scripts/package-server.mjs
+      - name: Build and boot the actual server runtime image
+        run: |
+          docker build -f deploy/Dockerfile.runtime -t astral-app-qa .
+          docker run --rm --init --read-only --network=none --memory=384m --pids-limit=128 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop=ALL --security-opt=no-new-privileges --entrypoint=node astral-app-qa --input-type=module -e '
+          import assert from "node:assert/strict";
+          import { createApp } from "./server/index.mjs";
+          const app = await createApp({ token: "synthetic-runtime-health-token-123456789", dataDir: "/tmp/qa-data", filesDir: "/tmp/qa-files", piConfig: { url: "", token: "" } });
+          await new Promise(resolve => app.server.listen(0, "127.0.0.1", resolve));
+          try { const response = await fetch("http://127.0.0.1:" + app.server.address().port + "/api/health"); assert.equal(response.status, 200); console.log("SERVER_RUNTIME_HEALTH_OK"); }
+          finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); }
+          '
+      - run: node scripts/package-agent.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-web-and-source
+          if-no-files-found: error
+          path: |
+            dist/
+            release/*.zip
+            release/*.tar.gz
+  desktop:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          {
+            node-version: '26.7.0',
+            cache: 'npm',
+            cache-dependency-path: 'desktop/package-lock.json',
+          }
+      - run: npm ci
+      - run: npm ci --prefix desktop --ignore-scripts
+      - run: node desktop/node_modules/electron/install.js
+      - run: npm run build
+      - if: runner.os == 'macOS' && !inputs.macos_distribution
+        run: npm --prefix desktop run package -- --mac --arm64 --x64 --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - if: runner.os == 'macOS' && inputs.macos_distribution
+        name: Build with Developer ID and Apple notarization
+        run: node scripts/package-macos-distribution.mjs
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          ASTRAL_APPLE_API_KEY_BASE64: ${{ secrets.MAC_APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.MAC_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.MAC_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.MAC_APPLE_TEAM_ID }}
+      - if: runner.os == 'Windows'
+        run: npm --prefix desktop run package -- --win --x64 --publish never
+      - if: runner.os == 'macOS'
+        name: Verify both macOS application signatures and architectures
+        run: node scripts/verify-macos-distribution.mjs release/desktop
+        env:
+          ASTRAL_MACOS_DISTRIBUTION: ${{ inputs.macos_distribution && 'true' || 'false' }}
+          APPLE_TEAM_ID: ${{ inputs.macos_distribution && secrets.MAC_APPLE_TEAM_ID || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-desktop-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            release/desktop/*.dmg
+            release/desktop/*.zip
+            release/desktop/*.exe
+            release/desktop/macos-verification.json
+  android:
+    needs: web-and-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0', cache: 'npm' }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '21' }
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+      - name: Locate the retained Android signing key
+        run: printf 'ASTRAL_ANDROID_KEYSTORE=%s/astral-android-signing/debug.keystore\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: android-signing
+        with:
+          path: ${{ env.ASTRAL_ANDROID_KEYSTORE }}
+          key: astral-android-debug-signing-v2
+      - name: Prepare the explicit Android signing key
+        env:
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          BOOTSTRAP_SIGNING: ${{ inputs.bootstrap_android_signing }}
+        run: bash scripts/android-debug-signing.sh prepare
+      - uses: actions/cache/save@v4
+        if: steps.android-signing.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.ASTRAL_ANDROID_KEYSTORE }}
+          key: astral-android-debug-signing-v2
+      - run: npm ci
+      - run: npm run android:sync
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon assembleDebug
+        working-directory: android
+      - name: Verify the APK uses the retained signing key
+        run: bash scripts/android-debug-signing.sh verify android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Reserve runner space for Android system and data images
+        run: bash scripts/android-emulator-space.sh
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify Android 15 system-bar insets
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          emulator-boot-timeout: 300
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: cd android && ./gradlew --no-daemon :app:connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-safe-area-report
+          if-no-files-found: warn
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+      - run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release/Astral-Hub-${version}-android-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-android-debug
+          if-no-files-found: error
+          path: release/*.apk
+  pi-runtime:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the disposable Pi runtime image
+        run: docker build -t astral-pi-qa -f deploy/pi/Dockerfile deploy/pi
+      - name: Allow user namespaces only for the disposable QA container
+        run: sudo apparmor_parser -r deploy/pi/qa-apparmor.profile
+      - name: Verify real Linux isolation, network grants and Pi activation
+        run: >-
+          docker run --rm --init --memory=768m --cpus=1.5 --pids-limit=512
+          --cap-drop=ALL --security-opt=no-new-privileges --security-opt=seccomp=unconfined --security-opt=apparmor=astral-pi-qa
+          -e ASTRAL_RUNTIME_QA=1 --entrypoint=node astral-pi-qa /bridge/verify-runtime.mjs
+      - name: Verify bundled document recognition without network access
+        run: >-
+          docker run --rm --init --network=none --memory=768m --cpus=1.5 --pids-limit=128
+          --cap-drop=ALL --security-opt=no-new-privileges -e ASTRAL_RUNTIME_QA=1
+          --entrypoint=node astral-pi-qa /bridge/verify-documents.mjs
+      - name: Collect namespace diagnostics on failure
+        if: failure()
+        run: |
+          uname -r
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          sudo journalctl -k --since '-10 minutes' --no-pager | grep -E 'apparmor|DENIED|bwrap|userns' | tail -60 || true
+      - name: Remove the disposable QA AppArmor profile
+        if: always()
+        run: sudo apparmor_parser -R deploy/pi/qa-apparmor.profile
+  computer-runtime:
+    if: ${{ !inputs.android_only }}
+    needs: web-and-tests
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          { node-version: '26.7.0', cache: 'npm', cache-dependency-path: 'agent/package-lock.json' }
+      - run: npm ci
+      - run: npm ci --prefix agent --ignore-scripts
+      - run: npm --prefix agent run terminal:setup
+      - run: node scripts/package-agent.mjs
+      - run: node --test agent/tests/runtime.test.mjs agent/tests/relay-integration.test.mjs agent/tests/computer-tools.test.mjs agent/tests/plugins.test.mjs agent/tests/online-packages.test.mjs agent/tests/inputs.test.mjs agent/tests/long-goal-runtime.test.mjs agent/tests/document-ocr.test.mjs agent/tests/question-resume-runtime.test.mjs
+  release-check:
+    needs: [web-and-tests, desktop, android, pi-runtime, computer-runtime]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - run: npm ci --omit=dev --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - run: node scripts/prepare-release.mjs
+  release:
+    if: ${{ !inputs.android_only && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+    needs: [web-and-tests, desktop, android, pi-runtime, computer-runtime, release-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '26.7.0' }
+      - run: npm ci --omit=dev --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - run: node scripts/prepare-release.mjs
+      - name: Verify or create the verified source tag
+        run: |
+          release_tag="v$(node -p "require('./package.json').version")"
+          printf 'RELEASE_TAG=%s\n' "$release_tag" >> "$GITHUB_ENV"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" --silent; then
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$release_tag" --jq .sha)
+            test "$tag_sha" = "$GITHUB_SHA"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST -f "ref=refs/tags/$release_tag" -f "sha=$GITHUB_SHA" --silent
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: gh release create "$RELEASE_TAG" release/publish/* --verify-tag --title "星屿 $RELEASE_TAG" --notes-file release/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
