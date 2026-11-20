@@ -155,7 +155,7 @@ try:
             '--tmpfs', '/tmp:rw,size=256m', '--memory=768m', '--pids-limit=192', '--cap-drop=ALL', '--security-opt=no-new-privileges']
     mounts = [(qa / 'share', '/run/astral-dsh:ro'), (proof, '/proof'),
               (qa / 'workspace', '/qa-workspace:ro'), (qa / 'test-temp', '/testtmp'),
-              (stage / 'tests', '/app/tests:ro'), (stage / 'deploy/pi', '/app/deploy/pi:ro'), (stage / 'web/src', '/app/web/src:ro'),
+              (stage / 'tests', '/app/tests:ro'), (stage / 'agent', '/app/agent:ro'), (stage / 'deploy/pi', '/app/deploy/pi:ro'), (stage / 'web/src', '/app/web/src:ro'),
               (stage / 'deploy/dsh', '/app/deploy/dsh:ro'), (stage / 'deploy/dsh', '/qa:ro'), (stage / 'integrations', '/app/integrations:ro'),
               (qa / 'test-deps/package', '/app/node_modules/typescript:ro')]
     for source_path, dest in mounts: args += ['-v', str(source_path) + ':' + dest]
