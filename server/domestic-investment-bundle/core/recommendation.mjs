@@ -1,3 +1,5 @@
+import { buildPortfolioPlan } from "./portfolio-plan.mjs";
+
 const finite = (value) => {
   if (value === null || value === undefined || value === "") return null;
   const numeric = Number(value);
@@ -77,6 +79,14 @@ function action(priority, operation, detail, evidence = []) {
 
 export function recommendDailyActions({ portfolio = EMPTY_PORTFOLIO, domesticMarket, internationalMarket, riskProfile = "balanced", asOf = new Date().toISOString().slice(0, 10) } = {}) {
   const summary = summarizePortfolio(portfolio);
+  const plan = buildPortfolioPlan({
+    portfolio,
+    summary,
+    riskProfile,
+    domesticMarket,
+    internationalMarket,
+    asOf,
+  });
   const actions = [];
   const domesticRegime = marketRegime(domesticMarket);
   const internationalRegime = marketRegime(internationalMarket);
@@ -84,7 +94,7 @@ export function recommendDailyActions({ portfolio = EMPTY_PORTFOLIO, domesticMar
 
   if (!summary.has_data) {
     actions.push(action("high", "补充账户数据", "录入现金、持仓金额、每月投入与计划期限后，才能生成组合级每日动作。", ["portfolio"]));
-    return { as_of: asOf, risk_profile: riskProfile, status: "awaiting_portfolio", summary, actions };
+    return { as_of: asOf, risk_profile: riskProfile, status: "awaiting_portfolio", summary, plan, actions };
   }
 
   if (summary.cash_ratio !== null && summary.cash_ratio > 0.85) {
@@ -111,7 +121,19 @@ export function recommendDailyActions({ portfolio = EMPTY_PORTFOLIO, domesticMar
     actions.push(action("low", "维持计划", "当前组合与均衡型研究口径没有触发明显的结构性动作，按计划投入，避免因单日波动频繁调仓。", ["portfolio", "market.regime"]));
   }
 
-  return { as_of: asOf, risk_profile: riskProfile, status: "ready", summary, actions };
+  const largestDrift = plan.target_weights.find((item) => item.action !== "hold");
+  if (largestDrift) {
+    actions.unshift(
+      action(
+        "medium",
+        largestDrift.action === "increase_gradually" ? "分批补足目标配置" : "分批降低偏离配置",
+        `${largestDrift.label}当前约 ${largestDrift.current_weight ?? "—"}% ，研究目标约 ${largestDrift.target_weight}% 。单次调整先控制在组合的 5% 以内。`,
+        ["portfolio.plan.target_weights", "portfolio.plan.algorithm"],
+      ),
+    );
+  }
+
+  return { as_of: asOf, risk_profile: riskProfile, status: "ready", summary, plan, actions };
 }
 
 export { EMPTY_PORTFOLIO };

@@ -34,9 +34,14 @@ test('investment research window is authenticated and reuses the maintained serv
   });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}/api`;
-  async function request(path, authorization) {
+  async function request(path, authorization, method = 'GET', payload) {
     const response = await fetch(base + path, {
-      headers: authorization ? { Authorization: 'Bearer ' + authorization } : {},
+      method,
+      headers: {
+        ...(authorization ? { Authorization: 'Bearer ' + authorization } : {}),
+        ...(payload ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
     });
     return { status: response.status, body: await response.json() };
   }
@@ -61,5 +66,26 @@ test('investment research window is authenticated and reuses the maintained serv
   assert.equal(result.status, 200);
   assert.equal(result.body.risk_profile, 'conservative');
   assert.equal((await request('/investment/methodology', owner)).body.methodology, 'read-only');
+  const created = await request('/investment/holdings', owner, 'POST', {
+    asset_type: 'gold',
+    symbol: 'AU9999',
+    name: '黄金持仓',
+    quantity: 10,
+    cost_basis: 500,
+    current_price: 520,
+    currency: 'CNY',
+    price_as_of: '2026-11-21T00:00:00.000Z',
+    source: 'manual',
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.holding.asset_type, 'gold');
+  const holdings = await request('/investment/holdings', owner);
+  assert.equal(holdings.body.holdings.length, 1);
+  assert.equal(holdings.body.summary.gold_ratio, 1);
+  const afterHolding = await request('/investment/dashboard', owner);
+  assert.equal(afterHolding.body.portfolio.holdings.length, 1);
+  assert.equal(afterHolding.body.daily_actions.plan.algorithm.name, 'regime-aware risk budgeting');
+  assert.equal((await request(`/investment/holdings/${created.body.holding.id}`, owner, 'DELETE')).status, 200);
+  assert.equal((await request('/investment/holdings', owner)).body.holdings.length, 0);
   assert.equal((await request('/investment/dashboard')).status, 401);
 });

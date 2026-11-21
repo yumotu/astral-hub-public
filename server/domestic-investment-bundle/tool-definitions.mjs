@@ -3,6 +3,8 @@ import { createDataProvider } from "./core/provider.mjs";
 import { bondStressTest } from "./core/bond-risk.mjs";
 import { METHODOLOGY, SERVER_INSTRUCTIONS, SOURCE_HIERARCHY } from "./core/policy.mjs";
 import { recommendDailyActions } from "./core/recommendation.mjs";
+import { buildPortfolioPlan } from "./core/portfolio-plan.mjs";
+import { summarizePortfolio } from "./core/recommendation.mjs";
 import { analyzeMarketRegime, rankFunds, scoreLongTermStock } from "./core/scoring.mjs";
 import { buildDashboardModel } from "./dashboard/model.mjs";
 
@@ -36,6 +38,17 @@ export async function createDomesticInvestmentService(config = {}) {
     recommendActions({ portfolio, domestic_market, international_market, risk_profile = "balanced", as_of } = {}) {
       return recommendDailyActions({ portfolio: portfolio || {}, domesticMarket: domestic_market, internationalMarket: international_market, riskProfile: risk_profile, asOf: as_of });
     },
+    portfolioPlan({ portfolio, domestic_market, international_market, risk_profile = "balanced", as_of } = {}) {
+      const value = portfolio || {};
+      return buildPortfolioPlan({
+        portfolio: value,
+        summary: summarizePortfolio(value),
+        domesticMarket: domestic_market,
+        internationalMarket: international_market,
+        riskProfile: risk_profile,
+        asOf: as_of,
+      });
+    },
   };
 }
 
@@ -49,5 +62,6 @@ export function createToolDefinitions(service) {
     { name: "analyze_market_regime", title: "Analyze Market Regime", description: "Classify a supplied domestic or international market snapshot while preserving observations and missing inputs.", parameters: { market: candidate }, execute: ({ market }) => service.analyzeMarket(market) },
     { name: "research_long_term_stock", title: "Research Long-Term Stock", description: "Score a long-term stock candidate on growth, profitability, cash conversion, leverage, valuation, shareholder return, and governance.", parameters: { stock: candidate }, execute: ({ stock }) => service.researchStock(stock) },
     { name: "recommend_daily_research_actions", title: "Recommend Daily Research Actions", description: "Generate read-only portfolio research actions from supplied portfolio and market snapshots. It never places orders.", parameters: { portfolio: candidate, domestic_market: candidate, international_market: candidate, risk_profile: riskProfile, as_of: { type: "string" } }, execute: (args) => service.recommendActions(args) },
+    { name: "build_portfolio_plan", title: "Build Portfolio Plan", description: "Build a regime-aware risk-budget plan with concentration and tail-risk guards. It never places orders and requires an explicit portfolio snapshot.", parameters: { portfolio: candidate, domestic_market: candidate, international_market: candidate, risk_profile: riskProfile, as_of: { type: "string" } }, execute: (args) => service.portfolioPlan(args) },
   ];
 }

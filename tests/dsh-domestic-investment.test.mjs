@@ -41,6 +41,7 @@ test("bundled investment service exposes the maintained research tools without n
     "analyze_market_regime",
     "research_long_term_stock",
     "recommend_daily_research_actions",
+    "build_portfolio_plan",
   ]);
   const dashboard = await service.dashboard({ risk_profile: "balanced" });
   assert.equal(dashboard.source, "local_file");

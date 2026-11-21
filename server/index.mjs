@@ -75,7 +75,10 @@ export async function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? resolve(root, 'data'));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const store = createStore(options.dbPath ?? resolve(dataDir, 'astral.sqlite'));
-  const domesticInvestment = await createDomesticInvestment(options.investmentConfig);
+  const domesticInvestment = await createDomesticInvestment({
+    ...(options.investmentConfig ?? {}),
+    db: store.db,
+  });
   let mailAgent, appFunctions, relay, community, unified;
   const dshRemote = createDshRemote(store.db, {
     token,
@@ -655,7 +658,7 @@ export async function createApp(options = {}) {
           if (await relay.after(req, url, json, actor)) return;
           if (await mail.handle(req, url, json, owner, body, actor)) return;
           if (await learning.handle(req, url, json, actor, body)) return;
-          if (await domesticInvestment.handle(req, url, json, actor)) return;
+          if (await domesticInvestment.handle(req, url, json, actor, body)) return;
           if (url.pathname === '/api/status' && req.method === 'GET') {
             json(200, {
               syncReady: true,
