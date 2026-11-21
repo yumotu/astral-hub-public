@@ -279,6 +279,7 @@ function toFundCandidate(meta, profile, evidence = null) {
       evidence_notes: evidence.evidence_notes,
     } : null,
     data_as_of: latest ? new Date(latest.x).toISOString().slice(0, 10) : null,
+    current_price: latest?.y ?? null,
     source: "eastmoney_fund_profile",
   };
 }
@@ -435,6 +436,7 @@ export async function createDataProvider({
           equity_ratio: bondMetrics.equity_ratio ?? null,
           bond_evidence: evidence ? { report_date: evidence.report_date, published_date: evidence.published_date, source_url: evidence.source_url, evidence_notes: evidence.evidence_notes } : null,
           data_as_of: rows.at(-1).trade_date,
+          current_price: Number(rows.at(-1).accum_nav ?? rows.at(-1).nav) || null,
         });
       }
       return result;
@@ -512,7 +514,67 @@ export async function createDataProvider({
     }
   }
 
-  return { async query(dataset, params, fields) { return query(dataset, params, fields); }, async getDashboardSeed() { return getDashboardSeed(); }, async funds(codes = []) { return funds(codes); } };
+  function stockSymbol(symbol) {
+    const value = String(symbol || '').trim();
+    if (/^(sh|sz)\d{6}$/i.test(value)) return value.toLowerCase();
+    if (/^6\d{5}$/.test(value)) return `sh${value}`;
+    if (/^[03]\d{5}$/.test(value)) return `sz${value}`;
+    if (/^us|^hk/i.test(value)) return value;
+    return null;
+  }
+
+  async function quoteHoldings(holdings = []) {
+    if (!live) return [];
+    const quotes = [];
+    const stockHoldings = holdings.filter((holding) =>
+      ['domestic_equity', 'international_equity'].includes(holding.asset_type) && stockSymbol(holding.symbol),
+    );
+    if (stockHoldings.length) {
+      try {
+        const symbols = stockHoldings.map((holding) => stockSymbol(holding.symbol)).join(',');
+        const parsed = parseTencentQuotes(await requestText(`https://qt.gtimg.cn/q=${symbols}`));
+        for (const holding of stockHoldings) {
+          const quote = parsed[stockSymbol(holding.symbol)];
+          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, price_as_of: quote.as_of, source: 'tencent' });
+        }
+      } catch {
+        // Keep manual values when a public quote source is unavailable.
+      }
+    }
+    for (const holding of holdings.filter((item) => item.asset_type === 'fund' && item.symbol)) {
+      try {
+        const candidate = (await funds([holding.symbol]))[0];
+        if (Number.isFinite(candidate?.current_price)) quotes.push({ id: holding.id, current_price: candidate.current_price, price_as_of: candidate.data_as_of ? `${candidate.data_as_of}T00:00:00.000Z` : null, source: 'eastmoney' });
+      } catch {
+        // Keep manual values when a fund profile is temporarily unavailable.
+      }
+    }
+    const precious = holdings.filter((holding) => holding.asset_type === 'gold' && ['hf_XAU', 'hf_GC'].includes(holding.symbol));
+    if (precious.length) {
+      try {
+        const parsed = parseTencentQuotes(await requestText(`https://qt.gtimg.cn/q=${precious.map((holding) => holding.symbol).join(',')}`));
+        for (const holding of precious) {
+          const quote = parsed[holding.symbol];
+          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, price_as_of: quote.as_of, source: 'tencent' });
+        }
+      } catch {
+        // Keep manual values when a precious-metal quote is unavailable.
+      }
+    }
+    const fxHoldings = holdings.filter((holding) => holding.asset_type === 'fx' && /^[A-Z]{3}$/.test(holding.symbol));
+    for (const holding of fxHoldings) {
+      try {
+        const payload = await requestJson(`https://open.er-api.com/v6/latest/${holding.symbol}`);
+        const rate = Number(payload?.rates?.CNY);
+        if (Number.isFinite(rate)) quotes.push({ id: holding.id, current_price: rate, price_as_of: new Date().toISOString(), source: 'open.er-api' });
+      } catch {
+        // Keep manual values when the FX source is unavailable.
+      }
+    }
+    return quotes;
+  }
+
+  return { async query(dataset, params, fields) { return query(dataset, params, fields); }, async getDashboardSeed() { return getDashboardSeed(); }, async funds(codes = []) { return funds(codes); }, async quoteHoldings(holdings = []) { return quoteHoldings(holdings); } };
 }
 
 export { ALLOWED_DATASETS, DEFAULT_FUND_CODES, DOMESTIC_INDEXES, INTERNATIONAL_INDEXES, LIVE_SOURCES, parseTencentQuotes, parseTencentHistory, parseFundProfile };
