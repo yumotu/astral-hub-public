@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createDomesticInvestmentService } from '../integrations/dsh-domestic-investment/tool-definitions.mjs';
+import { createDomesticInvestmentService } from './domestic-investment-bundle/tool-definitions.mjs';
 
 const riskProfile = z.enum(['conservative', 'balanced', 'growth']);
 const fail = (status, message) => Object.assign(new Error(message), { status });

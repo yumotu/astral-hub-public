@@ -6,7 +6,6 @@ COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --chown=node:node server ./server
 COPY --chown=node:node shared ./shared
-COPY --chown=node:node integrations/dsh-domestic-investment ./integrations/dsh-domestic-investment
 COPY --chown=node:node deploy/pi/concurrency.mjs ./deploy/pi/concurrency.mjs
 COPY --chown=node:node deploy/pi/assistant-artifacts.mjs ./deploy/pi/assistant-artifacts.mjs
 COPY --chown=node:node deploy/pi/attachment-limits.mjs ./deploy/pi/attachment-limits.mjs
