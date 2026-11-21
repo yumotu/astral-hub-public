@@ -1,0 +1,76 @@
+name: astral-hub
+services:
+  app:
+    image: astral-hub:0.7.29-branches
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    env_file: ../.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATA_DIR: /app/data
+      PI_BRIDGE_URL: http://pi:8790
+      PI_MAX_CONCURRENT: ${PI_MAX_CONCURRENT:-0}
+      FILES_DIR: /app/files
+      PI_UPLOADS_ROOT: /uploads
+    ports:
+      - '127.0.0.1:8787:8787'
+    volumes:
+      - astral_data:/app/data
+      - chat_files:/app/files
+    depends_on:
+      pi:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  pi:
+    image: astral-pi:1.4.0-v0729-branches
+    build: ./pi
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      PI_MAX_CONCURRENT: ${PI_MAX_CONCURRENT:-0}
+      PI_BRIDGE_TOKEN: ${PI_BRIDGE_TOKEN:?请先运行安装脚本生成 Pi 内部令牌}
+    volumes:
+      - pi_home:/home/node/.pi
+      - pi_workspace:/workspace
+      - chat_files:/uploads:ro
+      - /opt/astral-projects:/projects/workspace
+      - /root/workspace:/projects/server-workspace
+      - /opt/astral-hub/server:/projects/astral-hub/server
+      - /opt/astral-hub/shared:/projects/astral-hub/shared
+      - /opt/astral-hub/web/src:/projects/astral-hub/web/src
+      - /opt/astral-hub/docs:/projects/astral-hub/docs
+      - /opt/astral-hub/deploy:/projects/astral-hub/deploy
+      - /opt/astral-hub/package.json:/projects/astral-hub/package.json
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true, seccomp:unconfined, apparmor:unconfined]
+    mem_limit: 1g
+    pids_limit: 512
+    cpus: '1.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  astral_data:
+  pi_home:
+  pi_workspace:
+  chat_files:
