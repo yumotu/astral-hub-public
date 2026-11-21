@@ -7,7 +7,7 @@ import {
   clearResourceCaches,
 } from './resource-cache.ts';
 import { deck, spreads, readingSchema, pluginSchema } from '../../shared/deck.mjs';
-import type { Entry, Reading, Settings, Spread, Plugin } from './types';
+import type { Entry, Reading, Settings, Spread, Plugin, StartupPage } from './types';
 import { drawReading } from '../../shared/draw.mjs';
 export { deck, spreads };
 export function scopedStorageKey(name: string, scope = 'legacy') {
@@ -148,6 +148,18 @@ export function loadPlugins(scope = 'legacy'): Plugin[] {
   } catch {
     return [];
   }
+}
+export function loadStartupPage(scope = 'legacy'): StartupPage {
+  try {
+    return localStorage.getItem(scopedStorageKey('startup-page', scope)) === 'workspace'
+      ? 'workspace'
+      : 'conversation';
+  } catch {
+    return 'conversation';
+  }
+}
+export function persistStartupPage(scope: string, page: StartupPage) {
+  localStorage.setItem(scopedStorageKey('startup-page', scope), page);
 }
 export async function api<T>(
   s: Settings,

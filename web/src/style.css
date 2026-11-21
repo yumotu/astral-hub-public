@@ -1279,6 +1279,71 @@ footer {
   position: relative;
   min-width: 0;
 }
+.plugin-item-draggable {
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+.plugin-item-draggable[draggable='true'] {
+  cursor: grab;
+}
+.plugin-item-draggable[draggable='true']:active {
+  cursor: grabbing;
+}
+.plugin-item-draggable.is-drag-over {
+  border-color: var(--accent, #657cf2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #657cf2) 22%, transparent);
+  transform: translateY(-2px);
+}
+.plugin-drag-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+  margin: -8px -8px 11px;
+}
+.plugin-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted, #95a08e);
+  border-radius: 7px;
+  cursor: grab;
+  touch-action: none;
+}
+.plugin-drag-handle:hover {
+  color: var(--accent, #657cf2);
+  background: var(--surface-soft, #edf3e3);
+}
+.plugin-position {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #95a08e);
+  letter-spacing: 0.08em;
+}
+.plugin-order-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.plugin-order-actions .icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+.plugin-order-actions .icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.plugin-order-hint {
+  display: inline-block;
+  margin-left: 9px;
+  color: var(--muted, #95a08e);
+  font-size: 10px;
+}
 .plugin-icon {
   width: 45px;
   height: 45px;

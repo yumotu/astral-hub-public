@@ -41,6 +41,10 @@ import {
   CheckCircle2,
   PawPrint,
   LineChart,
+  CalendarDays,
+  GripVertical,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   deck,
@@ -54,6 +58,8 @@ import {
   validateSettings,
   persistSettings,
   loadPlugins,
+  loadStartupPage,
+  persistStartupPage,
   scopedStorageKey,
   loadScopedAI,
 } from './data';
@@ -75,6 +81,8 @@ import { SocialPage } from './SocialPage';
 import { PiPage } from './PiPage';
 import { MailPage } from './MailPage';
 import { InvestmentPage } from './InvestmentPage';
+import { MailSchedulePage } from './MailSchedulePage';
+import { SuperAgentCaretaker } from './SuperAgentCaretaker';
 import { LearningPage } from './LearningPage';
 import { PetPage } from './PetPage';
 import { interpretReading, runAIPlugin, tarotQuestions } from './ai';
@@ -101,6 +109,8 @@ import './mail-workspace.css';
 import './social-mobile.css';
 import './pet.css';
 import './investment.css';
+import './mail-schedule.css';
+import './superagent-caretaker.css';
 
 function CardBack({ small = false }: { small?: boolean }) {
   return (
@@ -185,7 +195,13 @@ function Workspace({
   changeSession: (s: AuthSession | null) => void;
   saveConnection: (s: Settings) => void;
 }) {
-  const [page, setPage] = useState<Page>('pi');
+  const [startupPage, setStartupPage] = useState(() => loadStartupPage(scope));
+  const [page, setPage] = useState<Page>(() =>
+    new URLSearchParams(location.search).get('demo') === 'mail-schedule' ||
+    loadStartupPage(scope) === 'workspace'
+      ? 'workspace'
+      : 'pi',
+  );
   const pageHistory = useRef<Page[]>([]);
   const unread = useUnread(settings, !!session);
   const [mailNotice, setMailNotice] = useState<{
@@ -400,6 +416,7 @@ function Workspace({
       : (
           {
             pi: '智能助手',
+            workspace: '工作台',
             mail: '邮件',
             investment: '投资研究',
             learning: '学习',
@@ -414,6 +431,7 @@ function Workspace({
     settings.aiMode === 'local' ? !!settings.apiKey.trim() : !!status?.aiConfigured;
   const nav = [
     { id: 'pi' as Page, label: '智能助手', icon: Bot },
+    { id: 'workspace' as Page, label: '工作台', icon: CalendarDays },
     { id: 'social' as Page, label: '联系人', icon: Users },
   ];
   const shellActions = (
@@ -449,6 +467,7 @@ function Workspace({
           >
             <X size={19} />
           </button>
+          <SuperAgentCaretaker connected={!!status} scope={scope} settings={settings} onNavigate={navigate} onNotice={setNotice} />
           <a
             href="#"
             className="brand"
@@ -595,7 +614,7 @@ function Workspace({
           onClick={() => setMobileNav(false)}
         />
         <div
-          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'investment' ? 'investment-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'investment' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
+          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'workspace' ? 'mail-schedule-workspace' : ''} ${page === 'investment' ? 'investment-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'workspace' || page === 'investment' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
         >
           {page !== 'pi' && (
             <header className="topbar">
@@ -615,7 +634,7 @@ function Workspace({
             </header>
           )}
           <main
-            className={page === 'pi' ? 'assistant-main' : page === 'mail' ? 'mail-main' : page === 'investment' ? 'investment-main' : ''}
+            className={page === 'pi' ? 'assistant-main' : page === 'mail' ? 'mail-main' : page === 'workspace' ? 'mail-schedule-main' : page === 'investment' ? 'investment-main' : ''}
             key={page === 'plugins' ? `${page}:${activePluginId}` : page}
           >
             {tarotActive && (
@@ -712,6 +731,25 @@ function Workspace({
                 shellActions={shellActions}
                 openNavigation={() => setMobileNav(true)}
               />
+            ) : page === 'workspace' ? (
+              <MailSchedulePage
+                scope={scope}
+                openMail={() => navigate('mail')}
+                openConversation={(conversationId, title) => {
+                  navigate('pi');
+                  if (/^[a-f0-9-]{36}$/.test(conversationId)) {
+                    localStorage.setItem(
+                      `astral.pi.last:${settings.url}:${session?.user.id || 'guest'}`,
+                      conversationId,
+                    );
+                    window.dispatchEvent(
+                      new CustomEvent('astral-open-pi', { detail: { conversationId } }),
+                    );
+                  } else {
+                    setNotice(`演示目标「${title}」已绑定。接入真实对话后会直接打开该对话。`);
+                  }
+                }}
+              />
             ) : page === 'learning' ? (
               <LearningPage
                 key={`${serverIdentity(settings)}:${session?.user.id || 'guest'}`}
@@ -750,6 +788,12 @@ function Workspace({
                 count={history.length}
                 lastSync={lastSync}
                 notify={setNotice}
+                startupPage={startupPage}
+                setStartupPage={(next) => {
+                  persistStartupPage(scope, next);
+                  setStartupPage(next);
+                  setNotice(next === 'workspace' ? '启动页已设为工作台。' : '启动页已设为上次对话。');
+                }}
               />
             )}
             {page !== 'pi' && (
@@ -1426,6 +1470,26 @@ function Plugins({
   const [wishBusy, setWishBusy] = useState(false);
   const [wishError, setWishError] = useState('');
   const [wishPreview, setWishPreview] = useState(false);
+  const [draggedPluginId, setDraggedPluginId] = useState<string | null>(null);
+  const [dragOverPluginId, setDragOverPluginId] = useState<string | null>(null);
+
+  function reorderPlugin(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const from = plugins.findIndex((plugin) => plugin.id === fromId);
+    const to = plugins.findIndex((plugin) => plugin.id === toId);
+    if (from < 0 || to < 0) return;
+    const next = [...plugins];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    updatePlugins(next);
+  }
+
+  function movePluginBy(pluginId: string, offset: -1 | 1) {
+    const index = plugins.findIndex((plugin) => plugin.id === pluginId);
+    const target = index + offset;
+    if (index < 0 || target < 0 || target >= plugins.length) return;
+    reorderPlugin(pluginId, plugins[target].id);
+  }
   async function savePlugin(p: Plugin) {
     if (connected) await api(settings, '/plugins', p);
     updatePlugins([...plugins.filter((item) => item.id !== p.id), p]);
@@ -1531,7 +1595,10 @@ function Plugins({
       </div>
       {!selectedId && (
         <div className="toolbar">
-          <span className="muted">{plugins.length + 3} 个插件 · 同一个 DeepSeek 连接</span>
+          <span className="muted">
+            {plugins.length + 3} 个插件 · 同一个 DeepSeek 连接
+            {plugins.length > 1 && <small className="plugin-order-hint">拖动卡片调整顺序</small>}
+          </span>
           <div className="action-row">
             <button className="secondary" onClick={() => openWish()}>
               <WandSparkles size={16} />
@@ -1593,8 +1660,71 @@ function Plugins({
               <ArrowUpRight size={15} />
             </button>
           </article>
-          {plugins.map((p) => (
-            <article className="plugin-item" key={p.id}>
+          {plugins.map((p, index) => (
+            <article
+              className={`plugin-item plugin-item-draggable ${
+                dragOverPluginId === p.id ? 'is-drag-over' : ''
+              }`}
+              key={p.id}
+              draggable={!editor && !wishOpen}
+              onDragStart={(event) => {
+                if (editor || wishOpen) return;
+                setDraggedPluginId(p.id);
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', p.id);
+              }}
+              onDragOver={(event) => {
+                if (!draggedPluginId || draggedPluginId === p.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                setDragOverPluginId(p.id);
+              }}
+              onDragLeave={() => {
+                if (dragOverPluginId === p.id) setDragOverPluginId(null);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const fromId = draggedPluginId || event.dataTransfer.getData('text/plain');
+                if (fromId) reorderPlugin(fromId, p.id);
+                setDraggedPluginId(null);
+                setDragOverPluginId(null);
+              }}
+              onDragEnd={() => {
+                setDraggedPluginId(null);
+                setDragOverPluginId(null);
+              }}
+            >
+              <div className="plugin-drag-row">
+                <span
+                  className="plugin-drag-handle"
+                  role="img"
+                  aria-label="拖动插件排序"
+                  title="拖动调整顺序"
+                >
+                  <GripVertical size={17} aria-hidden="true" />
+                </span>
+                <span className="plugin-position">{String(index + 1).padStart(2, '0')}</span>
+                <span className="plugin-order-actions">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={`将插件 ${p.name} 上移`}
+                    disabled={index === 0}
+                    onClick={() => movePluginBy(p.id, -1)}
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={`将插件 ${p.name} 下移`}
+                    disabled={index === plugins.length - 1}
+                    onClick={() => movePluginBy(p.id, 1)}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </span>
+              </div>
               <div className="plugin-icon">
                 <BookOpen size={24} />
               </div>

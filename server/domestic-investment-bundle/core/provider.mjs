@@ -238,6 +238,7 @@ function toFundCandidate(meta, profile, evidence = null) {
   const points = profile.points;
   const metrics = fundRiskMetrics(points);
   const latest = points.filter((point) => Number.isFinite(point?.x)).toSorted((left, right) => left.x - right.x).at(-1);
+  const previous = points.filter((point) => Number.isFinite(point?.x)).toSorted((left, right) => left.x - right.x).at(-2);
   const bondMetrics = evidence?.metrics ?? {};
   const annualizedReturn3y = annualizedReturn(points, 365 * 3);
   const calmar3y = annualizedReturn3y !== null && metrics.max_drawdown_3y < 0
@@ -280,6 +281,7 @@ function toFundCandidate(meta, profile, evidence = null) {
     } : null,
     data_as_of: latest ? new Date(latest.x).toISOString().slice(0, 10) : null,
     current_price: latest?.y ?? null,
+    previous_price: previous?.y ?? null,
     source: "eastmoney_fund_profile",
   };
 }
@@ -437,6 +439,7 @@ export async function createDataProvider({
           bond_evidence: evidence ? { report_date: evidence.report_date, published_date: evidence.published_date, source_url: evidence.source_url, evidence_notes: evidence.evidence_notes } : null,
           data_as_of: rows.at(-1).trade_date,
           current_price: Number(rows.at(-1).accum_nav ?? rows.at(-1).nav) || null,
+          previous_price: rows.length > 1 ? Number(rows.at(-2).accum_nav ?? rows.at(-2).nav) || null : null,
         });
       }
       return result;
@@ -492,7 +495,7 @@ export async function createDataProvider({
     if (dashboardRequest) return dashboardRequest;
     dashboardRequest = (async () => {
       const localSource = fixture?.portfolio?.source === "user_screenshot" ? "user_snapshot" : fixture ? "local_file" : "unconfigured";
-      const base = { source: token && fixture ? `tushare+${localSource}` : token ? "tushare" : localSource, funds: fixtureCandidates("funds"), market: fixture?.market ?? null, stocks: fixtureCandidates("stocks"), international: fixture?.international ?? null, portfolio: fixture?.portfolio ?? null, sources: [], missing: [] };
+      const base = { source: token && fixture ? `tushare+${localSource}` : token ? "tushare" : localSource, funds: fixtureCandidates("funds"), market: fixture?.market ?? null, stocks: fixtureCandidates("stocks"), international: fixture?.international ?? null, asset_markets: fixture?.asset_markets ?? {}, portfolio: fixture?.portfolio ?? null, sources: [], missing: [] };
       if (!live || token || fixture?.market || fixture?.international || fixtureCandidates("funds").length) { if (token && !base.funds.length) base.funds = await funds(); return base; }
       const [marketResult, internationalResult, fundsResult] = await Promise.allSettled([liveMarket(), liveInternational(), funds()]);
       if (marketResult.status === "fulfilled") { base.market = marketResult.value.snapshot; base.sources.push(...marketResult.value.sources); } else base.missing.push(`domestic_market:${marketResult.reason?.message ?? "unavailable"}`);
@@ -535,7 +538,7 @@ export async function createDataProvider({
         const parsed = parseTencentQuotes(await requestText(`https://qt.gtimg.cn/q=${symbols}`));
         for (const holding of stockHoldings) {
           const quote = parsed[stockSymbol(holding.symbol)];
-          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, price_as_of: quote.as_of, source: 'tencent' });
+          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, previous_close: quote.previous_close, price_as_of: quote.as_of, source: 'tencent' });
         }
       } catch {
         // Keep manual values when a public quote source is unavailable.
@@ -544,7 +547,7 @@ export async function createDataProvider({
     for (const holding of holdings.filter((item) => item.asset_type === 'fund' && item.symbol)) {
       try {
         const candidate = (await funds([holding.symbol]))[0];
-        if (Number.isFinite(candidate?.current_price)) quotes.push({ id: holding.id, current_price: candidate.current_price, price_as_of: candidate.data_as_of ? `${candidate.data_as_of}T00:00:00.000Z` : null, source: 'eastmoney' });
+        if (Number.isFinite(candidate?.current_price)) quotes.push({ id: holding.id, current_price: candidate.current_price, previous_close: candidate.previous_price, price_as_of: candidate.data_as_of ? `${candidate.data_as_of}T00:00:00.000Z` : null, source: 'eastmoney' });
       } catch {
         // Keep manual values when a fund profile is temporarily unavailable.
       }
@@ -555,7 +558,7 @@ export async function createDataProvider({
         const parsed = parseTencentQuotes(await requestText(`https://qt.gtimg.cn/q=${precious.map((holding) => holding.symbol).join(',')}`));
         for (const holding of precious) {
           const quote = parsed[holding.symbol];
-          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, price_as_of: quote.as_of, source: 'tencent' });
+          if (Number.isFinite(quote?.price)) quotes.push({ id: holding.id, current_price: quote.price, previous_close: quote.previous_close, price_as_of: quote.as_of, source: 'tencent' });
         }
       } catch {
         // Keep manual values when a precious-metal quote is unavailable.

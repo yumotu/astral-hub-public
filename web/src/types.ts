@@ -7,10 +7,12 @@ export type Page =
   | 'account'
   | 'social'
   | 'pi'
+  | 'workspace'
   | 'mail'
   | 'investment'
   | 'learning'
   | 'pet';
+export type StartupPage = 'conversation' | 'workspace';
 export type Spread = 'single' | 'three';
 export type Card = { id: string; reversed: boolean; position: string };
 export type Analysis = {

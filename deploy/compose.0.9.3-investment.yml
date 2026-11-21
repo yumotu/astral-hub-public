@@ -1,7 +1,0 @@
-services:
-  app:
-    image: astral-hub:0.9.3-investment-b206932
-  dsh:
-    image: astral-dsh:0.8.12-dsh5-finance-3511f4d
-  pi:
-    image: astral-pi:1.4.0-v0820-learning1

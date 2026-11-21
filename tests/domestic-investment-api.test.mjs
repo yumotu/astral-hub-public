@@ -96,6 +96,16 @@ test('investment research window is authenticated and reuses the maintained serv
   assert.equal(committed.status, 200);
   assert.equal(committed.body.transaction.status, 'confirmed_holding');
   assert.equal((await request('/investment/holdings', owner)).body.holdings.length, 2);
+  const ambiguousPreview = await request('/investment/transactions/preview', owner, 'POST', {
+    text: '我买了 1000 元基金',
+  });
+  assert.equal(ambiguousPreview.status, 201);
+  assert.equal(ambiguousPreview.body.parsed.needs_clarification, true);
+  assert.ok(ambiguousPreview.body.parsed.suggestions.length >= 3);
+  assert.equal(
+    (await request(`/investment/transactions/${ambiguousPreview.body.transaction.id}/commit`, owner, 'POST', {})).status,
+    409,
+  );
   const schedule = await request('/investment/schedules', owner, 'POST', {
     kind: 'quotes',
     interval_minutes: 30,

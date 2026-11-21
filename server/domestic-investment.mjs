@@ -52,6 +52,16 @@ const scheduleInput = z
     enabled: z.boolean().default(true),
   })
   .strict();
+const instrumentCandidates = [
+  { keywords: ['白酒', '消费'], name: '招商中证白酒指数(LOF)A', symbol: '161725', asset_type: 'fund' },
+  { keywords: ['沪深300', '300'], name: '沪深300ETF', symbol: '510300', asset_type: 'domestic_equity' },
+  { keywords: ['中证500', '500'], name: '中证500ETF', symbol: '510500', asset_type: 'domestic_equity' },
+  { keywords: ['黄金', '金'], name: '黄金ETF', symbol: '518880', asset_type: 'gold' },
+  { keywords: ['新能源', '光伏'], name: '新能源车ETF', symbol: '515030', asset_type: 'domestic_equity' },
+  { keywords: ['科技', '芯片'], name: '芯片ETF', symbol: '159995', asset_type: 'domestic_equity' },
+  { keywords: ['银行'], name: '银行ETF', symbol: '512800', asset_type: 'domestic_equity' },
+  { keywords: ['纳斯达克', '美股'], name: '纳斯达克100ETF', symbol: '159941', asset_type: 'international_equity' },
+];
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 /**
@@ -72,6 +82,7 @@ export async function createDomesticInvestment(options = {}) {
         quantity REAL NOT NULL,
         cost_basis REAL,
         current_price REAL,
+        previous_close REAL,
         currency TEXT NOT NULL,
         price_as_of TEXT,
         source TEXT NOT NULL,
@@ -123,6 +134,11 @@ export async function createDomesticInvestment(options = {}) {
       );
       CREATE INDEX IF NOT EXISTS investment_recommendations_owner ON investment_recommendations(owner, generated_at);
     `);
+    try {
+      db.exec('ALTER TABLE investment_holdings ADD COLUMN previous_close REAL');
+    } catch {
+      // Existing databases already have the migration column.
+    }
   }
   const service =
     options.service ||
@@ -135,7 +151,7 @@ export async function createDomesticInvestment(options = {}) {
   function readHoldings(owner) {
     if (!db) return [];
     return db
-      .prepare('SELECT id,asset_type,symbol,name,quantity,cost_basis,current_price,currency,price_as_of,source,created_at,updated_at FROM investment_holdings WHERE owner=? ORDER BY updated_at DESC')
+      .prepare('SELECT id,asset_type,symbol,name,quantity,cost_basis,current_price,previous_close,currency,price_as_of,source,created_at,updated_at FROM investment_holdings WHERE owner=? ORDER BY updated_at DESC')
       .all(owner)
       .map((holding) => ({
         id: holding.id,
@@ -145,6 +161,7 @@ export async function createDomesticInvestment(options = {}) {
         quantity: holding.quantity,
         cost_basis: holding.cost_basis,
         current_price: holding.current_price,
+        previous_close: holding.previous_close,
         currency: holding.currency,
         price_as_of: holding.price_as_of,
         source: holding.source,
@@ -152,6 +169,14 @@ export async function createDomesticInvestment(options = {}) {
           holding.current_price === null ? null : Number((holding.quantity * holding.current_price).toFixed(4)),
         cost_value:
           holding.cost_basis === null ? null : Number((holding.quantity * holding.cost_basis).toFixed(4)),
+        day_gain:
+          holding.current_price === null || holding.previous_close === null
+            ? null
+            : Number((holding.quantity * (holding.current_price - holding.previous_close)).toFixed(4)),
+        day_gain_percent:
+          holding.current_price === null || holding.previous_close === null || holding.previous_close <= 0
+            ? null
+            : Number(((holding.current_price / holding.previous_close - 1) * 100).toFixed(4)),
         created_at: holding.created_at,
         updated_at: holding.updated_at,
       }));
@@ -195,6 +220,7 @@ export async function createDomesticInvestment(options = {}) {
     const symbol = text.match(/\b\d{6}\b/)?.[0] || '';
     const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:元|块)/);
     const quantityMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:份|股)/);
+    const explicitCandidateName = text.match(/标的为\s*([^（(]+)[（(]\d{6}/)?.[1]?.trim() || '';
     const type = /卖出|赎回|卖了|卖掉/.test(text)
       ? 'sell'
       : /定投|每月|每周|每个交易日/.test(text)
@@ -216,6 +242,16 @@ export async function createDomesticInvestment(options = {}) {
       .slice(0, 120);
     const amount = amountMatch ? Number(amountMatch[1]) : null;
     const quantity = quantityMatch ? Number(quantityMatch[1]) : null;
+    const normalizedText = text.toLowerCase();
+    const suggestions = instrumentCandidates
+      .map((candidate) => ({
+        ...candidate,
+        similarity: Number((candidate.keywords.some((keyword) => normalizedText.includes(keyword.toLowerCase())) ? 0.96 : 0.62).toFixed(2)),
+      }))
+      .filter((candidate) => candidate.similarity >= 0.96 || /基金|股票|ETF|指数|黄金|货币|债券|资产/.test(text))
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 3);
+    const needsClarification = !symbol && suggestions.length > 0;
     const missing = [];
     if (!name && !symbol) missing.push('name');
     if (amount === null && quantity === null) missing.push('amount_or_quantity');
@@ -223,13 +259,15 @@ export async function createDomesticInvestment(options = {}) {
       type,
       asset_type: assetType,
       symbol,
-      name: name || (symbol ? `代码 ${symbol}` : ''),
+      name: explicitCandidateName || name || (symbol ? `代码 ${symbol}` : ''),
       amount,
       quantity,
       unit_price: amount !== null && quantity ? Number((amount / quantity).toFixed(8)) : null,
       requested_at: new Date().toISOString(),
       missing,
       confidence: missing.length ? 'low' : symbol ? 'high' : 'medium',
+      suggestions,
+      needs_clarification: needsClarification,
     };
   }
 
@@ -253,7 +291,12 @@ export async function createDomesticInvestment(options = {}) {
       parsed.requested_at,
       source,
       rawText,
-      JSON.stringify({ confidence: parsed.confidence, missing: parsed.missing }),
+      JSON.stringify({
+        confidence: parsed.confidence,
+        missing: parsed.missing,
+        suggestions: parsed.suggestions || [],
+        needs_clarification: !!parsed.needs_clarification,
+      }),
       now,
       now,
     );
@@ -305,6 +348,8 @@ export async function createDomesticInvestment(options = {}) {
     const transaction = db.prepare('SELECT * FROM investment_transactions WHERE owner=? AND id=?').get(owner, id);
     if (!transaction) throw fail(404, '交易记录不存在。');
     if (transaction.status !== 'draft') return readTransactions(owner).find((item) => item.id === id);
+    if (JSON.parse(transaction.metadata || '{}').needs_clarification)
+      throw fail(409, '请先选择相似的基金或股票，或填写其他名称和代码。');
     const holdingId = applyTransaction(owner, transaction);
     const now = new Date().toISOString();
     db.prepare('UPDATE investment_transactions SET status=?,confirmed_at=?,updated_at=?,metadata=? WHERE owner=? AND id=?').run(
@@ -367,7 +412,7 @@ export async function createDomesticInvestment(options = {}) {
     const now = new Date().toISOString();
     const id = randomUUID();
     db.prepare(
-      'INSERT INTO investment_holdings(id,owner,asset_type,symbol,name,quantity,cost_basis,current_price,currency,price_as_of,source,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO investment_holdings(id,owner,asset_type,symbol,name,quantity,cost_basis,current_price,previous_close,currency,price_as_of,source,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
       id,
       owner,
@@ -377,6 +422,7 @@ export async function createDomesticInvestment(options = {}) {
       input.quantity,
       input.cost_basis,
       input.current_price,
+      null,
       input.currency,
       input.price_as_of,
       input.source,
@@ -400,8 +446,9 @@ export async function createDomesticInvestment(options = {}) {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const quote of quotes) {
-        db.prepare('UPDATE investment_holdings SET current_price=?,price_as_of=?,source=?,updated_at=? WHERE owner=? AND id=?').run(
+        db.prepare('UPDATE investment_holdings SET current_price=?,previous_close=?,price_as_of=?,source=?,updated_at=? WHERE owner=? AND id=?').run(
           quote.current_price,
+          quote.previous_close ?? null,
           quote.price_as_of,
           quote.source,
           now,

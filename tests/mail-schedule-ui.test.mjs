@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+test('mail schedule workspace stays demo-only and exposes startup choices', async () => {
+  const page = await readFile(new URL('../web/src/MailSchedulePage.tsx', import.meta.url), 'utf8');
+  const main = await readFile(new URL('../web/src/main.tsx', import.meta.url), 'utf8');
+  const settings = await readFile(new URL('../web/src/SettingsPage.tsx', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../web/src/mail-schedule.css', import.meta.url), 'utf8');
+
+  assert.match(page, /演示数据/);
+  assert.match(page, /不会读取或写入真实邮箱/);
+  assert.match(page, /今日时间轴/);
+  assert.match(page, /未来 7 天/);
+  assert.match(page, /邮件事项/);
+  assert.match(page, /对话中的任务/);
+  assert.match(page, /长期任务/);
+  assert.match(page, /定时任务/);
+  assert.match(page, /资产提醒/);
+  assert.match(page, /工作台只读快照/);
+  assert.match(page, /createSyntheticWorkbenchSnapshot/);
+  assert.match(page, /DPH 仿真执行器/);
+  assert.match(page, /createDphExecutorAdapter/);
+  assert.match(page, /simulateDphProgress/);
+  assert.match(page, /不会执行真实计划/);
+  assert.match(page, /P3 工作台工具路由与权限验证/);
+  assert.match(page, /createAgentToolRouter/);
+  assert.match(page, /验证 Remote 高风险权限/);
+  assert.match(page, /高风险执行和发送始终停在确认态/);
+  assert.match(page, /新建对话并绑定/);
+  assert.match(page, /修改绑定任务/);
+  assert.match(page, /进入对话/);
+  assert.match(main, /demo.*mail-schedule/);
+  assert.match(main, /loadStartupPage/);
+  assert.match(settings, /工作台/);
+  assert.match(settings, /上次对话/);
+  assert.match(css, /\.mail-schedule-metrics/);
+  assert.match(css, /@media \(max-width: 800px\)/);
+  assert.match(css, /\.workbench-tool-router-panel/);
+});

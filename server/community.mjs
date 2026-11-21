@@ -19,6 +19,8 @@ import { activityDeadline } from '../deploy/pi/activity-deadline.mjs';
 import { longGoalControl } from '../deploy/pi/long-goal-command.mjs';
 import { createAgentBindings, serverPiRuntime } from './agent-bindings.mjs';
 import { agentRunState, agentCapabilities } from '../shared/agent-runtime.mjs';
+import { createSuperAgent } from './superagent.mjs';
+import { createSubagentDispatcher } from './subagent-dispatcher.mjs';
 import {
   createAssistanceContext,
   assistanceSourceSchema,
@@ -77,6 +79,8 @@ export function createCommunity(store, { token, body, options = {} }) {
     fetch,
   };
   const piReady = !!(pi.url && pi.token);
+  const superagent = createSuperAgent(store.db, { now: options.now });
+  const subagentDispatcher = createSubagentDispatcher({ ledger: superagent, adapters: options.subagentAdapters });
   const assistanceContext = createAssistanceContext(store.db, {
     now: options.now,
     serverProject: (owner, id) => projectFor(accounts.profile(owner), id, 'read'),
@@ -387,6 +391,8 @@ export function createCommunity(store, { token, body, options = {} }) {
     accounts,
     metadata: conversationMetadata,
     chatFiles,
+    superagent,
+    subagentDispatcher,
     forkNative: async ({ owner, source, target, ...p }) => {
       const sourceRuntime = runtimeBindings.get(owner, 'server', source);
       if (sourceRuntime) {
@@ -1431,6 +1437,7 @@ export function createCommunity(store, { token, body, options = {} }) {
       titles.close();
       scheduled.close();
       tasks.close();
+      superagent.close();
     },
     async before(req, url, json) {
       const path = url.pathname;
@@ -1475,9 +1482,50 @@ export function createCommunity(store, { token, body, options = {} }) {
     async after(req, url, json, actor, res) {
       const path = url.pathname,
         method = req.method;
-      if (!['/api/auth/', '/api/social/', '/api/pi/'].some((prefix) => path.startsWith(prefix)))
+      if (!['/api/auth/', '/api/social/', '/api/pi/', '/api/superagent/'].some((prefix) => path.startsWith(prefix)))
         return false;
       requireUser(actor);
+      if (path === '/api/superagent/tasks' && method === 'GET') {
+        json(200, superagent.snapshot(actor.id));
+        return true;
+      }
+      if (path === '/api/superagent/tasks' && method === 'POST') {
+        limit(`superagent-task:${actor.id}`, 30);
+        const p = z.object({
+          id: uuid,
+          title: z.string().trim().min(1).max(200),
+          input: z.string().trim().min(1).max(8000),
+          runtime: z.enum(['Pi', 'DPH', 'Remote']).default('DPH'),
+          conversationId: z.string().max(200).nullable().optional(),
+          projectId: z.string().max(100).nullable().optional(),
+        }).strict().parse(await body(req));
+        const task = superagent.create(actor.id, p);
+        void subagentDispatcher.dispatch(actor.id, task.id);
+        json(202, { task });
+        return true;
+      }
+      const superagentTaskRoute = path.match(/^\/api\/superagent\/tasks\/([^/]+)$/);
+      if (superagentTaskRoute && method === 'GET') {
+        json(200, { task: superagent.get(actor.id, uuid.parse(superagentTaskRoute[1])) });
+        return true;
+      }
+      if (superagentTaskRoute && method === 'PATCH') {
+        limit(`superagent-report:${actor.id}`, 60);
+        const p = z.object({
+          status: z.enum(['queued', 'running', 'waiting_user', 'succeeded', 'failed', 'unknown', 'cancelled']),
+          revision: z.number().int().positive(),
+          progress: z.number().int().min(0).max(100).optional(),
+          report: z.string().max(12000).optional(),
+          attention: z.string().max(12000).optional(),
+        }).strict().parse(await body(req));
+        json(200, { task: superagent.report(actor.id, uuid.parse(superagentTaskRoute[1]), p) });
+        return true;
+      }
+      if (superagentTaskRoute && method === 'DELETE') {
+        const p = z.object({ revision: z.number().int().positive() }).strict().parse(await body(req));
+        json(200, { task: superagent.stop(actor.id, uuid.parse(superagentTaskRoute[1]), p.revision) });
+        return true;
+      }
       if (path === '/api/pi/assist/cleanup' && method === 'POST') {
         json(200, await cleanupHelper(actor.id, await body(req)));
         return true;
