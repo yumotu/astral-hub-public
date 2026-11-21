@@ -11,6 +11,7 @@ USER root
 RUN node --input-type=module -e 'import fs from "node:fs"; for (const name of ["server","shared"]) fs.rmSync("/app/"+name,{recursive:true,force:true});'
 COPY --chown=node:node server ./server
 COPY --chown=node:node shared ./shared
+COPY --chown=node:node integrations/dsh-domestic-investment ./integrations/dsh-domestic-investment
 RUN node --input-type=module -e 'import fs from "node:fs"; for (const name of fs.readdirSync("/app/dist")) fs.rmSync("/app/dist/"+name,{recursive:true,force:true});'
 COPY --chown=node:node dist ./dist
 COPY --chown=node:node deploy/pi/assistant-artifacts.mjs ./deploy/pi/assistant-artifacts.mjs

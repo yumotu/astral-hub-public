@@ -40,6 +40,7 @@ import {
   Pencil,
   CheckCircle2,
   PawPrint,
+  LineChart,
 } from 'lucide-react';
 import {
   deck,
@@ -73,6 +74,7 @@ import { AccountPage } from './AccountPage';
 import { SocialPage } from './SocialPage';
 import { PiPage } from './PiPage';
 import { MailPage } from './MailPage';
+import { InvestmentPage } from './InvestmentPage';
 import { LearningPage } from './LearningPage';
 import { PetPage } from './PetPage';
 import { interpretReading, runAIPlugin, tarotQuestions } from './ai';
@@ -98,6 +100,7 @@ import './chat-layout.css';
 import './mail-workspace.css';
 import './social-mobile.css';
 import './pet.css';
+import './investment.css';
 
 function CardBack({ small = false }: { small?: boolean }) {
   return (
@@ -398,6 +401,7 @@ function Workspace({
           {
             pi: '智能助手',
             mail: '邮件',
+            investment: '投资研究',
             learning: '学习',
             pet: '智能桌宠',
             social: '联系人',
@@ -509,6 +513,14 @@ function Workspace({
               <UnreadBadge count={unread.mail?.count ?? undefined} label="封收件箱未读邮件" />
             </button>
             <button
+              className={page === 'investment' ? 'active' : ''}
+              aria-current={page === 'investment' ? 'page' : undefined}
+              onClick={() => navigate('investment')}
+            >
+              <LineChart size={19} />
+              投资研究
+            </button>
+            <button
               className={page === 'learning' ? 'active' : ''}
               aria-current={page === 'learning' ? 'page' : undefined}
               onClick={() => navigate('learning')}
@@ -583,7 +595,7 @@ function Workspace({
           onClick={() => setMobileNav(false)}
         />
         <div
-          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
+          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'investment' ? 'investment-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'investment' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
         >
           {page !== 'pi' && (
             <header className="topbar">
@@ -603,7 +615,7 @@ function Workspace({
             </header>
           )}
           <main
-            className={page === 'pi' ? 'assistant-main' : page === 'mail' ? 'mail-main' : ''}
+            className={page === 'pi' ? 'assistant-main' : page === 'mail' ? 'mail-main' : page === 'investment' ? 'investment-main' : ''}
             key={page === 'plugins' ? `${page}:${activePluginId}` : page}
           >
             {tarotActive && (
@@ -715,6 +727,8 @@ function Workspace({
                 session={session}
                 login={() => navigate('account')}
               />
+            ) : page === 'investment' ? (
+              <InvestmentPage settings={settings} />
             ) : page === 'pet' ? (
               <PetPage
                 key={`${scope}:pet`}

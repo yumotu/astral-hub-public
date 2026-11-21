@@ -8,6 +8,7 @@ export type Page =
   | 'social'
   | 'pi'
   | 'mail'
+  | 'investment'
   | 'learning'
   | 'pet';
 export type Spread = 'single' | 'three';

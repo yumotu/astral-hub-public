@@ -32,6 +32,7 @@ import { loadManagedDsh } from './dsh-managed.mjs';
 import { createAppUpdates } from './app-updates.mjs';
 import { parseComputerPlugin, computerPluginTools } from '../shared/computer-plugin.mjs';
 import { createComputerPackageCatalog } from './computer-package-catalog.mjs';
+import { createDomesticInvestment } from './domestic-investment.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const entrySchema = z
@@ -74,6 +75,7 @@ export async function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? resolve(root, 'data'));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const store = createStore(options.dbPath ?? resolve(dataDir, 'astral.sqlite'));
+  const domesticInvestment = await createDomesticInvestment(options.investmentConfig);
   let mailAgent, appFunctions, relay, community, unified;
   const dshRemote = createDshRemote(store.db, {
     token,
@@ -653,6 +655,7 @@ export async function createApp(options = {}) {
           if (await relay.after(req, url, json, actor)) return;
           if (await mail.handle(req, url, json, owner, body, actor)) return;
           if (await learning.handle(req, url, json, actor, body)) return;
+          if (await domesticInvestment.handle(req, url, json, actor)) return;
           if (url.pathname === '/api/status' && req.method === 'GET') {
             json(200, {
               syncReady: true,
