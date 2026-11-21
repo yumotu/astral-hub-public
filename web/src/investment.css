@@ -68,6 +68,31 @@
 .investment-action-list strong { color: var(--text); font-size: 13px; }
 .investment-action-list p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .investment-footer { display: flex; justify-content: space-between; gap: 10px; padding: 14px 2px 0; color: var(--muted); font-size: 11px; }
+.investment-overview { display: grid; gap: 12px; margin-bottom: 14px; }
+.investment-overview-hero { display: flex; justify-content: space-between; gap: 20px; padding: 22px; border-radius: 18px; color: #fff; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, #1b55d9), color-mix(in srgb, var(--accent) 58%, #121b42)); box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 18%, transparent); }
+.investment-overview-hero strong { display: block; margin-top: 7px; font-size: clamp(30px, 7vw, 48px); font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.investment-overview-hero strong small { font-size: 13px; letter-spacing: 0; }
+.investment-overview-hero p { margin: 8px 0 0; opacity: .78; font-size: 12px; }
+.investment-overview-hero .investment-eyebrow { color: rgba(255,255,255,.72); }
+.investment-overview-hero-stats { display: grid; grid-template-columns: repeat(2, minmax(110px, 1fr)); gap: 8px; align-self: end; }
+.investment-overview-hero-stats div { min-width: 0; padding: 12px; border-radius: 12px; background: rgba(0,0,0,.16); }
+.investment-overview-hero-stats small, .investment-overview-hero-stats b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.investment-overview-hero-stats small { font-size: 11px; opacity: .72; }
+.investment-overview-hero-stats b { margin-top: 6px; font-size: 17px; font-variant-numeric: tabular-nums; }
+.investment-overview-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; }
+.investment-bucket { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; text-align: left; cursor: pointer; }
+.investment-bucket span, .investment-bucket strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.investment-bucket span { color: var(--muted); font-size: 12px; }
+.investment-bucket strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.investment-overview-empty { grid-column: 1 / -1; padding: 18px; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 12px; text-align: center; }
+.investment-transaction-assistant { margin-bottom: 14px; }
+.investment-transaction-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.investment-transaction-form input { min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface-soft); font: inherit; }
+.investment-transaction-form button, .investment-transaction-preview button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.investment-transaction-preview { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 11px; border-radius: 10px; background: var(--surface-soft); }
+.investment-transaction-preview strong, .investment-transaction-preview small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.investment-transaction-preview strong { color: var(--text); font-size: 13px; }
+.investment-transaction-preview small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 @media (max-width: 700px) {
   .investment-page { padding: 18px 12px 32px; }
   .investment-heading { display: block; }
@@ -79,6 +104,9 @@
   .investment-holding-row { grid-template-columns: minmax(0, 1fr) auto; }
   .investment-holding-value { text-align: right; }
   .investment-holding-row .icon-button { grid-column: 2; grid-row: 1 / span 2; }
+  .investment-overview-hero { display: block; padding: 18px; }
+  .investment-overview-hero-stats { margin-top: 16px; grid-template-columns: 1fr 1fr; }
+  .investment-transaction-preview { align-items: stretch; flex-direction: column; }
   .investment-ranking { align-items: flex-start; flex-direction: column; }
   .investment-ranking-main, .investment-ranking-metrics { width: 100%; }
   .investment-ranking-metrics { justify-content: flex-start; padding-left: 28px; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BarChart3, BookOpen, Database, LineChart, LoaderCircle, Plus, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { BarChart3, BookOpen, ChevronRight, Database, LineChart, LoaderCircle, MessageSquareText, Plus, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { api } from './data';
 import type { Settings } from './types';
 
@@ -26,6 +26,14 @@ type Holding = {
   price_as_of: string | null;
   source: string;
   value: number | null;
+};
+type ParsedTransaction = {
+  name: string;
+  symbol: string;
+  type: string;
+  amount: number | null;
+  quantity: number | null;
+  confidence: string;
 };
 type Ranking = {
   code?: string;
@@ -54,7 +62,7 @@ type Dashboard = {
   market: Market;
   stocks: { count: number; rankings: Ranking[] };
   international: { market: Market; indices: Record<string, unknown>[]; stocks: { count: number; rankings: Ranking[] } };
-  portfolio: { summary?: Record<string, unknown>; holdings?: Record<string, unknown>[] };
+  portfolio: { summary?: Record<string, unknown>; holdings?: Holding[]; data_as_of?: string | null };
   daily_actions?: { actions?: { title?: string; reason?: string; operation?: string; detail?: string }[] };
 };
 
@@ -71,11 +79,11 @@ const assetTypeLabels: Record<AssetType, string> = {
 };
 
 const views = [
+  ['portfolio', '资产总览'],
   ['funds', '基金筛选'],
   ['market', '市场态势'],
   ['stocks', '长期股票'],
   ['international', '国际市场'],
-  ['portfolio', '我的资金'],
 ] as const;
 
 const regimeLabel: Record<string, string> = {
@@ -96,6 +104,87 @@ function score(value: unknown) {
 
 function metric(metrics: Record<string, unknown> | undefined, key: string) {
   return metrics && typeof metrics[key] === 'number' ? metrics[key] : null;
+}
+
+function money(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
+}
+
+function PortfolioOverview({
+  summary,
+  holdings,
+  dataAsOf,
+}: {
+  summary?: Record<string, unknown>;
+  holdings: Holding[];
+  dataAsOf?: string | null;
+}) {
+  const total = summary?.total_capital;
+  const cash = summary?.cash_balance;
+  const risk = summary?.risk_assets;
+  const buckets = (summary?.buckets || {}) as Record<string, number>;
+  const categories = Object.entries(assetTypeLabels)
+    .map(([type, label]) => ({ type: type as AssetType, label, value: buckets[type] || 0 }))
+    .filter((item) => item.value > 0);
+  return (
+    <section className="investment-overview" aria-label="资产总览">
+      <div className="investment-overview-hero">
+        <div>
+          <span className="investment-eyebrow">我的资产</span>
+          <strong>{money(total)} <small>元</small></strong>
+          <p>持仓 {holdings.length} 项 · 数据更新于 {dataAsOf ? new Date(dataAsOf).toLocaleString('zh-CN') : '待补充'}</p>
+        </div>
+        <div className="investment-overview-hero-stats">
+          <div><small>现金及固收</small><b>{money(cash)}</b></div>
+          <div><small>风险资产</small><b>{money(risk)}</b></div>
+        </div>
+      </div>
+      <div className="investment-overview-buckets">
+        {categories.length ? categories.map((item) => (
+          <button type="button" key={item.type} className="investment-bucket">
+            <span>{item.label}</span><strong>{money(item.value)}</strong><ChevronRight size={15} />
+          </button>
+        )) : <div className="investment-overview-empty">添加持仓后，这里会显示资产分类和收益分布。</div>}
+      </div>
+    </section>
+  );
+}
+
+function TransactionAssistant({ settings, onChanged }: { settings: Settings; onChanged: () => void }) {
+  const [text, setText] = useState('');
+  const [draft, setDraft] = useState<{ id: string; parsed: ParsedTransaction } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function preview(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      const result = await api<{ transaction: { id: string }; parsed: ParsedTransaction }>(settings, '/investment/transactions/preview', { text });
+      setDraft({ id: result.transaction.id, parsed: result.parsed });
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function commit() {
+    if (!draft) return;
+    setBusy(true); setError('');
+    try { await api(settings, `/investment/transactions/${draft.id}/commit`, {}, 'POST'); setText(''); setDraft(null); onChanged(); }
+    catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <section className="investment-card investment-transaction-assistant">
+      <div className="investment-card-heading"><div><span className="investment-eyebrow">自然语言记账</span><h2>告诉 AI 你买了什么</h2></div><MessageSquareText size={20} /></div>
+      <form onSubmit={preview} className="investment-transaction-form">
+        <input value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：我买了 1000 元招商中证白酒基金" required />
+        <button className="primary" disabled={busy}><MessageSquareText size={15} />解析</button>
+      </form>
+      {draft && <div className="investment-transaction-preview"><div><strong>{draft.parsed.name || '待补充名称'}</strong><small>{draft.parsed.symbol || '未识别代码'} · {draft.parsed.type === 'sell' ? '卖出/赎回' : '买入/申购'} · {draft.parsed.amount ?? '—'} 元 · {draft.parsed.quantity ?? '待确认'} 份</small></div><button className="secondary" type="button" onClick={() => void commit()} disabled={busy}>确认记账</button></div>}
+      {error && <p className="error investment-error" role="alert">{error}</p>}
+      <p className="investment-muted">这里只更新持仓账本，真实买入和卖出需要单独确认。</p>
+    </section>
+  );
 }
 
 function MarketCard({ title, market }: { title: string; market: Market }) {
@@ -242,7 +331,7 @@ function RankingList({ items, kind }: { items: Ranking[]; kind: 'fund' | 'stock'
 }
 
 export function InvestmentPage({ settings }: { settings: Settings }) {
-  const [view, setView] = useState<(typeof views)[number][0]>('funds');
+  const [view, setView] = useState<(typeof views)[number][0]>('portfolio');
   const [riskProfile, setRiskProfile] = useState<RiskProfile>('balanced');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -287,7 +376,7 @@ export function InvestmentPage({ settings }: { settings: Settings }) {
           {view === 'market' && <div className="investment-market-grid"><MarketCard title="中国市场" market={dashboard.market} /><MarketCard title="综合国际市场" market={dashboard.international.market} /></div>}
           {view === 'stocks' && <section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">长期研究</span><h2>股票候选</h2></div><ShieldCheck size={20} /></div><RankingList items={dashboard.stocks.rankings} kind="stock" /></section>}
           {view === 'international' && <><MarketCard title="国际市场" market={dashboard.international.market} /><section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">指数观察</span><h2>国际指数</h2></div><Database size={20} /></div><div className="investment-index-grid">{dashboard.international.indices.map((item, index) => <div key={`${String(item.code || item.symbol || 'index')}-${index}`}><strong>{String(item.name || item.code || '指数')}</strong><span>{percent(item.change_1d)}</span><small>{String(item.region || item.currency || '')}</small></div>)}</div></section></>}
-          {view === 'portfolio' && <><HoldingsPanel settings={settings} holdings={holdings} onChanged={() => void load()} />{dashboard.daily_actions?.actions?.length ? <section className="investment-card investment-actions-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">研究建议</span><h2>推荐操作</h2></div><ShieldCheck size={20} /></div><div className="investment-action-list">{dashboard.daily_actions.actions.map((item, index) => <article key={`${item.title || item.operation}-${index}`}><strong>{item.title || item.operation || '研究动作'}</strong><p>{item.reason || item.detail || '请查看依据后决定是否执行。'}</p></article>)}</div></section> : null}</>}
+          {view === 'portfolio' && <><PortfolioOverview summary={dashboard.portfolio.summary} holdings={holdings} dataAsOf={dashboard.portfolio.data_as_of} /><TransactionAssistant settings={settings} onChanged={() => void load()} /><HoldingsPanel settings={settings} holdings={holdings} onChanged={() => void load()} />{dashboard.daily_actions?.actions?.length ? <section className="investment-card investment-actions-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">AI 建议</span><h2>研究建议</h2></div><ShieldCheck size={20} /></div><div className="investment-action-list">{dashboard.daily_actions.actions.map((item, index) => <article key={`${item.title || item.operation}-${index}`}><strong>{item.title || item.operation || '研究动作'}</strong><p>{item.reason || item.detail || '请查看依据后决定是否执行。'}</p></article>)}</div></section> : null}</>}
           <footer className="investment-footer"><span>数据日期：中国 {dashboard.market.as_of || '—'} · 国际 {dashboard.international.market.as_of || '—'}</span><span>{dashboard.data_sources.length} 个来源</span></footer>
         </div>
       )}

@@ -85,7 +85,27 @@ test('investment research window is authenticated and reuses the maintained serv
   const afterHolding = await request('/investment/dashboard', owner);
   assert.equal(afterHolding.body.portfolio.holdings.length, 1);
   assert.equal(afterHolding.body.daily_actions.plan.algorithm.name, 'regime-aware risk budgeting');
+  const transactionPreview = await request('/investment/transactions/preview', owner, 'POST', {
+    text: '我买了 2 份黄金 ETF，代码 518880，金额 1000 元',
+  });
+  assert.equal(transactionPreview.status, 201);
+  assert.equal(transactionPreview.body.parsed.type, 'buy');
+  assert.equal(transactionPreview.body.parsed.symbol, '518880');
+  const transactionId = transactionPreview.body.transaction.id;
+  const committed = await request(`/investment/transactions/${transactionId}/commit`, owner, 'POST', {});
+  assert.equal(committed.status, 200);
+  assert.equal(committed.body.transaction.status, 'confirmed_holding');
+  assert.equal((await request('/investment/holdings', owner)).body.holdings.length, 2);
+  const schedule = await request('/investment/schedules', owner, 'POST', {
+    kind: 'quotes',
+    interval_minutes: 30,
+    enabled: true,
+  });
+  assert.equal(schedule.status, 201);
+  assert.equal(schedule.body.schedules[0].interval_minutes, 30);
+  assert.equal((await request('/investment/schedules', owner)).body.schedules.length, 1);
+  assert.ok((await request('/investment/recommendations', owner)).body);
   assert.equal((await request(`/investment/holdings/${created.body.holding.id}`, owner, 'DELETE')).status, 200);
-  assert.equal((await request('/investment/holdings', owner)).body.holdings.length, 0);
+  assert.equal((await request('/investment/holdings', owner)).body.holdings.length, 1);
   assert.equal((await request('/investment/dashboard')).status, 401);
 });

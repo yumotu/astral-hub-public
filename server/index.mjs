@@ -78,6 +78,7 @@ export async function createApp(options = {}) {
   const domesticInvestment = await createDomesticInvestment({
     ...(options.investmentConfig ?? {}),
     db: store.db,
+    startScheduler: options.startInvestmentScheduler ?? true,
   });
   let mailAgent, appFunctions, relay, community, unified;
   const dshRemote = createDshRemote(store.db, {
@@ -565,6 +566,7 @@ export async function createApp(options = {}) {
     dshRemote,
     unified,
     projectManagement,
+    domesticInvestment,
   });
   const origins = new Set(
     (
@@ -848,6 +850,7 @@ export async function createApp(options = {}) {
     mail.close();
     community.close();
     relay.close();
+    domesticInvestment.close();
     store.close();
   });
   return { server, store };

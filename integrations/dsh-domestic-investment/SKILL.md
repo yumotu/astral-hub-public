@@ -1,13 +1,13 @@
 ---
 name: domestic-investment
-description: Read-only domestic and international investment research with dated evidence and explicit missing fields.
+description: Domestic and international investment research plus guarded holding, quote, schedule and order previews with dated evidence and explicit missing fields.
 ---
 
 # Domestic and international investment research
 
-Use the bundled `astral-domestic-investment` tools for fund screening, market-regime analysis, bond stress testing, long-term stock research, international comparisons, portfolio research actions, and an explainable risk-budget plan.
+Use the bundled `astral-domestic-investment` tools for fund screening, market-regime analysis, bond stress testing, long-term stock research, international comparisons, portfolio research actions, an explainable risk-budget plan, holding-intent drafts, quote refresh previews, and order previews. Pi exposes the matching account-scoped workflow through `app_functions`.
 
-The tools are read-only. They never place orders, change holdings, send messages, or create schedules. Preserve the `data_as_of` date, distinguish observed data from inference, and report missing fields and confidence.
+Research tools are read-only. Holding and order tools produce drafts or previews and never submit a real order. Schedule changes require a separate host confirmation. Preserve the `data_as_of` date, distinguish observed data from inference, and report missing fields and confidence.
 
 Public live sources are used when available. Tushare Pro is optional and is selected only when the host provides `TUSHARE_TOKEN`. Never ask the model to reveal or repeat that token.
 

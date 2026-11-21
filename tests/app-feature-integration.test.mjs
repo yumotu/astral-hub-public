@@ -322,6 +322,63 @@ test('main-chat tools reuse contacts and SMTP, show frozen previews, isolate acc
   );
   assert.ok([403, 409].includes((await f.tool({ action: 'catalog' })).status));
 });
+
+test('Pi app functions expose the same investment workflow as DSH and keep writes confirmable', async (t) => {
+  const f = await fixture(t);
+  const catalog = await f.tool({ action: 'catalog' });
+  const names = new Set(catalog.functions.map((item) => item.name));
+  for (const name of [
+    'investment.methodology',
+    'investment.dashboard',
+    'investment.query_data',
+    'investment.screen_funds',
+    'investment.analyze_bond_risk',
+    'investment.analyze_market',
+    'investment.research_stock',
+    'investment.recommend_actions',
+    'investment.portfolio_plan',
+    'investment.holdings',
+    'investment.transactions',
+    'investment.transaction_preview',
+    'investment.transaction_confirm',
+    'investment.quotes_refresh',
+    'investment.recommendations',
+    'investment.schedules',
+    'investment.schedule_set',
+  ]) assert.ok(names.has(name), `missing Pi investment function ${name}`);
+
+  const draft = await f.invoke('investment.transaction_preview', {
+    text: '我买了 2 份黄金 ETF，代码 518880，金额 1000 元',
+  });
+  assert.equal(draft.state, 'done');
+  assert.equal(draft.result.parsed.symbol, '518880');
+  const confirmation = await f.invoke('investment.transaction_confirm', {
+    transactionId: draft.result.transaction.id,
+  });
+  assert.equal(confirmation.state, 'prepared');
+  const committed = await f.req(
+    '/app-functions/requests/' + confirmation.id + '/confirm',
+    {},
+    f.owner.token,
+  );
+  assert.equal(committed.status, 200);
+  assert.equal(committed.state, 'done');
+  assert.equal((await f.invoke('investment.holdings')).result.holdings.length, 1);
+
+  const scheduled = await f.invoke('investment.schedule_set', {
+    kind: 'quotes',
+    intervalMinutes: 30,
+    enabled: true,
+  });
+  assert.equal(scheduled.state, 'prepared');
+  const scheduleCommit = await f.req(
+    '/app-functions/requests/' + scheduled.id + '/confirm',
+    {},
+    f.owner.token,
+  );
+  assert.equal(scheduleCommit.status, 200);
+  assert.equal((await f.invoke('investment.schedules')).result.schedules[0].interval_minutes, 30);
+});
 test('learning generation from ordinary chat persists real service results, enforces limits and keeps other accounts isolated', async (t) => {
   const f = await fixture(t);
   assert.equal(

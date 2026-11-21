@@ -42,12 +42,17 @@ test("bundled investment service exposes the maintained research tools without n
     "research_long_term_stock",
     "recommend_daily_research_actions",
     "build_portfolio_plan",
+    "record_investment_holding_intent",
+    "refresh_investment_quotes",
+    "prepare_investment_order",
   ]);
   const dashboard = await service.dashboard({ risk_profile: "balanced" });
   assert.equal(dashboard.source, "local_file");
   assert.equal(dashboard.funds.count, 1);
   assert.equal((await service.screenFunds({ risk_profile: "balanced" })).rankings.length, 1);
   assert.equal(service.analyzeMarket({ benchmarks: [{ trend_20d: 1, trend_60d: 3 }] }).regime, "neutral");
+  assert.equal(service.recordHoldingIntent({ text: "我买了 500 元演示基金" }).type, "buy");
+  assert.equal(service.prepareOrder({ type: "buy", name: "演示基金", amount: 500 }).status, "awaiting_confirmation");
 });
 
 test("DSH host loads the repository bundle and keeps the optional token out of source paths", async () => {

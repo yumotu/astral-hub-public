@@ -49,6 +49,7 @@ export function registerAppFeatures(
     dshRemote,
     unified,
     projectManagement,
+    domesticInvestment,
   },
 ) {
   if (projectManagement) registerProjectManagementFeatures(engine, projectManagement);
@@ -258,6 +259,14 @@ export function registerAppFeatures(
       input,
       method,
     );
+  const investment = (ctx, path, input, method) =>
+    request(
+      (req, url, json, c) => domesticInvestment.handle(req, url, json, c.actor, body),
+      ctx,
+      path,
+      input,
+      method,
+    );
   const contact = (ctx, id) => {
     const target = community.accounts.overview(ctx.owner).contacts.find((c) => c.id === id);
     if (!target) throw fail(403, '对方不在当前账号已接受的联系人中。');
@@ -441,6 +450,178 @@ export function registerAppFeatures(
     schema: empty,
     execute: (ctx) => study(ctx, '/api/learning/settings'),
   });
+  if (domesticInvestment) {
+    const investmentDataset = z.enum([
+      'fund_basic',
+      'fund_nav',
+      'index_daily',
+      'daily_basic',
+      'fina_indicator',
+      'income',
+      'balancesheet',
+      'cashflow',
+      'dividend',
+      'us_daily_adj',
+      'us_fina_indicator',
+      'us_etf_basic',
+      'us_etf_daily',
+      'us_tradecal',
+      'hk_daily',
+      'fx_daily',
+      'eco_cal',
+    ]);
+    const risk = z.enum(['conservative', 'balanced', 'growth']).default('balanced');
+    const snapshot = z.record(z.string(), z.unknown());
+    engine.register({
+      name: 'investment.methodology',
+      description: '读取投资研究的数据来源、证据层级和风险计算方法。只读。',
+      schema: empty,
+      execute: () => domesticInvestment.service.methodology(),
+    });
+    engine.register({
+      name: 'investment.dashboard',
+      description: '获取基金、市场、股票和账号持仓的统一研究面板。只读，使用当前配置的数据源。',
+      schema: z.object({ riskProfile: risk }).strict(),
+      execute: async (ctx, p) => {
+        const dashboard = await domesticInvestment.service.dashboard({ risk_profile: p.riskProfile });
+        const portfolio = await investment(ctx, '/api/investment/holdings');
+        return { ...dashboard, portfolio: portfolio.portfolio, portfolioSummary: portfolio.summary };
+      },
+    });
+    engine.register({
+      name: 'investment.query_data',
+      description: '查询已允许的投资数据集，不能访问任意网址。只读。',
+      schema: z.object({ dataset: investmentDataset, params: snapshot.default({}), fields: z.string().max(1000).default('') }).strict(),
+      execute: (_ctx, p) => domesticInvestment.service.query(p),
+    });
+    engine.register({
+      name: 'investment.screen_funds',
+      description: '按风险偏好筛选基金并返回收益、回撤、波动和证据质量。只读。',
+      schema: z.object({ riskProfile: risk, codes: z.array(z.string().regex(/^\d{6}$/)).max(20).default([]) }).strict(),
+      execute: (_ctx, p) => domesticInvestment.service.screenFunds({ risk_profile: p.riskProfile, codes: p.codes }),
+    });
+    engine.register({
+      name: 'investment.analyze_bond_risk',
+      description: '对给定债券基金数据运行压力测试。只读。',
+      schema: z.object({ fund: snapshot.default({}), scenario: snapshot.default({}) }).strict(),
+      execute: (_ctx, p) => domesticInvestment.service.analyzeBondRisk(p),
+    });
+    engine.register({
+      name: 'investment.analyze_market',
+      description: '分析给定市场快照的趋势和风险状态。只读。',
+      schema: z.object({ market: snapshot }).strict(),
+      execute: (_ctx, p) => domesticInvestment.service.analyzeMarket(p.market),
+    });
+    engine.register({
+      name: 'investment.research_stock',
+      description: '对给定股票候选进行长期质量、估值和治理研究。只读。',
+      schema: z.object({ stock: snapshot }).strict(),
+      execute: (_ctx, p) => domesticInvestment.service.researchStock(p.stock),
+    });
+    engine.register({
+      name: 'investment.recommend_actions',
+      description: '根据当前账号持仓和市场快照生成可解释的研究建议。只读，不提交订单。',
+      schema: z.object({ riskProfile: risk, domesticMarket: snapshot.optional(), internationalMarket: snapshot.optional(), asOf: z.string().max(80).optional() }).strict(),
+      execute: async (ctx, p) => {
+        const portfolio = await investment(ctx, '/api/investment/holdings');
+        return domesticInvestment.service.recommendActions({
+          portfolio,
+          domestic_market: p.domesticMarket,
+          international_market: p.internationalMarket,
+          risk_profile: p.riskProfile,
+          as_of: p.asOf,
+        });
+      },
+    });
+    engine.register({
+      name: 'investment.portfolio_plan',
+      description: '根据当前账号持仓生成风险预算和再平衡方案。只读，不提交订单。',
+      schema: z.object({ riskProfile: risk, domesticMarket: snapshot.optional(), internationalMarket: snapshot.optional(), asOf: z.string().max(80).optional() }).strict(),
+      execute: async (ctx, p) => {
+        const portfolio = await investment(ctx, '/api/investment/holdings');
+        return domesticInvestment.service.portfolioPlan({
+          portfolio,
+          domestic_market: p.domesticMarket,
+          international_market: p.internationalMarket,
+          risk_profile: p.riskProfile,
+          as_of: p.asOf,
+        });
+      },
+    });
+    engine.register({
+      name: 'investment.holdings',
+      description: '读取当前账号持仓、分类和数据时间。只读。',
+      schema: empty,
+      execute: (ctx) => investment(ctx, '/api/investment/holdings'),
+    });
+    engine.register({
+      name: 'investment.transactions',
+      description: '读取当前账号自然语言记账草稿和确认状态。只读。',
+      schema: empty,
+      execute: (ctx) => investment(ctx, '/api/investment/transactions'),
+    });
+    engine.register({
+      name: 'investment.transaction_preview',
+      description: '把“我买了/卖了/定投”等自然语言解析为当前账号的持仓草稿，尚未写入持仓。',
+      schema: z.object({ text: z.string().trim().min(1).max(4000), source: z.enum(['chat', 'alipay_import', 'manual']).default('chat') }).strict(),
+      execute: (ctx, p) => investment(ctx, '/api/investment/transactions/preview', p),
+    });
+    const transactionAddress = z.object({ transactionId: uuid }).strict();
+    engine.register({
+      name: 'investment.transaction_confirm',
+      description: '确认指定的持仓记账草稿并写入账号持仓。先展示精确资产、数量和金额，由用户确认后执行。',
+      schema: transactionAddress,
+      prepare: async (ctx, p) => {
+        const list = await investment(ctx, '/api/investment/transactions');
+        const transaction = list.transactions.find((item) => item.id === p.transactionId);
+        if (!transaction || transaction.status !== 'draft') throw fail(409, '交易草稿不存在或已处理，请重新读取。');
+        return {
+          preview: {
+            title: '确认持仓记账',
+            text: `${transaction.type} ${transaction.name} · ${transaction.quantity ?? '—'} 份 · ${transaction.amount ?? '—'} 元`,
+            transaction,
+          },
+          private: { transactionId: transaction.id, updatedAt: transaction.updated_at },
+        };
+      },
+      validate: async (ctx, p) => {
+        const list = await investment(ctx, '/api/investment/transactions');
+        const transaction = list.transactions.find((item) => item.id === p.transactionId);
+        if (!transaction || transaction.status !== 'draft' || transaction.updated_at !== p.updatedAt)
+          throw fail(409, '交易草稿已变化，请重新预览。');
+      },
+      commit: (ctx, p) => investment(ctx, `/api/investment/transactions/${p.transactionId}/commit`, {}, 'POST'),
+    });
+    engine.register({
+      name: 'investment.quotes_refresh',
+      description: '按允许的数据源刷新当前账号持仓行情并返回最新价格。只更新行情字段，不提交订单。',
+      schema: empty,
+      execute: (ctx) => investment(ctx, '/api/investment/holdings/refresh', {}, 'POST'),
+    });
+    engine.register({
+      name: 'investment.recommendations',
+      description: '读取当前账号最近一次半小时建议快照。只读。',
+      schema: empty,
+      execute: (ctx) => investment(ctx, '/api/investment/recommendations'),
+    });
+    engine.register({
+      name: 'investment.schedules',
+      description: '读取当前账号行情和建议的定时任务设置。只读。',
+      schema: empty,
+      execute: (ctx) => investment(ctx, '/api/investment/schedules'),
+    });
+    const scheduleInput = z.object({ kind: z.enum(['quotes', 'recommendations']), intervalMinutes: z.number().int().min(30).max(1440).default(30), enabled: z.boolean().default(true) }).strict();
+    engine.register({
+      name: 'investment.schedule_set',
+      description: '设置行情刷新或建议生成间隔，默认每30分钟。先展示目标和间隔，由用户确认后保存。',
+      schema: scheduleInput,
+      prepare: (ctx, p) => ({
+        preview: { title: '设置投资定时任务', text: `${p.kind === 'quotes' ? '行情刷新' : 'AI建议'} · 每${p.intervalMinutes}分钟 · ${p.enabled ? '启用' : '停用'}` },
+        private: p,
+      }),
+      commit: (ctx, p) => investment(ctx, '/api/investment/schedules', { kind: p.kind, interval_minutes: p.intervalMinutes, enabled: p.enabled }),
+    });
+  }
   engine.register({
     name: 'learning.generate',
     description:
