@@ -101,22 +101,20 @@ await initial(
 const extensionsPatch = resolve(root, 'astral-extensions.patch.yml');
 await writeFile(
   extensionsPatch,
-  `- insert:\n    - id: astral-extensions\n      name: ${JSON.stringify(resolve(here, '../../integrations/dsh-app-tools/extensions.mjs'))}\n`,
+  `- insert:\n    - id: astral-extensions\n      name: ${JSON.stringify(resolve(here, '../../integrations/dsh-app-tools/extensions.mjs'))}\n    - id: astral-domestic-investment\n      name: ${JSON.stringify(resolve(here, '../../integrations/dsh-domestic-investment/index.mjs'))}\n      config:\n        workspaceRoot: /workspace\n`,
   { mode: 0o600 },
 );
 // Credentials remain inside this server container, and are not used as browser
 // or Remote authentication. The native Messages adapter owns model traffic.
-const environment = createLaunchEnvironmentSnapshot([
-  {
-    source: 'process',
-    values: {
-      DSH_HOME: root,
-      DSH_TELEMETRY_DISABLED: '1',
-      DSH_PERMISSION_MODE: 'workspace-write',
-      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
-    },
-  },
-]);
+const launchValues = {
+  DSH_HOME: root,
+  DSH_TELEMETRY_DISABLED: '1',
+  DSH_PERMISSION_MODE: 'workspace-write',
+  DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
+};
+if (process.env.TUSHARE_TOKEN) launchValues.TUSHARE_TOKEN = process.env.TUSHARE_TOKEN;
+if (process.env.INVESTMENT_LIVE_DATA === '0') launchValues.INVESTMENT_LIVE_DATA = '0';
+const environment = createLaunchEnvironmentSnapshot([{ source: 'process', values: launchValues }]);
 let runtime,
   host,
   relay,

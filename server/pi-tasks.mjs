@@ -70,6 +70,13 @@ export function createPiTasks(
   const decode = (row) => {
     if (!row) return null;
     const task = { ...JSON.parse(row.payload), ...JSON.parse(row.state) };
+    // Keep task records written by older releases compatible with current
+    // clients. These fields are display/runtime state and can safely default.
+    if (!Array.isArray(task.tools)) task.tools = [];
+    if (!Array.isArray(task.timeline)) task.timeline = [];
+    if (!Array.isArray(task.uiRequests)) task.uiRequests = [];
+    if (typeof task.output !== 'string') task.output = '';
+    if (typeof task.thinking !== 'string') task.thinking = '';
     const expectedRuntime = serverPiRuntime(row.owner, task.conversationId, task.projectId);
     task.runtime = bindings.assert(
       row.owner,

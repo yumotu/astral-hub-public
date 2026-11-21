@@ -49,6 +49,26 @@ export type PiTask = {
   longGoal?: import('./LongGoalCard').LongGoalState | null;
   schedule?: { jobId: string; jobName: string; scheduledAt: string; timeZone: string };
 };
+
+/**
+ * Older task snapshots predate some of the live activity fields. Keep those
+ * snapshots readable while the task stream catches up with the server.
+ */
+export function normalizePiTask(task: PiTask): PiTask {
+  return {
+    ...task,
+    output: typeof task.output === 'string' ? task.output : '',
+    thinking: typeof task.thinking === 'string' ? task.thinking : '',
+    tools: Array.isArray(task.tools) ? task.tools : [],
+    timeline: Array.isArray(task.timeline) ? task.timeline : [],
+    uiRequests: Array.isArray(task.uiRequests) ? task.uiRequests : [],
+  };
+}
+
+function normalizeTasks(tasks: PiTask[]) {
+  return tasks.map(normalizePiTask);
+}
+
 export const taskPending = (t: PiTask) =>
   ['queued', 'running', 'delivering', 'accepted', 'applied', 'stopping'].includes(t.status);
 export const taskLabel = (t: PiTask) =>
@@ -65,6 +85,7 @@ export const taskLabel = (t: PiTask) =>
     interrupted: '待核对',
   })[t.status] || t.status;
 export function reduceTaskEvent(task: PiTask, e: Record<string, unknown>): PiTask {
+  task = normalizePiTask(task);
   task = { ...task, lastActivityAt: new Date().toISOString() };
   if (e.type === 'long_goal')
     return { ...task, longGoal: e.goal as import('./LongGoalCard').LongGoalState | null };
@@ -195,7 +216,7 @@ export function usePiTasks(settings: Settings, enabled: boolean): TaskStream {
 function useTaskStream(settings: Settings, enabled: boolean): TaskStream {
   type Snapshot = { tasks: PiTask[]; cursor: number; at: number };
   const [tasks, setTasks] = useState<PiTask[]>(
-    () => peekAPI<Snapshot>(settings, '/@task-stream')?.tasks || [],
+    () => normalizeTasks(peekAPI<Snapshot>(settings, '/@task-stream')?.tasks || []),
   );
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'reconnecting'>(
     'connecting',
@@ -210,7 +231,7 @@ function useTaskStream(settings: Settings, enabled: boolean): TaskStream {
     const controller = new AbortController();
     const signal = controller.signal;
     let live = true;
-    setTasks(peekAPI<Snapshot>(settings, '/@task-stream')?.tasks || []);
+    setTasks(normalizeTasks(peekAPI<Snapshot>(settings, '/@task-stream')?.tasks || []));
     const remember = (tasks: PiTask[], cursor: number) => {
       const recent = tasks.filter((t) => taskPending(t) || tasks.slice(-60).includes(t));
       setAPICache(settings, '/@task-stream', { tasks: recent, cursor, at: Date.now() });
@@ -233,7 +254,7 @@ function useTaskStream(settings: Settings, enabled: boolean): TaskStream {
       if (!live) return;
       const cached = peekAPI<Snapshot>(settings, '/@task-stream');
       if (cached) {
-        setTasks(cached.tasks);
+        setTasks(normalizeTasks(cached.tasks));
         if (Date.now() - cached.at < 30000) {
           cursor = cached.cursor;
           initialized = true;
@@ -244,7 +265,7 @@ function useTaskStream(settings: Settings, enabled: boolean): TaskStream {
           if (!initialized) {
             const snapshot = await get('');
             if (!live) break;
-            setTasks(snapshot.tasks);
+            setTasks(normalizeTasks(snapshot.tasks));
             cursor = snapshot.cursor;
             remember(snapshot.tasks, cursor);
             initialized = true;
@@ -266,7 +287,7 @@ function useTaskStream(settings: Settings, enabled: boolean): TaskStream {
           setTasks((current) => {
             const map = new Map(current.map((t) => [t.id, t]));
             for (const item of events) {
-              if (item.event.type === 'task') map.set(item.taskId, item.event.task);
+              if (item.event.type === 'task') map.set(item.taskId, normalizePiTask(item.event.task));
               else {
                 const task = map.get(item.taskId);
                 if (task) map.set(item.taskId, reduceTaskEvent(task, item.event));

@@ -64,6 +64,7 @@ export function MailAgent({
   const task =
     tasks.find((t) => t.id === context.taskId) ||
     (localTask?.id === context.taskId ? localTask : null);
+  const taskTools = task && Array.isArray(task.tools) ? task.tools : [];
   const active = !!task && taskPending(task);
   useEffect(() => {
     if (open && suggestion && !active) setInstruction(suggestion);
@@ -220,12 +221,12 @@ export function MailAgent({
                 {active && <LoaderCircle className="spin" size={14} />}{' '}
                 {task.phase || taskLabel(task)}
               </p>
-              {active && !task.output && !task.tools.length && (
+              {active && !task.output && !taskTools.length && (
                 <p className="mail-agent-live-hint">已开始读取邮件，首个结果返回后会显示处理进度。</p>
               )}
-              {!!task.tools.length && (
+              {!!taskTools.length && (
                 <ul className="mail-agent-activity" aria-label="邮件 Agent 执行进度">
-                  {task.tools.slice(-6).map((tool) => (
+                  {taskTools.slice(-6).map((tool) => (
                     <li key={tool.id}>
                       <span>
                         {tool.status === 'running' && <LoaderCircle className="spin" size={13} />}{' '}
