@@ -1,0 +1,1581 @@
+.mail-schedule-main {
+  max-width: 1480px;
+  padding-top: 30px !important;
+}
+.mail-schedule-page {
+  --mail-blue: #2563eb;
+  --mail-blue-soft: #eff6ff;
+  --mail-red: #dc2626;
+  --mail-amber: #b7791f;
+  --mail-green: #16815f;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 8px 56px;
+}
+.mail-schedule-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  margin-bottom: 24px;
+}
+.mail-schedule-eyebrow,
+.mail-schedule-section-kicker {
+  color: var(--mail-blue);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.mail-schedule-heading h1 {
+  margin: 10px 0 8px;
+  color: var(--text);
+  font-size: clamp(27px, 3.2vw, 43px);
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+}
+.mail-schedule-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.mail-schedule-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.mail-schedule-heading-actions button,
+.mail-schedule-panel-heading .text-link,
+.mail-schedule-demo-banner .text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.mail-schedule-demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  margin-bottom: 22px;
+  padding: 12px 15px;
+  border: 1px solid color-mix(in srgb, var(--mail-blue) 25%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mail-blue-soft) 75%, var(--surface));
+  color: var(--muted);
+  font-size: 12px;
+}
+.mail-schedule-demo-banner strong {
+  color: var(--mail-blue);
+}
+.mail-schedule-demo-banner .text-link {
+  margin-left: auto;
+}
+.mail-schedule-demo-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--mail-blue);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mail-blue) 12%, transparent);
+}
+.workbench-snapshot-panel {
+  margin-bottom: 18px;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--mail-blue) 24%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mail-blue) 4%, var(--surface));
+}
+.workbench-snapshot-heading,
+.workbench-snapshot-heading > div,
+.workbench-snapshot-events,
+.workbench-snapshot-metrics {
+  display: flex;
+  align-items: center;
+}
+.workbench-snapshot-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+.workbench-snapshot-heading > div {
+  gap: 9px;
+  min-width: 0;
+}
+.workbench-snapshot-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-snapshot-kicker {
+  color: var(--mail-blue);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.workbench-snapshot-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--mail-blue) 24%, var(--border));
+  border-radius: 6px;
+  color: var(--mail-blue);
+  font-size: 9px;
+}
+.workbench-snapshot-metrics {
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+.workbench-snapshot-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.workbench-snapshot-metrics b {
+  color: var(--text);
+  font-size: 16px;
+}
+.workbench-snapshot-metrics small,
+.workbench-snapshot-events > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-snapshot-events {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.workbench-snapshot-events code {
+  max-width: 240px;
+  overflow: hidden;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--surface-active);
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-dph-sync-panel {
+  margin-bottom: 18px;
+  padding: 14px 15px;
+  border: 1px solid color-mix(in srgb, var(--mail-green) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mail-green) 4%, var(--surface));
+}
+.workbench-dph-sync-heading,
+.workbench-dph-sync-body,
+.workbench-dph-sync-body > div,
+.workbench-dph-sync-actions {
+  display: flex;
+  align-items: center;
+}
+.workbench-dph-sync-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+.workbench-dph-sync-heading > div {
+  display: grid;
+  gap: 4px;
+}
+.workbench-dph-sync-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-dph-sync-body {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.workbench-dph-sync-body > div {
+  min-width: 0;
+  gap: 9px;
+}
+.workbench-dph-sync-body > div > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.workbench-dph-sync-body strong,
+.workbench-dph-sync-body small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-dph-sync-body strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.workbench-dph-sync-body small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-dph-sync-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.workbench-dph-sync-actions button {
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.workbench-dph-sync-panel > p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-tool-router-panel {
+  margin-bottom: 18px;
+  padding: 14px 15px;
+  border: 1px solid color-mix(in srgb, #8b5cf6 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #8b5cf6 4%, var(--surface));
+}
+.workbench-tool-router-heading,
+.workbench-tool-router-meta,
+.workbench-tool-router-actions,
+.workbench-tool-router-results {
+  display: flex;
+  align-items: center;
+}
+.workbench-tool-router-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+.workbench-tool-router-heading > div {
+  display: grid;
+  gap: 4px;
+}
+.workbench-tool-router-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-tool-router-meta {
+  flex-wrap: wrap;
+  gap: 7px 16px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-tool-router-meta b {
+  color: var(--text);
+}
+.workbench-tool-router-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.workbench-tool-router-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-active) 55%, var(--surface));
+}
+.workbench-tool-router-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.workbench-tool-router-card header strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.workbench-tool-router-card header small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.workbench-tool-router-card > div {
+  display: grid;
+  gap: 5px;
+}
+.workbench-tool-router-card button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: left;
+}
+.workbench-tool-router-card button:hover,
+.workbench-tool-router-card button.active {
+  border-color: color-mix(in srgb, #8b5cf6 40%, var(--border));
+  background: color-mix(in srgb, #8b5cf6 10%, var(--surface));
+  color: var(--text);
+}
+.workbench-tool-router-card button small {
+  flex: 0 0 auto;
+  color: #8b5cf6;
+  font-size: 9px;
+  font-weight: 700;
+}
+.workbench-tool-router-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 11px;
+}
+.workbench-tool-router-actions button {
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.workbench-tool-router-actions span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-tool-router-results {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.workbench-tool-router-results > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-tool-router-results code {
+  max-width: 260px;
+  overflow: hidden;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--surface-active);
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-schedule-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.mail-schedule-tabs button {
+  position: relative;
+  padding: 11px 15px 13px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mail-schedule-tabs button::after {
+  position: absolute;
+  right: 14px;
+  bottom: -1px;
+  left: 14px;
+  height: 2px;
+  background: transparent;
+  content: '';
+}
+.mail-schedule-tabs button:hover,
+.mail-schedule-tabs button.active {
+  color: var(--text);
+}
+.mail-schedule-tabs button.active::after {
+  background: var(--mail-blue);
+}
+.mail-schedule-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.mail-schedule-metrics article {
+  min-width: 0;
+  padding: 17px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px var(--shadow);
+}
+.mail-schedule-metrics span,
+.mail-schedule-metrics small {
+  display: block;
+  color: var(--muted);
+}
+.mail-schedule-metrics span {
+  font-size: 12px;
+}
+.mail-schedule-metrics strong {
+  display: block;
+  margin: 6px 0 3px;
+  color: var(--text);
+  font-size: 28px;
+  letter-spacing: -0.04em;
+}
+.mail-schedule-metrics small {
+  font-size: 11px;
+}
+.mail-schedule-metrics .is-danger strong,
+.mail-schedule-metrics .is-danger small {
+  color: var(--mail-red);
+}
+.mail-schedule-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.mail-schedule-panel {
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 5px 18px var(--shadow);
+}
+.mail-schedule-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.mail-schedule-panel-heading h2 {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+.mail-schedule-date-label,
+.mail-schedule-inbox-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.mail-schedule-timeline {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 4px 0 6px;
+}
+.mail-schedule-timeline::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 77px;
+  width: 1px;
+  background: var(--border);
+  content: '';
+}
+.mail-schedule-timeline-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 58px 38px minmax(0, 1fr);
+  align-items: center;
+  min-height: 56px;
+}
+.mail-schedule-timeline-row time {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.mail-schedule-timeline-marker {
+  z-index: 1;
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  margin: 0 auto;
+  border: 2px solid var(--mail-blue);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--mail-blue);
+}
+.mail-schedule-timeline-marker > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.mail-schedule-timeline-marker.done {
+  border-color: var(--mail-green);
+  background: var(--mail-green);
+  color: #fff;
+}
+.mail-schedule-timeline-event {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-align: left;
+  transition: background 160ms ease;
+}
+.mail-schedule-timeline-event:not(:disabled):hover {
+  background: var(--surface-active);
+}
+.mail-schedule-timeline-event strong,
+.mail-schedule-timeline-event small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-schedule-timeline-event strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.mail-schedule-timeline-event small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mail-schedule-current-line {
+  position: absolute;
+  right: 0;
+  bottom: -3px;
+  left: 58px;
+  height: 1px;
+  background: color-mix(in srgb, var(--mail-red) 70%, transparent);
+  pointer-events: none;
+}
+.mail-schedule-risk-panel > .mail-schedule-panel-heading > svg {
+  color: var(--mail-amber);
+}
+.mail-schedule-risk-list {
+  display: grid;
+  gap: 3px;
+}
+.mail-schedule-risk-list button {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.mail-schedule-risk-list button:last-child {
+  border-bottom: 0;
+}
+.mail-schedule-risk-list button:hover {
+  background: var(--surface-active);
+}
+.mail-schedule-risk-list button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.mail-schedule-risk-list strong,
+.mail-schedule-risk-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-schedule-risk-list strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.mail-schedule-risk-list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.mail-schedule-risk-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mail-blue);
+}
+.mail-schedule-risk-dot.pending {
+  background: var(--mail-amber);
+}
+.mail-schedule-risk-dot.overdue {
+  background: var(--mail-red);
+}
+.mail-schedule-risk-dot.progress {
+  background: var(--mail-blue);
+}
+.mail-schedule-confidence,
+.mail-schedule-inbox-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 15px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--mail-blue-soft);
+  color: var(--mail-blue);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.mail-schedule-upcoming-list,
+.mail-schedule-mail-list,
+.mail-schedule-task-list {
+  display: grid;
+}
+.mail-schedule-upcoming-row,
+.mail-schedule-mail-row,
+.mail-schedule-task-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  transition: background 160ms ease;
+}
+.mail-schedule-upcoming-row:hover,
+.mail-schedule-mail-row:hover,
+.mail-schedule-task-row:hover {
+  background: var(--surface-active);
+}
+.mail-schedule-upcoming-row:last-child,
+.mail-schedule-mail-row:last-child,
+.mail-schedule-task-row:last-child {
+  border-bottom: 0;
+}
+.mail-schedule-upcoming-date {
+  display: grid;
+  width: 64px;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.mail-schedule-upcoming-date b,
+.mail-schedule-upcoming-date small,
+.mail-schedule-task-due b,
+.mail-schedule-task-due small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mail-schedule-upcoming-date b,
+.mail-schedule-task-due b {
+  color: var(--text);
+  font-size: 12px;
+}
+.mail-schedule-upcoming-main,
+.mail-schedule-task-main,
+.mail-schedule-mail-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+.mail-schedule-upcoming-main strong,
+.mail-schedule-upcoming-main small,
+.mail-schedule-task-main strong,
+.mail-schedule-task-main small,
+.mail-schedule-mail-main strong,
+.mail-schedule-mail-main small,
+.mail-schedule-mail-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-schedule-upcoming-main strong,
+.mail-schedule-task-main strong,
+.mail-schedule-mail-main strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.mail-schedule-upcoming-main small,
+.mail-schedule-task-main small,
+.mail-schedule-mail-main small,
+.mail-schedule-mail-main span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mail-schedule-upcoming-row > svg,
+.mail-schedule-task-row > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.mail-schedule-mail-row {
+  align-items: flex-start;
+}
+.mail-schedule-mail-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--mail-blue-soft);
+  color: var(--mail-blue);
+}
+.mail-schedule-reply-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--mail-red) 10%, transparent);
+  color: var(--mail-red);
+  font-size: 10px;
+  font-weight: 600;
+}
+.mail-schedule-mail-open {
+  flex: 0 0 auto;
+  color: var(--mail-blue);
+  font-size: 11px;
+}
+.mail-schedule-all-tasks,
+.mail-schedule-inbox {
+  min-height: 520px;
+}
+.mail-schedule-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: min(320px, 100%);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+}
+.mail-schedule-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: 0;
+}
+.mail-schedule-task-row {
+  min-height: 67px;
+}
+.mail-schedule-task-check {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #fff;
+}
+.mail-schedule-task-check.checked {
+  border-color: var(--mail-green);
+  background: var(--mail-green);
+}
+.mail-schedule-task-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+  text-align: left;
+}
+.mail-schedule-task-due {
+  display: grid;
+  width: 58px;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.mail-schedule-empty {
+  padding: 45px 0;
+  color: var(--muted);
+  text-align: center;
+}
+.mail-schedule-inline-notice {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 70;
+  max-width: min(420px, calc(100vw - 44px));
+  padding: 11px 15px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+}
+.mail-schedule-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: #0f172a55;
+}
+.mail-schedule-task-drawer {
+  width: min(460px, 100%);
+  height: 100%;
+  overflow: auto;
+  padding: 25px;
+  background: var(--surface);
+  box-shadow: -10px 0 30px #00000022;
+}
+.mail-schedule-task-drawer header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.mail-schedule-task-drawer h2 {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.35;
+}
+.mail-schedule-task-drawer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.mail-schedule-task-drawer-meta > span:not(.status-badge) {
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--surface-active);
+}
+.mail-schedule-task-drawer dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.mail-schedule-task-drawer dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.mail-schedule-task-drawer dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.mail-schedule-task-drawer dd {
+  max-width: 63%;
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  text-align: right;
+}
+.mail-schedule-task-drawer-source {
+  margin-top: 22px;
+  padding: 14px;
+  border-left: 3px solid var(--mail-blue);
+  background: var(--surface-active);
+}
+.mail-schedule-task-drawer-source strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.mail-schedule-task-drawer-source p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.mail-schedule-task-drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 23px;
+}
+.mail-schedule-task-drawer-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.workbench-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.workbench-overview-grid > .mail-schedule-panel {
+  margin-bottom: 16px;
+}
+.workbench-execution-panel > .mail-schedule-panel-heading > svg,
+.workbench-long-panel > .mail-schedule-panel-heading > svg,
+.workbench-schedule-panel > .mail-schedule-panel-heading > div + .text-link,
+.workbench-finance-panel > .mail-schedule-panel-heading > svg {
+  color: var(--mail-blue);
+}
+.workbench-panel-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+}
+.workbench-conversation-list,
+.workbench-long-list,
+.workbench-schedule-list {
+  display: grid;
+  gap: 2px;
+}
+.workbench-conversation-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.workbench-conversation-row:hover,
+.workbench-schedule-row:hover,
+.workbench-finance-holdings button:hover {
+  background: var(--surface-active);
+}
+.workbench-engine-mark {
+  display: grid;
+  width: 34px;
+  height: 26px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--surface-active);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+.workbench-engine-mark.dph {
+  background: color-mix(in srgb, var(--mail-blue) 14%, var(--surface));
+  color: var(--mail-blue);
+}
+.workbench-engine-mark.pi {
+  background: color-mix(in srgb, var(--mail-green) 14%, var(--surface));
+  color: var(--mail-green);
+}
+.workbench-conversation-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.workbench-conversation-main strong,
+.workbench-conversation-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-conversation-main strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-conversation-main small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-progress-track,
+.workbench-long-progress > span {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--surface-active);
+}
+.workbench-progress-track i,
+.workbench-long-progress > span i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--mail-blue);
+}
+.workbench-run-status {
+  white-space: nowrap;
+  font-size: 10px;
+}
+.workbench-run-status.running {
+  color: var(--mail-blue);
+}
+.workbench-run-status.waiting {
+  color: var(--mail-amber);
+}
+.workbench-run-status.done {
+  color: var(--mail-green);
+}
+.workbench-run-status.paused {
+  color: var(--muted);
+}
+.workbench-panel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 15px;
+}
+.workbench-long-card {
+  padding: 13px 4px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.workbench-long-card:last-child {
+  border-bottom: 0;
+}
+.workbench-long-card-heading {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+}
+.workbench-long-card-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.workbench-long-card-heading strong,
+.workbench-long-card-heading small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-long-card-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-long-card-heading small,
+.workbench-panel-description {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.workbench-long-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px 43px;
+}
+.workbench-long-progress > span {
+  flex: 1;
+}
+.workbench-long-progress > span i {
+  background: var(--mail-green);
+}
+.workbench-long-progress b {
+  width: 30px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+.workbench-long-meta,
+.workbench-market-areas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-long-meta span,
+.workbench-market-areas span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.workbench-long-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 11px 0 10px 43px;
+}
+.workbench-long-steps span {
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--surface-active);
+  color: var(--muted);
+  font-size: 9px;
+}
+.workbench-long-steps span.done {
+  background: color-mix(in srgb, var(--mail-green) 12%, var(--surface));
+  color: var(--mail-green);
+}
+.workbench-long-steps span.current {
+  background: color-mix(in srgb, var(--mail-blue) 12%, var(--surface));
+  color: var(--mail-blue);
+}
+.workbench-small-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.workbench-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.workbench-schedule-panel {
+  min-width: 0;
+}
+.workbench-panel-description {
+  margin: -6px 0 12px;
+}
+.workbench-schedule-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto 30px;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.workbench-schedule-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--surface-active);
+  color: var(--muted);
+}
+.workbench-schedule-icon.active {
+  background: color-mix(in srgb, var(--mail-blue) 12%, var(--surface));
+  color: var(--mail-blue);
+}
+.workbench-schedule-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.workbench-schedule-main strong,
+.workbench-schedule-main small,
+.workbench-schedule-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-schedule-main strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.workbench-schedule-main small,
+.workbench-schedule-main span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-schedule-main span b {
+  color: var(--text);
+  font-weight: 600;
+}
+.workbench-schedule-conversation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-schedule-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.workbench-schedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.workbench-schedule-toggle.on {
+  border-color: color-mix(in srgb, var(--mail-green) 42%, var(--border));
+  color: var(--mail-green);
+}
+.workbench-finance-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.workbench-finance-summary div {
+  display: grid;
+  gap: 4px;
+}
+.workbench-finance-summary span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workbench-finance-summary strong {
+  color: var(--text);
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+.workbench-finance-summary strong.positive,
+.workbench-finance-holdings b.positive,
+.workbench-market-areas b {
+  color: var(--mail-green);
+}
+.workbench-finance-summary strong.negative,
+.workbench-finance-holdings b.negative {
+  color: var(--mail-red);
+}
+.workbench-allocation-bar {
+  display: flex;
+  height: 7px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border-radius: 9px;
+  background: var(--surface-active);
+}
+.workbench-allocation-bar span { min-width: 2px; }
+.workbench-allocation-bar .allocation-fund { background: #2f6fed; }
+.workbench-allocation-bar .allocation-domestic_equity { background: #22a27f; }
+.workbench-allocation-bar .allocation-gold { background: #d59b2e; }
+.workbench-allocation-bar .allocation-cash_management { background: #6f7d91; }
+.workbench-allocation-bar .allocation-cash { background: #b3bac4; }
+.workbench-finance-holdings {
+  display: grid;
+  margin-bottom: 12px;
+}
+.workbench-finance-holdings button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.workbench-finance-holdings button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.workbench-finance-holdings strong,
+.workbench-finance-holdings small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-finance-holdings strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.workbench-finance-holdings small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.workbench-finance-holdings b {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.workbench-market-areas {
+  margin: 12px 0;
+}
+.workbench-market-areas i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mail-blue);
+}
+.workbench-market-areas i.risk_on { background: var(--mail-green); }
+.workbench-market-areas i.mixed { background: var(--mail-amber); }
+.workbench-create-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: #0f172a66;
+}
+.workbench-create-dialog {
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px #00000030;
+}
+.workbench-create-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.workbench-create-dialog h2 {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 22px;
+}
+.workbench-create-help {
+  margin: 14px 0 18px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--mail-blue);
+  background: var(--surface-active);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.workbench-create-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 15px;
+}
+.workbench-create-field > span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.workbench-create-field input,
+.workbench-create-field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  color: var(--text);
+  font-size: 12px;
+  resize: vertical;
+}
+.workbench-target-options,
+.workbench-choice-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.workbench-target-options button,
+.workbench-choice-row button {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: left;
+}
+.workbench-target-options button:hover,
+.workbench-target-options button.active,
+.workbench-choice-row button:hover,
+.workbench-choice-row button.active {
+  border-color: var(--mail-blue);
+  background: color-mix(in srgb, var(--mail-blue) 8%, var(--surface));
+  color: var(--mail-blue);
+}
+.workbench-target-options button > span:last-child,
+.workbench-choice-row button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.workbench-target-options strong,
+.workbench-target-options small,
+.workbench-choice-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-target-options strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.workbench-target-options small,
+.workbench-choice-row small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.workbench-choice-row button {
+  align-items: center;
+  color: var(--text);
+  font-size: 11px;
+}
+.workbench-selected-target {
+  margin: 8px 0 0;
+  color: var(--mail-blue);
+  font-size: 10px;
+}
+.workbench-create-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 22px;
+}
+.startup-page-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.startup-page-options button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.startup-page-options button:hover,
+.startup-page-options button.active {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  color: var(--accent);
+}
+.startup-page-options button span {
+  display: grid;
+  gap: 3px;
+}
+.startup-page-options strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.startup-page-options small {
+  color: var(--muted);
+  font-size: 10px;
+}
+@media (max-width: 800px) {
+  .mail-schedule-main {
+    padding: 24px 18px 0 !important;
+  }
+  .mail-schedule-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 17px;
+  }
+  .mail-schedule-heading-actions {
+    justify-content: flex-start;
+  }
+  .mail-schedule-demo-banner {
+    flex-wrap: wrap;
+  }
+  .mail-schedule-demo-banner .text-link {
+    width: 100%;
+    margin-left: 17px;
+  }
+  .mail-schedule-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workbench-overview-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .mail-schedule-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  .mail-schedule-panel {
+    padding: 17px;
+  }
+  .mail-schedule-upcoming-row,
+  .mail-schedule-task-row {
+    gap: 8px;
+  }
+  .mail-schedule-upcoming-row .status-badge,
+  .mail-schedule-task-row .status-badge {
+    display: none;
+  }
+  .mail-schedule-search {
+    width: 100%;
+  }
+  .mail-schedule-all-tasks .mail-schedule-panel-heading {
+    display: grid;
+  }
+  .workbench-schedule-row {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+  }
+  .workbench-schedule-row > .icon-btn {
+    display: none;
+  }
+  .workbench-schedule-toggle {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+  .startup-page-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mail-schedule-live-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 16px 0;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mail-schedule-live-banner strong { color: var(--accent); }
+.mail-schedule-live-banner .text-link { margin-left: auto; }
+.mail-schedule-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #2b9a6b; box-shadow: 0 0 0 4px #2b9a6b1f; }
+@media (max-width: 430px) {
+  .mail-schedule-heading h1 {
+    font-size: 29px;
+  }
+  .mail-schedule-heading-actions button {
+    flex: 1;
+    justify-content: center;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+  .workbench-snapshot-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workbench-dph-sync-body {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workbench-tool-router-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workbench-tool-router-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mail-schedule-tabs button {
+    flex: 1;
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+  .mail-schedule-timeline-row {
+    grid-template-columns: 48px 30px minmax(0, 1fr);
+  }
+  .mail-schedule-timeline::before {
+    left: 63px;
+  }
+  .mail-schedule-current-line {
+    left: 48px;
+  }
+  .mail-schedule-upcoming-date {
+    width: 51px;
+  }
+  .mail-schedule-mail-row {
+    align-items: flex-start;
+  }
+  .mail-schedule-mail-row .mail-schedule-reply-badge {
+    display: none;
+  }
+  .workbench-conversation-row {
+    grid-template-columns: 34px minmax(0, 1fr) 16px;
+  }
+  .workbench-conversation-row > .workbench-run-status {
+    display: none;
+  }
+  .workbench-long-card-heading {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+  .workbench-long-card-heading > .workbench-run-status {
+    grid-column: 2;
+  }
+  .workbench-target-options,
+  .workbench-choice-row {
+    grid-template-columns: 1fr;
+  }
+  .workbench-create-dialog {
+    padding: 18px;
+  }
+  .workbench-tool-router-grid {
+    grid-template-columns: 1fr;
+  }
+}

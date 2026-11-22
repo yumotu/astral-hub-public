@@ -1,0 +1,12 @@
+{
+  "name": "astral-dsh-domestic-investment",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only domestic and international investment research tools for Astral DSH.",
+  "main": "index.mjs",
+  "exports": { ".": "./index.mjs", "./package.json": "./package.json" },
+  "files": ["index.mjs", "tool-definitions.mjs", "core", "dashboard", "data", "SKILL.md", "cordis.patch.yml"],
+  "peerDependencies": { "@deepseek-ai/dsh-tools": "0.2.2-rc.1" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

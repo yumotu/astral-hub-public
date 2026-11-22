@@ -74,6 +74,7 @@ try {
   assert.match(patch, /integrations\/dsh-app-tools\/index\.mjs/);
   const overlay = await readFile('/state/harness/astral-extensions.patch.yml', 'utf8');
   assert.match(overlay, /integrations\/dsh-app-tools\/extensions\.mjs/);
+  assert.match(overlay, /integrations\/dsh-domestic-investment\/index\.mjs/);
   console.log(
     JSON.stringify({
       check: 'DSH_PACKAGE_QA_PASSED',

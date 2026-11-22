@@ -11,10 +11,11 @@ import {
   Shield,
   Copy,
   Bot,
+  LayoutDashboard,
 } from 'lucide-react';
 import { testConfiguredAI } from './ai';
 import { validateSettings } from './data';
-import type { Settings, SyncStatus } from './types';
+import type { Settings, StartupPage, SyncStatus } from './types';
 import { useAssistantPreferences } from './assistant-preferences';
 import { NotificationSettings } from './NotificationCenter';
 import { AppUpdates } from './AppUpdates';
@@ -36,6 +37,8 @@ export function SettingsPage({
   notify,
   notifications,
   admin = false,
+  startupPage,
+  setStartupPage,
 }: {
   settings: Settings;
   save: (s: Settings) => void;
@@ -48,6 +51,8 @@ export function SettingsPage({
   notify: (s: string) => void;
   notifications: NotificationModel;
   admin?: boolean;
+  startupPage: StartupPage;
+  setStartupPage: (page: StartupPage) => void;
 }) {
   const [draft, setDraft] = useState(settings);
   const { showThinking, setShowThinking, messageMode, setMessageMode } = useAssistantPreferences();
@@ -133,6 +138,34 @@ export function SettingsPage({
       <div className="settings-layout">
         <div className="settings-main">
           <ThemeSettings />
+          <section className="surface" aria-label="启动页设置">
+            <div className="section-title">
+              <LayoutDashboard size={21} />
+              <h2>启动页</h2>
+              <span className="tag">当前设备</span>
+            </div>
+            <p className="field-help">打开星屿时，可以直接进入工作台查看邮箱事项，也可以回到上次的智能助手对话。</p>
+            <div className="startup-page-options" role="group" aria-label="启动页选择">
+              <button
+                type="button"
+                className={startupPage === 'workspace' ? 'active' : ''}
+                aria-pressed={startupPage === 'workspace'}
+                onClick={() => setStartupPage('workspace')}
+              >
+                <LayoutDashboard size={17} />
+                <span><strong>工作台</strong><small>今日待办、邮件事项与风险</small></span>
+              </button>
+              <button
+                type="button"
+                className={startupPage === 'conversation' ? 'active' : ''}
+                aria-pressed={startupPage === 'conversation'}
+                onClick={() => setStartupPage('conversation')}
+              >
+                <Bot size={17} />
+                <span><strong>上次对话</strong><small>继续上次智能助手上下文</small></span>
+              </button>
+            </div>
+          </section>
           <section className="surface" aria-label="智能助手设置">
             <div className="section-title">
               <Bot size={21} />

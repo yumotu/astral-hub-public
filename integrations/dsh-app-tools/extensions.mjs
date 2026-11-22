@@ -18,7 +18,7 @@ export const inject = [
 ];
 
 // Human-only command; its input (including MCP secrets) is never logged.
-export async function apply(ctx, config) {
+export async function apply(ctx, config = {}) {
   const mounted = new Map(),
     providers = new WeakSet(),
     invalidate = new Map(),

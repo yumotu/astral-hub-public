@@ -5,9 +5,12 @@ COPY deploy/dsh/package.json deploy/dsh/package-lock.json ./
 RUN npm ci --omit=dev --maxsockets=2 --no-audit --no-fund && npm cache clean --force
 COPY deploy/dsh ./
 COPY integrations/dsh-app-tools /opt/astral/integrations/dsh-app-tools
+COPY integrations/dsh-domestic-investment /opt/astral/integrations/dsh-domestic-investment
 COPY shared/dsh-extensions.mjs /opt/astral/shared/dsh-extensions.mjs
 # The plugin resolves the same fixed native SDK as the managed profile.
-RUN ln -s /opt/astral/deploy/dsh/node_modules /opt/astral/integrations/dsh-app-tools/node_modules
+RUN ln -s /opt/astral/deploy/dsh/node_modules /opt/astral/integrations/dsh-app-tools/node_modules \
+    && ln -s /opt/astral/deploy/dsh/node_modules /opt/astral/integrations/dsh-domestic-investment/node_modules \
+    && ln -s /opt/astral/deploy/dsh/node_modules /opt/astral/shared/node_modules
 # /tmp remains noexec. Load verified installed bindings instead of copying them
 # into that temporary filesystem and attempting dlopen from there.
 ENV NARB_DISABLE_NATIVE_CACHE=1 ASTRAL_DSH_WORKSPACE=/workspace

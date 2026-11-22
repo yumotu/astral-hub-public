@@ -32,6 +32,36 @@ test('a lagging client catches the current partial answer before completion with
   assert.ok(live.cursor > recovered.cursor);
 });
 
+test('legacy task snapshots without activity arrays remain readable', () => {
+  const db = new DatabaseSync(':memory:');
+  const tasks = createPiTasks(db, {
+    available: () => false,
+    completed: () => false,
+    run: async () => ({ output: '' }),
+    cancel: async () => {},
+  });
+  try {
+    const id = 'legacy-task';
+    tasks.add('alice', {
+      id,
+      conversationId: id,
+      input: '旧邮件任务',
+      mode: 'queue',
+      attachments: [],
+    });
+    db.prepare("UPDATE pi_tasks SET state=json_remove(state,'$.tools','$.timeline','$.uiRequests') WHERE id=?").run(id);
+    const task = tasks.get('alice', id);
+    assert.deepEqual(task.tools, []);
+    assert.deepEqual(task.timeline, []);
+    assert.deepEqual(task.uiRequests, []);
+    assert.equal(task.output, '');
+    assert.equal(task.thinking, '');
+  } finally {
+    tasks.close();
+    db.close();
+  }
+});
+
 test('snapshot catch-up keeps every changed conversation when more than 200 conversations have events', async (t) => {
   const db = new DatabaseSync(':memory:');
   const tasks = createPiTasks(db, {
