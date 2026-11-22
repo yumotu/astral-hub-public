@@ -1491,6 +1491,23 @@
     grid-template-columns: 1fr;
   }
 }
+
+.mail-schedule-live-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 16px 0;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mail-schedule-live-banner strong { color: var(--accent); }
+.mail-schedule-live-banner .text-link { margin-left: auto; }
+.mail-schedule-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #2b9a6b; box-shadow: 0 0 0 4px #2b9a6b1f; }
 @media (max-width: 430px) {
   .mail-schedule-heading h1 {
     font-size: 29px;

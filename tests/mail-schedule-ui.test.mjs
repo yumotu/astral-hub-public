@@ -2,14 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-test('mail schedule workspace stays demo-only and exposes startup choices', async () => {
+test('workbench reads account data instead of synthetic fixtures', async () => {
   const page = await readFile(new URL('../web/src/MailSchedulePage.tsx', import.meta.url), 'utf8');
   const main = await readFile(new URL('../web/src/main.tsx', import.meta.url), 'utf8');
-  const settings = await readFile(new URL('../web/src/SettingsPage.tsx', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/src/mail-schedule.css', import.meta.url), 'utf8');
 
-  assert.match(page, /演示数据/);
-  assert.match(page, /不会读取或写入真实邮箱/);
+  assert.match(page, /当前账号数据/);
+  assert.match(page, /不会生成合成任务/);
+  assert.match(page, /\/pi\/tasks/);
+  assert.match(page, /\/pi\/conversations/);
+  assert.match(page, /\/superagent\/tasks/);
+  assert.match(page, /\/goals/);
+  assert.match(page, /\/investment\/holdings/);
+  assert.match(page, /\/investment\/dashboard/);
+  assert.match(page, /\/investment\/schedules/);
+  assert.match(page, /\/mail\/messages/);
   assert.match(page, /今日时间轴/);
   assert.match(page, /未来 7 天/);
   assert.match(page, /邮件事项/);
@@ -17,24 +24,11 @@ test('mail schedule workspace stays demo-only and exposes startup choices', asyn
   assert.match(page, /长期任务/);
   assert.match(page, /定时任务/);
   assert.match(page, /资产提醒/);
-  assert.match(page, /工作台只读快照/);
-  assert.match(page, /createSyntheticWorkbenchSnapshot/);
-  assert.match(page, /DPH 仿真执行器/);
-  assert.match(page, /createDphExecutorAdapter/);
-  assert.match(page, /simulateDphProgress/);
-  assert.match(page, /不会执行真实计划/);
-  assert.match(page, /P3 工作台工具路由与权限验证/);
-  assert.match(page, /createAgentToolRouter/);
-  assert.match(page, /验证 Remote 高风险权限/);
-  assert.match(page, /高风险执行和发送始终停在确认态/);
-  assert.match(page, /新建对话并绑定/);
-  assert.match(page, /修改绑定任务/);
-  assert.match(page, /进入对话/);
-  assert.match(main, /demo.*mail-schedule/);
-  assert.match(main, /loadStartupPage/);
-  assert.match(settings, /工作台/);
-  assert.match(settings, /上次对话/);
-  assert.match(css, /\.mail-schedule-metrics/);
+  assert.doesNotMatch(page, /createSyntheticWorkbenchSnapshot/);
+  assert.doesNotMatch(page, /DPH 仿真执行器/);
+  assert.doesNotMatch(page, /P3 TOOL ROUTER/);
+  assert.match(main, /<MailSchedulePage/);
+  assert.match(main, /settings=\{settings\}/);
+  assert.match(css, /\.mail-schedule-live-banner/);
   assert.match(css, /@media \(max-width: 800px\)/);
-  assert.match(css, /\.workbench-tool-router-panel/);
 });

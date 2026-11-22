@@ -24,14 +24,10 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { investmentDemoDashboard } from './investment-demo';
-import { createSyntheticWorkbenchSnapshot } from '../../shared/agent-workbench.mjs';
-import { createSyntheticAgentEvents } from '../../shared/agent-workbench.mjs';
-import { createPersonalAgentStore } from '../../shared/personal-agent-core.mjs';
-import { createDphExecutorAdapter } from '../../shared/dph-executor-adapter.mjs';
-import { createAgentToolRouter } from '../../shared/agent-tool-router.mjs';
+import { api } from './data';
+import type { Settings } from './types';
 
-type TaskStatus = '待确认' | '未开始' | '进行中' | '已完成' | '已逾期';
+type TaskStatus = '待确认' | '未开始' | '进行中' | '已完成' | '已逾期' | '失败' | '待核对';
 type TaskPriority = '高' | '中' | '低';
 type ScheduleTask = {
   id: string;
@@ -62,7 +58,7 @@ type ConversationRun = {
   title: string;
   project: string;
   engine: 'Pi' | 'DPH';
-  status: '执行中' | '等待回复' | '已完成';
+  status: '执行中' | '等待回复' | '已完成' | '失败' | '待核对';
   progress: number;
   round: number;
   tools: number;
@@ -74,13 +70,13 @@ type LongTask = {
   id: string;
   title: string;
   goal: string;
-  status: '执行中' | '已暂停' | '待验收';
+  status: '执行中' | '已暂停' | '待验收' | '已完成' | '失败';
   progress: number;
   step: string;
   steps: string[];
   nextCheck: string;
   engine: 'Pi' | 'DPH';
-  conversationId: string;
+  conversationId: string | null;
   conversationTitle: string;
 };
 type ScheduledTask = {
@@ -90,9 +86,9 @@ type ScheduledTask = {
   cadence: string;
   nextRun: string;
   lastRun: string;
-  status: '启用' | '已暂停';
+  status: '启用' | '已暂停' | '失败';
   action: string;
-  conversationId: string;
+  conversationId: string | null;
   conversationTitle: string;
 };
 
@@ -125,232 +121,9 @@ const statusClass: Record<TaskStatus, string> = {
   进行中: 'progress',
   已完成: 'done',
   已逾期: 'overdue',
+  失败: 'overdue',
+  待核对: 'pending',
 };
-
-function demoTasks(): ScheduleTask[] {
-  return [
-    {
-      id: 'demo-task-1',
-      title: '确认云川智能 AI 面试时段',
-      type: 'AI 面试',
-      sender: '云川智能招聘',
-      subject: 'AI 面试预约确认｜请选择你的面试时段',
-      dueAt: dateAt(1, 18),
-      status: '待确认',
-      priority: '高',
-      duration: 15,
-      confidence: 0.95,
-      reply: true,
-      tags: ['秋招', '待回复'],
-    },
-    {
-      id: 'demo-task-2',
-      title: '完成北极星科技在线测评',
-      type: '测评',
-      sender: '北极星科技招聘组',
-      subject: '【北极星科技】在线测评邀请，请于近期完成',
-      dueAt: dateAt(2, 23, 59),
-      status: '未开始',
-      priority: '高',
-      duration: 45,
-      confidence: 0.98,
-      tags: ['秋招', '线上'],
-    },
-    {
-      id: 'demo-task-3',
-      title: '准备澜沧银行秋招笔试',
-      type: '笔试',
-      sender: '澜沧银行校园招聘',
-      subject: '笔试通知：综合能力测试开放至本周五',
-      dueAt: dateAt(3, 22),
-      status: '进行中',
-      priority: '高',
-      duration: 90,
-      confidence: 0.82,
-      uncertain: true,
-      tags: ['秋招', '考试'],
-    },
-    {
-      id: 'demo-task-4',
-      title: '补交东陆大学推荐信扫描件',
-      type: '材料补交',
-      sender: '东陆大学研究生院',
-      subject: '申请材料补交提醒：请上传推荐信扫描件',
-      dueAt: dateAt(6, 17),
-      status: '未开始',
-      priority: '中',
-      duration: 30,
-      confidence: 0.91,
-      tags: ['留学', '材料'],
-    },
-    {
-      id: 'demo-task-5',
-      title: '参加 Orbit Labs 线下面试',
-      type: '线下面试',
-      sender: 'Orbit Labs 人力资源',
-      subject: '线下面试邀请｜请回复确认',
-      dueAt: dateAt(7, 10),
-      status: '待确认',
-      priority: '高',
-      duration: 60,
-      confidence: 0.99,
-      reply: true,
-      tags: ['秋招', '线下'],
-    },
-    {
-      id: 'demo-task-6',
-      title: '回复研究助理面试安排',
-      type: '待回复',
-      sender: '实验室项目组',
-      subject: '请确认下周研究助理沟通时间',
-      dueAt: dateAt(0, 20),
-      status: '已逾期',
-      priority: '中',
-      duration: 10,
-      confidence: 0.88,
-      reply: true,
-      tags: ['待回复'],
-    },
-  ];
-}
-
-const demoMails: ScheduleMail[] = [
-  {
-    id: 'demo-mail-1',
-    sender: '云川智能招聘',
-    subject: 'AI 面试预约确认｜请选择你的面试时段',
-    receivedAt: '今天 10:24',
-    snippet: '请在明日 18:00 前回复确认面试时段，系统已为你预留时间。',
-    type: 'AI 面试',
-    needsReply: true,
-  },
-  {
-    id: 'demo-mail-2',
-    sender: '北极星科技招聘组',
-    subject: '在线测评邀请，请于近期完成',
-    receivedAt: '昨天 18:42',
-    snippet: '测评预计用时 45 分钟，完成后系统会自动记录结果。',
-    type: '测评',
-  },
-  {
-    id: 'demo-mail-3',
-    sender: '东陆大学研究生院',
-    subject: '申请材料补交提醒：请上传推荐信扫描件',
-    receivedAt: '昨天 16:11',
-    snippet: '申请系统将在本周关闭，请确认推荐信扫描件是否已准备。',
-    type: '材料补交',
-  },
-];
-
-const demoConversationRuns: ConversationRun[] = [
-  {
-    id: 'conversation-run-1',
-    title: '整理本周求职邮件并生成行动清单',
-    project: '求职申请 · 收件箱',
-    engine: 'DPH',
-    conversationId: 'demo-conversation-1',
-    conversationTitle: '整理本周求职邮件并生成行动清单',
-    status: '执行中',
-    progress: 68,
-    round: 4,
-    tools: 9,
-    updated: '刚刚更新',
-  },
-  {
-    id: 'conversation-run-2',
-    title: '检查投资组合今日相对昨日的变化',
-    project: '投资研究 · 持仓',
-    engine: 'Pi',
-    conversationId: 'demo-conversation-2',
-    conversationTitle: '检查投资组合今日相对昨日的变化',
-    status: '等待回复',
-    progress: 42,
-    round: 2,
-    tools: 4,
-    updated: '3 分钟前',
-  },
-  {
-    id: 'conversation-run-3',
-    title: '生成 RAG 面试复习资料',
-    project: '学习 · AI 搜索',
-    engine: 'DPH',
-    status: '已完成',
-    progress: 100,
-    round: 7,
-    tools: 12,
-    updated: '今天 09:40',
-    conversationId: 'demo-conversation-3',
-    conversationTitle: '生成 RAG 面试复习资料',
-  },
-];
-
-const demoLongTasks: LongTask[] = [
-  {
-    id: 'long-task-1',
-    title: '完成秋招准备计划',
-    goal: '从邮件事项、简历和练习记录中形成可执行的两周计划。',
-    status: '执行中',
-    progress: 64,
-    step: '正在合并邮件截止时间与学习安排',
-    steps: ['收集来源', '拆分任务', '安排时间轴', '检查冲突', '等待验收'],
-    nextCheck: '今天 20:30',
-    engine: 'DPH',
-    conversationId: 'demo-conversation-1',
-    conversationTitle: '整理本周求职邮件并生成行动清单',
-  },
-  {
-    id: 'long-task-2',
-    title: '投资组合月度复盘',
-    goal: '比较资产配置、风险预算和本月操作记录，生成复盘草稿。',
-    status: '待验收',
-    progress: 92,
-    step: '等待你确认复盘口径',
-    steps: ['读取持仓', '计算收益', '分析风险', '生成建议', '等待验收'],
-    nextCheck: '等待你的确认',
-    engine: 'Pi',
-    conversationId: 'demo-conversation-2',
-    conversationTitle: '检查投资组合今日相对昨日的变化',
-  },
-];
-
-const demoScheduledTasks: ScheduledTask[] = [
-  {
-    id: 'schedule-1',
-    title: '每 30 分钟刷新持仓与相对昨日盈亏',
-    target: '投资研究 · 演示持仓',
-    cadence: '每 30 分钟',
-    nextRun: '12 分钟后',
-    lastRun: '18 分钟前 · 成功',
-    status: '启用',
-    action: '更新行情、计算日内盈亏并生成风险提醒',
-    conversationId: 'demo-conversation-2',
-    conversationTitle: '检查投资组合今日相对昨日的变化',
-  },
-  {
-    id: 'schedule-2',
-    title: '每天 09:00 扫描重要邮件',
-    target: '邮件事项 · 演示收件箱',
-    cadence: '每天 09:00',
-    nextRun: '明天 09:00',
-    lastRun: '今天 09:00 · 发现 3 项',
-    status: '启用',
-    action: '识别截止事项、待回复和不确定时间',
-    conversationId: 'demo-conversation-1',
-    conversationTitle: '整理本周求职邮件并生成行动清单',
-  },
-  {
-    id: 'schedule-3',
-    title: '每周日生成学习复盘',
-    target: '学习 · RAG 与 Agent',
-    cadence: '每周日 20:00',
-    nextRun: '周日 20:00',
-    lastRun: '上周日 · 成功',
-    status: '已暂停',
-    action: '汇总错题本、完成率和下周练习建议',
-    conversationId: 'demo-conversation-3',
-    conversationTitle: '生成 RAG 面试复习资料',
-  },
-];
 
 function money(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -369,7 +142,7 @@ function ConversationPanel({ runs: allRuns, detailed, onNotice, onOpenConversati
       </div>
       <div className="workbench-conversation-list">
         {runs.map((run) => (
-          <button key={run.id} className="workbench-conversation-row" onClick={() => onOpenConversation(run.conversationId, run.conversationTitle)}>
+          <button key={run.id} className="workbench-conversation-row" onClick={() => run.conversationId && onOpenConversation(run.conversationId, run.conversationTitle)}>
             <span className={`workbench-engine-mark ${run.engine.toLowerCase()}`}>{run.engine}</span>
             <span className="workbench-conversation-main">
               <strong>{run.title}</strong>
@@ -387,7 +160,7 @@ function ConversationPanel({ runs: allRuns, detailed, onNotice, onOpenConversati
   );
 }
 
-function LongTasksPanel({ tasks: allTasks, detailed, onNotice, onCreate, onEdit, onOpenConversation }: { tasks: LongTask[]; detailed?: boolean; onNotice: (value: string) => void; onCreate: () => void; onEdit: (task: LongTask) => void; onOpenConversation: (id: string, title: string) => void }) {
+function LongTasksPanel({ tasks: allTasks, detailed }: { tasks: LongTask[]; detailed?: boolean }) {
   const tasks = detailed ? allTasks : allTasks.slice(0, 2);
   return (
     <section className="mail-schedule-panel workbench-long-panel">
@@ -396,7 +169,7 @@ function LongTasksPanel({ tasks: allTasks, detailed, onNotice, onCreate, onEdit,
           <div className="mail-schedule-section-kicker">LONG HORIZON</div>
           <h2>长期任务</h2>
         </div>
-        <div className="workbench-panel-heading-actions"><Gauge size={19} /><button className="text-link" onClick={onCreate}><ListChecks size={14} />新建</button></div>
+        <Gauge size={19} />
       </div>
       <div className="workbench-long-list">
         {tasks.map((task) => (
@@ -411,7 +184,7 @@ function LongTasksPanel({ tasks: allTasks, detailed, onNotice, onCreate, onEdit,
             <div className="workbench-long-steps" aria-label="长期任务步骤">
               {task.steps.map((step, index) => <span className={index < Math.round(task.progress / 20) ? 'done' : index === Math.round(task.progress / 20) ? 'current' : ''} key={step}>{index + 1}. {step}</span>)}
             </div>
-            <div className="workbench-card-actions"><button className="secondary workbench-small-action" onClick={() => onNotice(task.status === '待验收' ? '演示模式：已打开验收清单。' : '演示模式：已打开长期任务的完整进度.')}>{task.status === '待验收' ? '查看验收' : '查看进度'} <ArrowRight size={14} /></button><button className="text-link workbench-small-action" onClick={() => onOpenConversation(task.conversationId, task.conversationTitle)}><Bot size={14} />进入对话</button><button className="text-link workbench-small-action" onClick={() => onEdit(task)}>编辑</button></div>
+            <div className="workbench-card-actions"><span className="workbench-panel-description">目标数据来自当前账号</span></div>
           </article>
         ))}
       </div>
@@ -419,7 +192,7 @@ function LongTasksPanel({ tasks: allTasks, detailed, onNotice, onCreate, onEdit,
   );
 }
 
-function SchedulesPanel({ schedules, detailed, onToggle, onNotice, onCreate, onEdit, onOpenConversation }: { schedules: ScheduledTask[]; detailed?: boolean; onToggle: (id: string) => void; onNotice: (value: string) => void; onCreate: () => void; onEdit: (schedule: ScheduledTask) => void; onOpenConversation: (id: string, title: string) => void }) {
+function SchedulesPanel({ schedules, detailed }: { schedules: ScheduledTask[]; detailed?: boolean }) {
   const items = detailed ? schedules : schedules.slice(0, 2);
   return (
     <section className="mail-schedule-panel workbench-schedule-panel">
@@ -428,16 +201,15 @@ function SchedulesPanel({ schedules, detailed, onToggle, onNotice, onCreate, onE
           <div className="mail-schedule-section-kicker">AUTOMATIONS</div>
           <h2>定时任务</h2>
         </div>
-        <button className="text-link" onClick={onCreate}><Repeat2 size={15} />新建</button>
+        <Repeat2 size={15} />
       </div>
       <p className="workbench-panel-description">每个计划都绑定目标、执行引擎、项目和权限。运行失败只记录结果，不会自动重复执行已完成的操作。</p>
       <div className="workbench-schedule-list">
         {items.map((schedule) => (
           <article className="workbench-schedule-row" key={schedule.id}>
             <span className={`workbench-schedule-icon ${schedule.status === '启用' ? 'active' : ''}`}><Repeat2 size={16} /></span>
-            <div className="workbench-schedule-main"><strong>{schedule.title}</strong><small>{schedule.target} · {schedule.action}</small><span><b>{schedule.cadence}</b> · 下次 {schedule.nextRun} · 上次 {schedule.lastRun}</span><button className="text-link workbench-schedule-conversation" onClick={() => onOpenConversation(schedule.conversationId, schedule.conversationTitle)}><Bot size={12} />{schedule.conversationTitle}</button></div>
-            <button className={`workbench-schedule-toggle ${schedule.status === '启用' ? 'on' : ''}`} aria-pressed={schedule.status === '启用'} onClick={() => onToggle(schedule.id)}>{schedule.status === '启用' ? <Pause size={14} /> : <Play size={14} />}{schedule.status}</button>
-            <span className="workbench-schedule-actions"><button className="icon-btn" aria-label={`编辑${schedule.title}`} onClick={() => onEdit(schedule)}><ListChecks size={14} /></button><button className="icon-btn" aria-label={`立即运行${schedule.title}`} onClick={() => onNotice(`演示模式：已记录立即运行「${schedule.title}」，不会执行真实操作。`)}><Play size={14} /></button></span>
+            <div className="workbench-schedule-main"><strong>{schedule.title}</strong><small>{schedule.target} · {schedule.action}</small><span><b>{schedule.cadence}</b> · 下次 {schedule.nextRun} · 上次 {schedule.lastRun}</span></div>
+            <span className={`workbench-schedule-toggle ${schedule.status === '启用' ? 'on' : ''}`}>{schedule.status}</span>
           </article>
         ))}
       </div>
@@ -445,11 +217,9 @@ function SchedulesPanel({ schedules, detailed, onToggle, onNotice, onCreate, onE
   );
 }
 
-function FinancePanel({ detailed, onNotice }: { detailed?: boolean; onNotice: (value: string) => void }) {
-  const holdings = investmentDemoDashboard.portfolio.holdings;
-  const summary = investmentDemoDashboard.portfolio.summary;
+function FinancePanel({ detailed, holdings, summary, marketAreas, onNotice }: { detailed?: boolean; holdings: any[]; summary: Record<string, unknown>; marketAreas: any[]; onNotice: (value: string) => void }) {
   const dayGain = holdings.reduce((total, holding) => total + (holding.day_gain || 0), 0);
-  const marketAreas = investmentDemoDashboard.market_areas.slice(0, detailed ? 5 : 3);
+  const total = Number(summary.total_capital || holdings.reduce((sum, holding) => sum + (holding.value || 0), 0));
   return (
     <section className="mail-schedule-panel workbench-finance-panel">
       <div className="mail-schedule-panel-heading">
@@ -459,184 +229,234 @@ function FinancePanel({ detailed, onNotice }: { detailed?: boolean; onNotice: (v
         </div>
         <Wallet size={19} />
       </div>
-      <div className="workbench-finance-summary"><div><span>演示总资产</span><strong>¥ {money(summary.total_capital)}</strong></div><div><span>今日相对昨日</span><strong className={dayGain >= 0 ? 'positive' : 'negative'}>{dayGain >= 0 ? '+' : ''}¥ {money(dayGain)}</strong></div></div>
+      <div className="workbench-finance-summary"><div><span>当前总资产</span><strong>¥ {money(total)}</strong></div><div><span>相对昨日</span><strong className={dayGain >= 0 ? 'positive' : 'negative'}>{dayGain >= 0 ? '+' : ''}¥ {money(dayGain)}</strong></div></div>
       <div className="workbench-allocation-bar" aria-label="资产配置比例">
-        {Object.entries(summary.buckets).map(([type, value]) => <span key={type} style={{ width: `${(Number(value) / summary.total_capital) * 100}%` }} className={`allocation-${type}`} />)}
+        {Object.entries((summary.buckets || {}) as Record<string, unknown>).map(([type, value]) => <span key={type} style={{ width: `${total ? (Number(value) / total) * 100 : 0}%` }} className={`allocation-${type}`} />)}
       </div>
       <div className="workbench-finance-holdings">
-        {holdings.slice(0, detailed ? holdings.length : 3).map((holding) => <button key={holding.id} onClick={() => onNotice(`演示模式：已打开「${holding.name}」的持仓详情。`)}><span><strong>{holding.name}</strong><small>{holding.symbol || '现金'} · {holding.value.toLocaleString('zh-CN')} 元</small></span><b className={(holding.day_gain || 0) >= 0 ? 'positive' : 'negative'}>{(holding.day_gain || 0) >= 0 ? '+' : ''}{money(holding.day_gain || 0)}</b><ChevronRight size={14} /></button>)}
+        {holdings.slice(0, detailed ? holdings.length : 3).map((holding) => <button key={holding.id} onClick={() => onNotice(`已打开「${holding.name}」的持仓详情。`)}><span><strong>{holding.name}</strong><small>{holding.symbol || '现金'} · {money(holding.value)} 元</small></span><b className={(holding.day_gain || 0) >= 0 ? 'positive' : 'negative'}>{(holding.day_gain || 0) >= 0 ? '+' : ''}{money(holding.day_gain || 0)}</b><ChevronRight size={14} /></button>)}
+        {!holdings.length && <div className="mail-schedule-empty"><strong>暂无持仓数据</strong><small>在投资研究页录入或同步持仓后，这里会显示真实账户数据。</small></div>}
       </div>
-      <div className="workbench-market-areas">{marketAreas.map((area) => <span key={area.id}><i className={area.market.regime} />{area.title} <b>{area.quote.change_1d >= 0 ? '+' : ''}{area.quote.change_1d}%</b></span>)}</div>
-      <button className="secondary workbench-small-action" onClick={() => onNotice('演示模式：已打开投资研究详情。')}><TrendingUp size={14} />打开投资研究</button>
+      <div className="workbench-market-areas">{marketAreas.slice(0, detailed ? 5 : 3).map((area) => <span key={area.id}><i className={area.market?.regime || ''} />{area.title} <b>{typeof area.quote?.change_1d === 'number' ? `${area.quote.change_1d >= 0 ? '+' : ''}${area.quote.change_1d}%` : '—'}</b></span>)}</div>
+      <button className="secondary workbench-small-action" onClick={() => onNotice('请从投资研究页查看完整持仓和行情。')}><TrendingUp size={14} />打开投资研究</button>
     </section>
   );
 }
 
-function SyntheticSnapshotPanel({ snapshot }: { snapshot: ReturnType<typeof createSyntheticWorkbenchSnapshot> }) {
-  return (
-    <section className="workbench-snapshot-panel" aria-label="合成事件只读快照">
-      <div className="workbench-snapshot-heading">
-        <div><span className="workbench-snapshot-kicker">P0 EVENT SNAPSHOT</span><strong>工作台只读快照</strong></div>
-        <span className="workbench-snapshot-badge">合成数据 · 只读</span>
-      </div>
-      <div className="workbench-snapshot-metrics"><span><b>{snapshot.eventCount}</b><small>事件</small></span><span><b>{snapshot.conversations.length}</b><small>对话运行</small></span><span><b>{snapshot.goals.length}</b><small>长期目标</small></span><span><b>{snapshot.schedules.length}</b><small>定时计划</small></span><span><b>{snapshot.attentions.length}</b><small>待决定</small></span></div>
-      <div className="workbench-snapshot-events"><span>最近事件</span>{snapshot.eventIds.slice(-3).reverse().map((id: string) => <code key={id}>{id}</code>)}</div>
-    </section>
-  );
+function realText(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
-function SyntheticDphSyncPanel({ snapshot, onProgress, onAttention, onFinish }: { snapshot: ReturnType<typeof createSyntheticWorkbenchSnapshot>; onProgress: () => void; onAttention: () => void; onFinish: () => void }) {
-  const run = snapshot.runs.find((item: { engine?: string }) => item.engine === 'DPH');
-  const task = run ? snapshot.tasks.find((item: { id: string }) => item.id === run.taskId) : undefined;
-  const attention = snapshot.attentions.find((item: { kind?: string; status?: string }) => item.kind === 'dph' && item.status !== 'resolved');
-  return (
-    <section className="workbench-dph-sync-panel" aria-label="DPH 仿真执行器">
-      <div className="workbench-dph-sync-heading"><div><span className="workbench-snapshot-kicker">P2 DPH ADAPTER</span><strong>DPH 仿真执行器</strong></div><span className="workbench-snapshot-badge">状态同步 · 演示</span></div>
-      <div className="workbench-dph-sync-body"><div><span className="workbench-engine-mark dph">DPH</span><span><strong>{task?.title || '合成任务尚未启动'}</strong><small>{run?.status || '未启动'} · {run?.progress || 0}% · {run?.report || '等待执行'}</small></span></div><span className={`workbench-run-status ${run?.status === 'finished' ? 'done' : run?.status === 'unknown_result' ? 'waiting' : 'running'}`}>{attention ? '等待用户' : run?.status || '未启动'}</span></div>
-      <div className="workbench-dph-sync-actions"><button className="secondary" onClick={onProgress} disabled={run?.status === 'finished'}>模拟进度</button><button className="secondary" onClick={onAttention} disabled={!!attention || run?.status === 'finished'}>模拟等待用户</button><button className="primary" onClick={onFinish} disabled={run?.status === 'finished'}>模拟完成</button></div>
-      <p>这些按钮只向本地 P2 事件存储写入合成事件，工作台从同一只读快照更新，不会调用真实 DPH。</p>
-    </section>
-  );
+function realDate(value: unknown) {
+  const date = value ? new Date(String(value)) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
-type SyntheticToolRouter = ReturnType<typeof createAgentToolRouter>;
-type SyntheticToolCallResult = ReturnType<SyntheticToolRouter['call']>;
+function realStatus(value: unknown): TaskStatus {
+  if (value === 'done' || value === 'succeeded' || value === 'completed') return '已完成';
+  if (value === 'error' || value === 'failed') return '失败';
+  if (value === 'interrupted' || value === 'unknown') return '待核对';
+  if (value === 'queued') return '未开始';
+  if (value === 'waiting_user') return '待确认';
+  if (value === 'running' || value === 'delivering' || value === 'accepted' || value === 'stopping') return '进行中';
+  return '未开始';
+}
 
-const syntheticToolGroups = [
-  { domain: 'mail', label: '邮件', tools: ['mail.read', 'mail.draft_reply'] },
-  { domain: 'learning', label: '学习', tools: ['learning.list_lessons', 'learning.generate_lesson'] },
-  { domain: 'investment', label: '投资', tools: ['investment.read_holdings', 'investment.recommendations'] },
-  { domain: 'remote', label: 'Remote', tools: ['remote.list_projects', 'remote.run_preview'] },
-] as const;
+function realProgress(value: unknown, status: TaskStatus) {
+  if (typeof value === 'number') return Math.max(0, Math.min(100, value));
+  return status === '已完成' ? 100 : status === '进行中' ? 50 : 0;
+}
 
-function SyntheticToolRouterPanel({ router, onNotice }: { router: SyntheticToolRouter; onNotice: (value: string) => void }) {
-  const [results, setResults] = useState<SyntheticToolCallResult[]>([]);
-  const [selectedTool, setSelectedTool] = useState('mail.read');
-  const inspection = router.inspect();
-
-  function callTool(tool: string) {
-    setSelectedTool(tool);
-    const result = router.call({ tool, operationId: `p3:${tool}:${results.length + 1}` });
-    setResults((current) => [result, ...current].slice(0, 4));
-    onNotice(result.status === 'completed' ? `演示工具已完成：${tool}` : `权限验证：${tool} → ${result.status}`);
+function realWorkbenchData(payload: {
+  pi: { tasks?: any[]; conversations?: any[] };
+  superagent: { tasks?: any[] };
+  goals: { goals?: any[] };
+  investment: { holdings?: any[]; summary?: Record<string, unknown>; dashboard?: any; schedules?: any[] };
+  mail: { messages?: any[] };
+}) {
+  const piTasks = payload.pi.tasks || [];
+  const superTasks = payload.superagent.tasks || [];
+  const conversations = payload.pi.conversations || [];
+  const conversationById = new Map(conversations.map((conversation) => [String(conversation.id), conversation]));
+  const latestByConversation = new Map<string, any>();
+  for (const task of [...piTasks, ...superTasks]) {
+    const conversationId = typeof task.conversationId === 'string' ? task.conversationId : '';
+    if (!conversationId) continue;
+    const previous = latestByConversation.get(conversationId);
+    if (!previous || String(previous.updatedAt || previous.createdAt || '') < String(task.updatedAt || task.createdAt || '')) latestByConversation.set(conversationId, task);
   }
-
-  function verifyHighRisk() {
-    const check = router.canCall('remote.execute');
-    onNotice(check.allowed ? 'Remote 高风险权限已授予，但仍需二次确认。' : `Remote 高风险权限已拦截：${check.reason}`);
-  }
-
-  return (
-    <section className="workbench-tool-router-panel" aria-label="P3 工作台工具路由与权限验证">
-      <div className="workbench-tool-router-heading">
-        <div><span className="workbench-snapshot-kicker">P3 TOOL ROUTER</span><strong>邮件 · 学习 · 投资 · Remote 工具</strong></div>
-        <span className="workbench-snapshot-badge">合成数据 · 只读</span>
-      </div>
-      <div className="workbench-tool-router-meta"><span><b>{inspection.tools.length}</b> 个工具</span><span>当前权限 <b>{inspection.grant.level}</b></span><span>运行时 <b>{inspection.grant.runtime}</b></span><span>路由只返回演示结果</span></div>
-      <div className="workbench-tool-router-grid">
-        {syntheticToolGroups.map((group) => (
-          <article className="workbench-tool-router-card" key={group.domain}>
-            <header><strong>{group.label}</strong><small>{group.domain}</small></header>
-            <div>{group.tools.map((tool) => <button key={tool} className={selectedTool === tool ? 'active' : ''} onClick={() => callTool(tool)}><span>{tool.split('.')[1]}</span><small>{inspection.tools.find((item: { name: string }) => item.name === tool)?.permission}</small></button>)}</div>
-          </article>
-        ))}
-      </div>
-      <div className="workbench-tool-router-actions"><button className="secondary" onClick={verifyHighRisk}>验证 Remote 高风险权限</button><span>高风险执行和发送始终停在确认态，不会执行真实操作。</span></div>
-      {results.length > 0 && <div className="workbench-tool-router-results" aria-label="工具路由结果"><span>最近验证</span>{results.map((result, index) => <code key={`${result.tool}-${index}`}>{result.tool} · {result.status}{result.reason ? ` · ${result.reason}` : ''}</code>)}</div>}
-    </section>
-  );
+  const conversationRuns: ConversationRun[] = [...latestByConversation.entries()].map(([conversationId, task]) => {
+    const status = realStatus(task.status);
+    const conversation = conversationById.get(conversationId);
+    return {
+      id: String(task.id),
+      title: realText(task.input || task.title, '未命名任务'),
+      project: realText(conversation?.projectName || conversation?.projectId, '默认项目'),
+      engine: 'Pi',
+      status: status === '待确认' ? '等待回复' : status === '失败' ? '失败' : status === '待核对' ? '待核对' : status === '已完成' ? '已完成' : '执行中',
+      progress: realProgress(task.progress, status),
+      round: Number(task.metrics?.modelTurns || 0),
+      tools: Number(task.metrics?.toolCalls || 0),
+      updated: realText(task.updatedAt || task.createdAt, '刚刚'),
+      conversationId,
+      conversationTitle: realText(conversation?.title || task.input, '未命名对话'),
+    };
+  });
+  const delegatedRuns: ConversationRun[] = superTasks.map((task) => {
+    const status = realStatus(task.status);
+    const runtime = task.runtime === 'DPH' || task.runtime === 'Remote' ? task.runtime : 'Pi';
+    return {
+      id: 'superagent-' + String(task.id),
+      title: realText(task.title || task.input, '未命名委派'),
+      project: realText(task.projectId, 'SuperAgent'),
+      engine: runtime,
+      status: status === '待确认' ? '等待回复' : status === '失败' ? '失败' : status === '待核对' ? '待核对' : status === '已完成' ? '已完成' : '执行中',
+      progress: realProgress(task.progress, status),
+      round: 0,
+      tools: 0,
+      updated: realText(task.updatedAt || task.createdAt, '刚刚'),
+      conversationId: typeof task.conversationId === 'string' ? task.conversationId : '',
+      conversationTitle: realText(task.title || task.input, '委派任务'),
+    };
+  });
+  const tasks: ScheduleTask[] = piTasks.map((task) => {
+    const status = realStatus(task.status);
+    return {
+      id: String(task.id),
+      title: realText(task.input, '未命名任务'),
+      type: '对话任务',
+      sender: 'Pi',
+      subject: realText(task.input, '对话任务'),
+      dueAt: realDate(task.finishedAt || task.createdAt),
+      status,
+      priority: status === '进行中' ? '高' : '中',
+      duration: Math.max(1, Math.round(Number(task.metrics?.responseMs || 0) / 60000)),
+      confidence: 1,
+      reply: status === '待确认',
+      tags: ['对话', realText(task.projectId, '默认项目')],
+    };
+  });
+  const longTasks: LongTask[] = (payload.goals.goals || []).map((goal) => {
+    const steps = Array.isArray(goal.steps) ? goal.steps : [];
+    const done = steps.filter((step: any) => step.status === 'done').length;
+    const progress = steps.length ? Math.round((done / steps.length) * 100) : goal.status === 'completed' ? 100 : 0;
+    const status = goal.status === 'completed' || goal.status === 'archived' ? '已完成' : goal.status === 'paused' ? '已暂停' : '执行中';
+    return {
+      id: String(goal.id),
+      title: realText(goal.title, '未命名目标'),
+      goal: realText(goal.description, '未填写目标说明'),
+      status,
+      progress,
+      step: realText(steps.find((step: any) => step.status === 'active')?.title, status === '已完成' ? '已完成' : '等待下一步'),
+      steps: steps.map((step: any) => realText(step.title, '步骤')),
+      nextCheck: status === '已完成' ? '无需检查' : '由目标执行器安排',
+      engine: 'Pi',
+      conversationId: null,
+      conversationTitle: '目标详情',
+    };
+  });
+  const schedules: ScheduledTask[] = (payload.investment.schedules || []).map((schedule) => {
+    const interval = Number(schedule.interval_minutes || 0);
+    const cadence = interval >= 1440 ? '每 ' + Math.round(interval / 1440) + ' 天' : interval >= 60 ? '每 ' + Math.round(interval / 60) + ' 小时' : '每 ' + (interval || 30) + ' 分钟';
+    return {
+      id: String(schedule.id),
+      title: schedule.kind === 'investment_refresh' ? '刷新持仓与相对昨日盈亏' : realText(schedule.kind, '定时计划'),
+      target: '投资研究',
+      cadence,
+      nextRun: realText(schedule.next_run_at, '待安排'),
+      lastRun: realText(schedule.last_run_at, '尚未运行'),
+      status: schedule.enabled ? '启用' : '已暂停',
+      action: '读取当前账号持仓并生成研究提醒',
+      conversationId: null,
+      conversationTitle: '投资研究',
+    };
+  });
+  const mails: ScheduleMail[] = (payload.mail.messages || []).map((message) => ({
+    id: String(message.uid),
+    sender: realText(message.from, '未知发件人'),
+    subject: realText(message.subject, '(无主题)'),
+    receivedAt: realText(message.date, '—'),
+    snippet: realText(message.subject, '(无主题)'),
+    type: message.seen ? '已读邮件' : '未读邮件',
+    needsReply: !message.seen,
+  }));
+  return {
+    tasks,
+    mails,
+    conversationRuns: [...conversationRuns, ...delegatedRuns].sort((a, b) => b.updated.localeCompare(a.updated)),
+    longTasks,
+    schedules,
+    holdings: payload.investment.holdings || [],
+    summary: payload.investment.summary || {},
+    marketAreas: Array.isArray(payload.investment.dashboard?.market_areas) ? payload.investment.dashboard.market_areas : [],
+  };
 }
 
-type CreationMode = 'long' | 'schedule';
-type CreationDraft = {
-  mode: CreationMode;
-  id?: string;
-  title?: string;
-  goal?: string;
-  action?: string;
-  cadence?: string;
-  targetId?: string;
-  engine?: 'Pi' | 'DPH';
-};
-
-function WorkbenchCreationDialog({ draft, conversations, close, submit }: { draft: CreationDraft; conversations: ConversationRun[]; close: () => void; submit: (value: { mode: CreationMode; id?: string; title: string; goal: string; action: string; cadence: string; targetId: string; engine: 'Pi' | 'DPH' }) => void }) {
-  const [title, setTitle] = useState(draft.title || '');
-  const [goal, setGoal] = useState(draft.goal || '');
-  const [action, setAction] = useState(draft.action || '完成后回到对话汇报结果');
-  const [cadence, setCadence] = useState(draft.cadence || '每 30 分钟');
-  const [targetId, setTargetId] = useState(draft.targetId || 'new');
-  const [engine, setEngine] = useState<'Pi' | 'DPH'>(draft.engine || 'DPH');
-  const selected = conversations.find((conversation) => conversation.id === targetId);
-  const editing = !!draft.id;
-  return (
-    <div className="workbench-create-backdrop" role="presentation" onClick={close}>
-      <form className="workbench-create-dialog" role="dialog" aria-modal="true" aria-label={editing ? '编辑工作台任务' : '新建工作台任务'} onSubmit={(event) => { event.preventDefault(); if (!title.trim() || !targetId) return; submit({ mode: draft.mode, id: draft.id, title: title.trim(), goal: goal.trim(), action: action.trim(), cadence, targetId, engine }); }} onClick={(event) => event.stopPropagation()}>
-        <header><div><div className="mail-schedule-section-kicker">{draft.mode === 'long' ? 'LONG HORIZON' : 'AUTOMATION'}</div><h2>{editing ? '修改绑定任务' : draft.mode === 'long' ? '新建长期任务' : '新建定时任务'}</h2></div><button type="button" className="icon-btn" aria-label="关闭" onClick={close}><X size={18} /></button></header>
-        <p className="workbench-create-help">任务必须绑定一个对话。绑定后，执行结果、补充问题和历史记录都会回到同一条对话中。</p>
-        <label className="workbench-create-field"><span>名称</span><input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder={draft.mode === 'long' ? '例如：完成本周求职准备计划' : '例如：每 30 分钟刷新持仓'} /></label>
-        {draft.mode === 'long' ? <label className="workbench-create-field"><span>目标说明</span><textarea required rows={3} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="写清楚完成标准和验收方式" /></label> : <label className="workbench-create-field"><span>每次执行内容</span><textarea required rows={3} value={action} onChange={(event) => setAction(event.target.value)} placeholder="描述每次触发时要交给 Agent 的任务" /></label>}
-        <div className="workbench-create-field"><span>绑定对话</span><div className="workbench-target-options"><button type="button" className={targetId === 'new' ? 'active' : ''} onClick={() => setTargetId('new')}><Bot size={15} /><span><strong>新建对话并绑定</strong><small>首次运行时创建独立对话</small></span></button>{conversations.filter((conversation) => conversation.status !== '已完成' || conversation.id === draft.targetId).map((conversation) => <button type="button" key={conversation.id} className={targetId === conversation.id ? 'active' : ''} onClick={() => { setTargetId(conversation.id); setEngine(conversation.engine); }}><span className={`workbench-engine-mark ${conversation.engine.toLowerCase()}`}>{conversation.engine}</span><span><strong>{conversation.title}</strong><small>{conversation.project} · {conversation.status}</small></span></button>)}</div></div>
-        {selected && <p className="workbench-selected-target">当前绑定：{selected.title} · {selected.engine}</p>}
-        {draft.mode === 'long' ? <label className="workbench-create-field"><span>执行引擎</span><div className="workbench-choice-row">{(['DPH', 'Pi'] as const).map((value) => <button type="button" key={value} className={engine === value ? 'active' : ''} onClick={() => setEngine(value)}>{value}<small>{value === 'DPH' ? '适合拆解与长程编排' : '适合轻量连续执行'}</small></button>)}</div></label> : <label className="workbench-create-field"><span>运行频率</span><div className="workbench-choice-row">{['每 30 分钟', '每天 09:00', '每周日 20:00'].map((value) => <button type="button" key={value} className={cadence === value ? 'active' : ''} onClick={() => setCadence(value)}><Repeat2 size={14} />{value}</button>)}</div></label>}
-        <footer><button type="button" className="secondary" onClick={close}>取消</button><button type="submit" className="primary" disabled={!title.trim() || !targetId}>{editing ? '保存修改' : '创建并绑定对话'}</button></footer>
-      </form>
-    </div>
-  );
-}
-
-export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }: { openMail: () => void; openConversation?: (id: string, title: string) => void; scope?: string }) {
+export function MailSchedulePage({ settings, openMail, openConversation }: { settings: Settings; openMail: () => void; openConversation?: (id: string, title: string) => void }) {
   const [view, setView] = useState<'overview' | 'tasks' | 'inbox' | 'conversations' | 'long' | 'schedules' | 'finance'>('overview');
-  const [tasks, setTasks] = useState(demoTasks);
-  const [conversationRuns, setConversationRuns] = useState(demoConversationRuns);
-  const [longTasks, setLongTasks] = useState(demoLongTasks);
-  const [schedules, setSchedules] = useState(demoScheduledTasks);
+  const [tasks, setTasks] = useState<ScheduleTask[]>([]);
+  const [conversationRuns, setConversationRuns] = useState<ConversationRun[]>([]);
+  const [longTasks, setLongTasks] = useState<LongTask[]>([]);
+  const [schedules, setSchedules] = useState<ScheduledTask[]>([]);
+  const [mails, setMails] = useState<ScheduleMail[]>([]);
+  const [holdings, setHoldings] = useState<any[]>([]);
+  const [investmentSummary, setInvestmentSummary] = useState<Record<string, unknown>>({});
+  const [marketAreas, setMarketAreas] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [dataError, setDataError] = useState('');
   const [selectedTask, setSelectedTask] = useState<ScheduleTask | null>(null);
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState('');
-  const [scanning, setScanning] = useState(false);
-  const [creation, setCreation] = useState<CreationDraft | null>(null);
-  const dphDemo = useMemo(() => {
-    const ownerId = `demo:${scope}`;
-    const store = createPersonalAgentStore({ ownerId });
-    for (const item of createSyntheticAgentEvents({ ownerId })) store.append(item);
-    store.createTask({ taskId: 'p2-demo-task', title: 'DPH 合成状态同步任务', conversationId: 'demo-conversation-1', engine: 'DPH' }, 'p2-demo-task');
-    const adapter = createDphExecutorAdapter({ store });
-    adapter.start({ runId: 'p2-demo-run', taskId: 'p2-demo-task', conversationId: 'demo-conversation-1' }, 'p2-demo-run');
-    return { store, adapter };
-  }, [scope]);
-  const toolDemo = useMemo(() => createAgentToolRouter({
-    grant: {
-      accountId: `demo-account:${scope}`,
-      conversationId: 'demo-conversation-1',
-      projectId: 'demo-project',
-      runtime: 'DPH',
-      level: 'L1',
-      allowedDomains: ['mail', 'learning', 'investment', 'remote'],
-    },
-  }), [scope]);
-  const [dphSnapshot, setDphSnapshot] = useState(() => dphDemo.store.snapshot());
   useEffect(() => {
-    setDphSnapshot(dphDemo.store.snapshot());
-  }, [dphDemo]);
-
-  function refreshDphSnapshot() {
-    setDphSnapshot(dphDemo.store.snapshot());
-  }
-
-  function simulateDphProgress() {
-    dphDemo.adapter.progress({ runId: 'p2-demo-run', taskId: 'p2-demo-task', progress: Math.min(90, (dphSnapshot.runs.find((run: { id: string }) => run.id === 'p2-demo-run')?.progress || 0) + 20), step: '仿真 DPH 正在整理工作台上下文', report: '仿真状态已同步' }, `p2-progress-${Date.now()}`);
-    refreshDphSnapshot();
-  }
-
-  function simulateDphAttention() {
-    dphDemo.adapter.waitForUser({ attentionId: 'p2-demo-attention', title: 'DPH 需要确认', question: '是否继续执行下一步？' }, 'p2-attention');
-    refreshDphSnapshot();
-  }
-
-  function simulateDphFinish() {
-    dphDemo.adapter.finish({ runId: 'p2-demo-run', taskId: 'p2-demo-task', report: '仿真 DPH 已完成，等待验收' }, `p2-finish-${Date.now()}`);
-    refreshDphSnapshot();
-  }
+    if (!(settings.sessionToken || settings.token)) {
+      setDataError('请先登录账号，工作台才会读取真实数据。');
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setDataError('');
+    const get = <T,>(path: string) => api<T>(settings, path, undefined, undefined, false, { fresh: true });
+    void Promise.allSettled([
+      get<{ tasks?: any[] }>('/pi/tasks'),
+      get<{ conversations?: any[] }>('/pi/conversations'),
+      get<{ tasks?: any[] }>('/superagent/tasks'),
+      get<{ goals?: any[] }>('/goals'),
+      get<{ holdings?: any[]; summary?: Record<string, unknown> }>('/investment/holdings'),
+      get<any>('/investment/dashboard?risk_profile=balanced'),
+      get<{ schedules?: any[] }>('/investment/schedules'),
+      get<{ account?: unknown }>('/mail/account'),
+    ]).then(async (results) => {
+      if (!active) return;
+      const [pi, conversations, superagent, goals, investment, dashboard, scheduleResult, account] = results;
+      let mailResult: { messages?: any[] } = {};
+      if (account.status === 'fulfilled' && account.value.account) {
+        const mail = await Promise.allSettled([get<{ messages?: any[] }>('/mail/messages?mailbox=INBOX&limit=8')]);
+        if (mail[0].status === 'fulfilled') mailResult = mail[0].value;
+      }
+      const mapped = realWorkbenchData({
+        pi: { tasks: pi.status === 'fulfilled' ? pi.value.tasks : [], conversations: conversations.status === 'fulfilled' ? conversations.value.conversations : [] },
+        superagent: superagent.status === 'fulfilled' ? superagent.value : {},
+        goals: goals.status === 'fulfilled' ? goals.value : {},
+        investment: { holdings: investment.status === 'fulfilled' ? investment.value.holdings : [], summary: investment.status === 'fulfilled' ? investment.value.summary : {}, dashboard: dashboard.status === 'fulfilled' ? dashboard.value : {}, schedules: scheduleResult.status === 'fulfilled' ? scheduleResult.value.schedules : [] },
+        mail: mailResult,
+      });
+      setTasks(mapped.tasks);
+      setMails(mapped.mails);
+      setConversationRuns(mapped.conversationRuns);
+      setLongTasks(mapped.longTasks);
+      setSchedules(mapped.schedules);
+      setHoldings(mapped.holdings);
+      setInvestmentSummary(mapped.summary);
+      setMarketAreas(mapped.marketAreas);
+      const failures = results.filter((result) => result.status === 'rejected').length;
+      if (failures && !mapped.conversationRuns.length && !mapped.holdings.length) setDataError('部分真实数据暂时不可用，请检查对应插件连接。');
+    }).catch((error) => {
+      if (active) setDataError(error instanceof Error ? error.message : '工作台读取失败。');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [settings]);
 
   const filteredTasks = useMemo(
     () =>
@@ -660,21 +480,7 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
       current.map((task) => (task.id === id ? { ...task, status: '已完成' as const } : task)),
     );
     setSelectedTask((current) => (current?.id === id ? { ...current, status: '已完成' } : current));
-    setNotice('已标记完成，演示数据只保存在当前页面。');
-  }
-
-  function scanDemo() {
-    if (scanning) return;
-    setScanning(true);
-    window.setTimeout(() => {
-      setScanning(false);
-      setNotice('演示扫描完成，发现 3 封重要邮件。未连接真实邮箱。');
-    }, 650);
-  }
-
-  function toggleSchedule(id: string) {
-    setSchedules((current) => current.map((schedule) => schedule.id === id ? { ...schedule, status: schedule.status === '启用' ? '已暂停' : '启用' } : schedule));
-    setNotice('演示模式：已更新定时任务开关，不会执行真实计划。');
+    setNotice('已在当前工作台标记完成；原始任务状态仍由对应插件管理。');
   }
 
   function openTargetConversation(id: string, title: string) {
@@ -682,39 +488,18 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
     else setNotice(`已选择「${title}」作为目标对话。`);
   }
 
-  function submitCreation(value: { mode: CreationMode; id?: string; title: string; goal: string; action: string; cadence: string; targetId: string; engine: 'Pi' | 'DPH' }) {
-    let conversationId = value.targetId;
-    let conversationTitle = conversationRuns.find((conversation) => conversation.id === conversationId)?.title || '';
-    if (value.targetId === 'new') {
-      conversationId = `demo-conversation-${Date.now()}`;
-      conversationTitle = value.title;
-      setConversationRuns((current) => [{ id: conversationId, title: conversationTitle, project: '工作台 · 新建对话', engine: value.engine, status: '等待回复', progress: 0, round: 0, tools: 0, updated: '刚刚创建', conversationId, conversationTitle }, ...current]);
-    }
-    if (value.mode === 'long') {
-      const existing = longTasks.find((task) => task.id === value.id);
-      const next: LongTask = { id: value.id || `long-task-${Date.now()}`, title: value.title, goal: value.goal, status: existing?.status || '执行中', progress: existing?.progress || 0, step: existing?.step || '等待对话首次执行', steps: existing?.steps || ['收集来源', '拆分任务', '执行计划', '检查冲突', '等待验收'], nextCheck: existing?.nextCheck || '首次运行后', engine: value.engine, conversationId, conversationTitle };
-      setLongTasks((current) => value.id ? current.map((task) => task.id === value.id ? next : task) : [next, ...current]);
-    } else {
-      const existing = schedules.find((schedule) => schedule.id === value.id);
-      const next: ScheduledTask = { id: value.id || `schedule-${Date.now()}`, title: value.title, target: conversationTitle, cadence: value.cadence, nextRun: existing?.nextRun || '等待首次运行', lastRun: existing?.lastRun || '尚未运行', status: existing?.status || '启用', action: value.action, conversationId, conversationTitle };
-      setSchedules((current) => value.id ? current.map((schedule) => schedule.id === value.id ? next : schedule) : [next, ...current]);
-    }
-    setCreation(null);
-    setNotice(value.id ? '绑定任务已修改。' : '已创建任务并绑定目标对话。');
-  }
-
   return (
     <div className="mail-schedule-page">
       <header className="mail-schedule-heading">
         <div>
-          <div className="mail-schedule-eyebrow">邮日程 · MAIL SCHEDULE</div>
+          <div className="mail-schedule-eyebrow">邮日程 · WORKSPACE</div>
           <h1>今天，先处理最重要的事。</h1>
-          <p>把重要邮件变成可执行、可编辑、可提醒的任务。</p>
+          <p>统一汇总当前账号的对话、任务、目标、计划、邮件和持仓。</p>
         </div>
         <div className="mail-schedule-heading-actions">
-          <button className="secondary" onClick={scanDemo} disabled={scanning}>
-            <RefreshCw size={16} className={scanning ? 'spin' : ''} />
-            {scanning ? '扫描中…' : '扫描演示邮件'}
+          <button className="secondary" onClick={() => window.location.reload()} disabled={loading}>
+            <RefreshCw size={16} className={loading ? 'spin' : ''} />
+            {loading ? '读取中…' : '刷新真实数据'}
           </button>
           <button className="primary" onClick={() => setView('conversations')}>
             <CheckCircle2 size={16} />
@@ -723,17 +508,15 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
         </div>
       </header>
 
-      <div className="mail-schedule-demo-banner" role="status">
-        <span className="mail-schedule-demo-dot" />
-        <strong>演示数据</strong>
-        <span>当前使用本地合成的邮件和任务，不会读取或写入真实邮箱。</span>
+      <div className="mail-schedule-live-banner" role="status">
+        <span className="mail-schedule-live-dot" />
+        <strong>当前账号数据</strong>
+        <span>{loading ? '正在读取已授权的数据源…' : '工作台不会生成合成任务；未连接的数据源会显示为空。'}</span>
         <button className="text-link" onClick={openMail}>
           打开邮件插件 <ArrowRight size={14} />
         </button>
       </div>
-      <SyntheticSnapshotPanel snapshot={dphSnapshot} />
-      <SyntheticDphSyncPanel snapshot={dphSnapshot} onProgress={simulateDphProgress} onAttention={simulateDphAttention} onFinish={simulateDphFinish} />
-      <SyntheticToolRouterPanel router={toolDemo} onNotice={setNotice} />
+      {dataError && <div className="mail-schedule-inline-notice" role="alert">{dataError}</div>}
 
       <nav className="mail-schedule-tabs" aria-label="工作台视图">
         {[
@@ -906,7 +689,7 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
               </button>
             </div>
             <div className="mail-schedule-mail-list">
-              {demoMails.map((mail) => (
+              {mails.map((mail) => (
                 <button key={mail.id} className="mail-schedule-mail-row" onClick={() => setView('inbox')}>
                   <span className="mail-schedule-mail-icon"><Mail size={17} /></span>
                   <span className="mail-schedule-mail-main">
@@ -917,26 +700,27 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
                   {mail.needsReply && <span className="mail-schedule-reply-badge">待回复</span>}
                 </button>
               ))}
+              {!mails.length && <div className="mail-schedule-empty"><strong>没有可展示的邮件事项</strong><small>配置邮箱后，工作台会读取当前账号的收件箱摘要。</small></div>}
             </div>
           </section>
 
           <div className="workbench-overview-grid">
             <ConversationPanel runs={conversationRuns} onNotice={setNotice} onOpenConversation={openTargetConversation} />
-            <LongTasksPanel tasks={longTasks} onNotice={setNotice} onCreate={() => setCreation({ mode: 'long' })} onEdit={(task) => setCreation({ mode: 'long', id: task.id, title: task.title, goal: task.goal, targetId: task.conversationId, engine: task.engine })} onOpenConversation={openTargetConversation} />
+            <LongTasksPanel tasks={longTasks} />
           </div>
           <div className="workbench-overview-grid">
-            <SchedulesPanel schedules={schedules} onToggle={toggleSchedule} onNotice={setNotice} onCreate={() => setCreation({ mode: 'schedule' })} onEdit={(schedule) => setCreation({ mode: 'schedule', id: schedule.id, title: schedule.title, action: schedule.action, cadence: schedule.cadence, targetId: schedule.conversationId })} onOpenConversation={openTargetConversation} />
-            <FinancePanel onNotice={setNotice} />
+            <SchedulesPanel schedules={schedules} />
+            <FinancePanel holdings={holdings} summary={investmentSummary} marketAreas={marketAreas} onNotice={setNotice} />
           </div>
         </>
       ) : view === 'conversations' ? (
         <ConversationPanel runs={conversationRuns} detailed onNotice={setNotice} onOpenConversation={openTargetConversation} />
       ) : view === 'long' ? (
-        <LongTasksPanel tasks={longTasks} detailed onNotice={setNotice} onCreate={() => setCreation({ mode: 'long' })} onEdit={(task) => setCreation({ mode: 'long', id: task.id, title: task.title, goal: task.goal, targetId: task.conversationId, engine: task.engine })} onOpenConversation={openTargetConversation} />
+        <LongTasksPanel tasks={longTasks} detailed />
       ) : view === 'schedules' ? (
-        <SchedulesPanel schedules={schedules} detailed onToggle={toggleSchedule} onNotice={setNotice} onCreate={() => setCreation({ mode: 'schedule' })} onEdit={(schedule) => setCreation({ mode: 'schedule', id: schedule.id, title: schedule.title, action: schedule.action, cadence: schedule.cadence, targetId: schedule.conversationId })} onOpenConversation={openTargetConversation} />
+        <SchedulesPanel schedules={schedules} detailed />
       ) : view === 'finance' ? (
-        <FinancePanel detailed onNotice={setNotice} />
+        <FinancePanel detailed holdings={holdings} summary={investmentSummary} marketAreas={marketAreas} onNotice={setNotice} />
       ) : view === 'tasks' ? (
         <section className="mail-schedule-panel mail-schedule-all-tasks">
           <div className="mail-schedule-panel-heading">
@@ -968,7 +752,7 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
                 <ChevronRight size={16} />
               </div>
             ))}
-            {!filteredTasks.length && <div className="mail-schedule-empty">没有匹配的演示任务。</div>}
+            {!filteredTasks.length && <div className="mail-schedule-empty">没有匹配的当前账号任务。</div>}
           </div>
         </section>
       ) : (
@@ -978,10 +762,10 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
               <div className="mail-schedule-section-kicker">INBOX</div>
               <h2>邮件事项</h2>
             </div>
-            <span className="mail-schedule-inbox-count"><Inbox size={15} /> {demoMails.length} 封重要邮件</span>
+            <span className="mail-schedule-inbox-count"><Inbox size={15} /> {mails.length} 封邮件事项</span>
           </div>
           <div className="mail-schedule-mail-list expanded">
-            {demoMails.map((mail) => (
+            {mails.map((mail) => (
               <button key={mail.id} className="mail-schedule-mail-row" onClick={openMail}>
                 <span className="mail-schedule-mail-icon"><Mail size={17} /></span>
                 <span className="mail-schedule-mail-main">
@@ -993,12 +777,11 @@ export function MailSchedulePage({ openMail, openConversation, scope = 'guest' }
               </button>
             ))}
           </div>
-          <div className="mail-schedule-inbox-note"><MessageSquareText size={16} /> Demo 只展示邮件事项，接入 QQ 邮箱后会在这里显示真实扫描结果。</div>
+          <div className="mail-schedule-inbox-note"><MessageSquareText size={16} /> 这里显示当前账号邮箱摘要；打开邮件插件可查看正文和执行操作。</div>
         </section>
       )}
 
       {notice && <div className="mail-schedule-inline-notice" role="status">{notice}</div>}
-      {creation && <WorkbenchCreationDialog draft={creation} conversations={conversationRuns} close={() => setCreation(null)} submit={submitCreation} />}
       {selectedTask && (
         <div className="mail-schedule-drawer-backdrop" role="presentation" onClick={() => setSelectedTask(null)}>
           <aside className="mail-schedule-task-drawer" role="dialog" aria-modal="true" aria-label="任务详情" onClick={(event) => event.stopPropagation()}>

@@ -733,7 +733,7 @@ function Workspace({
               />
             ) : page === 'workspace' ? (
               <MailSchedulePage
-                scope={scope}
+                settings={settings}
                 openMail={() => navigate('mail')}
                 openConversation={(conversationId, title) => {
                   navigate('pi');
@@ -745,9 +745,7 @@ function Workspace({
                     window.dispatchEvent(
                       new CustomEvent('astral-open-pi', { detail: { conversationId } }),
                     );
-                  } else {
-                    setNotice(`演示目标「${title}」已绑定。接入真实对话后会直接打开该对话。`);
-                  }
+                  } else setNotice(`「${title}」没有可直接打开的对话。`);
                 }}
               />
             ) : page === 'learning' ? (

@@ -1,19 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, Bot, CheckCircle2, CircleDot, Clock3, Paperclip, Sparkles, X } from 'lucide-react';
 import { api } from './data';
-import {
-  ArrowUp,
-  Bot,
-  ChevronDown,
-  ChevronUp,
-  CircleDot,
-  CheckCircle2,
-  Clock3,
-  ListChecks,
-  Paperclip,
-  Sparkles,
-  X,
-  Zap,
-} from 'lucide-react';
 import type { Page, Settings } from './types';
 
 type SuperAgentCaretakerProps = {
@@ -28,149 +15,174 @@ type CaretakerMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
-  mode?: 'delegate';
+  createdAt: string;
+  taskId?: string;
+  state?: 'thinking' | 'delegated' | 'report';
 };
 
-type CaretakerActivity = {
+type DelegatedTask = {
   id: string;
   title: string;
-  status: '进行中' | '待决定' | '已完成';
-  updatedAt: string;
+  status: string;
+  progress?: number;
+  report?: string;
+  attention?: string;
+  revision?: number;
+  updatedAt?: string;
+  createdAt?: string;
 };
 
-const seedMessage: CaretakerMessage = {
+const welcome: CaretakerMessage = {
   id: 'superagent-welcome',
   role: 'assistant',
-  text: '我是你的 SuperAgent 管家。告诉我想达成的结果，我会先抓住重点，再决定是直接回答还是委派执行。',
+  text: '你好，我是你的 SuperAgent 管家。你可以像发微信一样告诉我想完成什么，我会先抓住重点，再交给 subagent 执行，完成后把结果带回这条对话。',
+  createdAt: new Date(0).toISOString(),
 };
 
-const seedActivities: CaretakerActivity[] = [
-  { id: 'superagent-activity-mail', title: '整理本周邮件并生成待办', status: '进行中', updatedAt: '刚刚' },
-  { id: 'superagent-activity-investment', title: '刷新持仓并核对相对昨日盈亏', status: '待决定', updatedAt: '12 分钟前' },
-  { id: 'superagent-activity-learning', title: '整理 RAG 复习错题', status: '已完成', updatedAt: '今天 09:30' },
-];
-
-function storageKey(scope: string) {
-  return `astral.superagent.caretaker:${scope}`;
+function messagesKey(scope: string) {
+  return 'astral.superagent.chat:' + scope;
 }
 
-function activityStorageKey(scope: string) {
-  return `astral.superagent.activity:${scope}`;
-}
-
-function loadMessages(scope: string): CaretakerMessage[] {
+function readMessages(scope: string): CaretakerMessage[] {
   try {
-    const value = JSON.parse(localStorage.getItem(storageKey(scope) || '') || 'null');
-    if (!Array.isArray(value)) return [seedMessage];
-    const messages = value
-      .filter((item): item is CaretakerMessage => item && (item.role === 'user' || item.role === 'assistant') && typeof item.text === 'string')
-      .slice(-24);
-    return messages.length ? messages : [seedMessage];
+    const value = JSON.parse(localStorage.getItem(messagesKey(scope)) || 'null');
+    if (!Array.isArray(value)) return [welcome];
+    const result = value.filter((item): item is CaretakerMessage =>
+      item && (item.role === 'user' || item.role === 'assistant') && typeof item.text === 'string',
+    );
+    return result.length ? result.slice(-60) : [welcome];
   } catch {
-    return [seedMessage];
+    return [welcome];
   }
 }
 
-function loadActivities(scope: string): CaretakerActivity[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(activityStorageKey(scope)) || 'null');
-    if (!Array.isArray(value)) return seedActivities;
-    const activities = value.filter((item): item is CaretakerActivity => item && typeof item.id === 'string' && typeof item.title === 'string' && ['进行中', '待决定', '已完成'].includes(item.status));
-    return activities.length ? activities.slice(-12) : seedActivities;
-  } catch {
-    return seedActivities;
-  }
+function timeLabel(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || date.getTime() === 0) return '';
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
-function responseFor(input: string) {
-  const focus = input.replace(/\s+/g, ' ').trim().slice(0, 48);
-  return `已抓住重点：「${focus}」。我会把它交给 subagent 执行，完成后由我整理结果并回复你，进展会回收到工作台。当前是演示模式，执行前仍会检查权限。`;
+function taskLabel(task: DelegatedTask) {
+  if (task.status === 'waiting_user') return '等待你的回复';
+  if (task.status === 'succeeded') return '已完成';
+  if (task.status === 'failed') return '执行失败';
+  if (task.status === 'unknown') return '待核对';
+  if (task.status === 'cancelled') return '已停止';
+  if (task.status === 'running') return '执行中';
+  return '排队中';
 }
 
-function serverActivity(task: { id: string; title: string; status: string; updatedAt?: string; updated_at?: string }): CaretakerActivity {
-  return {
-    id: task.id,
-    title: task.title,
-    status: task.status === 'waiting_user' ? '待决定' : ['queued', 'running'].includes(task.status) ? '进行中' : '已完成',
-    updatedAt: task.updatedAt || task.updated_at || '刚刚',
-  };
+function taskMessage(task: DelegatedTask) {
+  const status = taskLabel(task);
+  const detail = task.report || task.attention;
+  return detail ? 'subagent · ' + status + '（' + detail + '）' : 'subagent · ' + status + (typeof task.progress === 'number' ? ' · ' + task.progress + '%' : '');
 }
 
 export function SuperAgentCaretaker({ connected, scope, settings, onNavigate, onNotice }: SuperAgentCaretakerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [view, setView] = useState<'chat' | 'activity'>('chat');
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<CaretakerMessage[]>(() => loadMessages(scope));
-  const [activities, setActivities] = useState<CaretakerActivity[]>(() => loadActivities(scope));
+  const [messages, setMessages] = useState<CaretakerMessage[]>(() => readMessages(scope));
+  const [tasks, setTasks] = useState<DelegatedTask[]>([]);
   const [thinking, setThinking] = useState(false);
+  const seenReports = useRef(new Map<string, number>());
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
-    setMessages(loadMessages(scope));
-    setActivities(loadActivities(scope));
-    setDraft('');
-    setView('chat');
-    setThinking(false);
+    setMessages(readMessages(scope));
+    setTasks([]);
+    seenReports.current.clear();
   }, [scope]);
 
   useEffect(() => {
-    if (!(settings.sessionToken || settings.token)) return;
-    let active = true;
-    void api<{ tasks: { id: string; title: string; status: string; updatedAt?: string }[] }>(settings, '/superagent/tasks')
-      .then((snapshot) => {
-        if (!active || !snapshot.tasks.length) return;
-        setActivities(snapshot.tasks.map(serverActivity));
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [settings, scope]);
-
-  useEffect(() => {
     try {
-      localStorage.setItem(storageKey(scope), JSON.stringify(messages.slice(-24)));
+      localStorage.setItem(messagesKey(scope), JSON.stringify(messages.slice(-60)));
     } catch {
       onNotice('SuperAgent 对话暂时无法写入设备存储。');
     }
   }, [messages, onNotice, scope]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(activityStorageKey(scope), JSON.stringify(activities.slice(-12)));
-    } catch {
-      onNotice('SuperAgent 活动记录暂时无法写入设备存储。');
-    }
-  }, [activities, onNotice, scope]);
+    if (!(settings.sessionToken || settings.token)) return;
+    let active = true;
+    const poll = () => {
+      void api<{ tasks: DelegatedTask[] }>(settings, '/superagent/tasks', undefined, undefined, false, { fresh: true })
+        .then((snapshot) => {
+          if (!active) return;
+          setTasks(snapshot.tasks || []);
+          for (const task of snapshot.tasks || []) {
+            const revision = task.revision || 0;
+            const key = task.id + ':' + revision;
+            if (!task.report && !task.attention) continue;
+            if (seenReports.current.has(task.id) && seenReports.current.get(task.id) === revision) continue;
+            seenReports.current.set(task.id, revision);
+            const message: CaretakerMessage = {
+              id: 'task-report-' + key,
+              role: 'assistant',
+              text: taskMessage(task),
+              createdAt: task.updatedAt || new Date().toISOString(),
+              taskId: task.id,
+              state: 'report',
+            };
+            setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message].slice(-60));
+          }
+        })
+        .catch(() => {});
+    };
+    poll();
+    const interval = window.setInterval(poll, expanded ? 2500 : 7000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [expanded, settings]);
 
   useEffect(() => () => {
     if (timer.current !== null) window.clearTimeout(timer.current);
   }, []);
 
+  function appendAssistant(text: string, state: CaretakerMessage['state'] = 'delegated') {
+    setMessages((current) => [...current, {
+      id: crypto.randomUUID(),
+      role: 'assistant' as const,
+      text,
+      createdAt: new Date().toISOString(),
+      state,
+    }].slice(-60));
+  }
+
   function submit(value = draft) {
     const text = value.trim();
     if (!text || thinking) return;
-    const userMessage: CaretakerMessage = { id: crypto.randomUUID(), role: 'user', text, mode: 'delegate' };
-    setMessages((current) => [...current, userMessage].slice(-24));
-    const activity: CaretakerActivity = { id: crypto.randomUUID(), title: text.slice(0, 52), status: '进行中', updatedAt: '刚刚' };
-    setActivities((current) => [activity, ...current].slice(0, 12));
-    if (settings.sessionToken || settings.token) {
-      void api<{ task: { id: string; title: string; status: string; updatedAt?: string } }>(settings, '/superagent/tasks', {
-        id: activity.id,
-        title: activity.title,
-        input: text,
-        runtime: 'DPH',
-      })
-        .then(({ task }) => setActivities((current) => [serverActivity(task), ...current.filter((item) => item.id !== activity.id)].slice(0, 12)))
-        .catch(() => {});
-    }
+    const id = crypto.randomUUID();
+    setMessages((current) => [...current, {
+      id,
+      role: 'user' as const,
+      text,
+      createdAt: new Date().toISOString(),
+    }].slice(-60));
     setDraft('');
     setThinking(true);
     timer.current = window.setTimeout(() => {
-      const reply: CaretakerMessage = { id: crypto.randomUUID(), role: 'assistant', text: responseFor(text), mode: 'delegate' };
-      setMessages((current) => [...current, reply].slice(-24));
+      appendAssistant('收到。我先确认目标和边界，再把执行交给 subagent。你可以继续补充要求，我会把补充内容接到同一个任务上。');
       setThinking(false);
-    }, 420);
+    }, 320);
+    if (!(settings.sessionToken || settings.token)) {
+      appendAssistant('当前还没有登录账号，我可以继续和你整理目标，但暂时不能创建真实委派任务。');
+      return;
+    }
+    void api<{ task: DelegatedTask }>(settings, '/superagent/tasks', {
+      id,
+      title: text.slice(0, 120),
+      input: text,
+      runtime: 'DPH',
+      conversationId: null,
+      projectId: null,
+    }).then(({ task }) => {
+      setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      appendAssistant('已委派给 subagent，任务状态会在这里持续更新。', 'delegated');
+    }).catch((error) => {
+      appendAssistant('委派没有成功：' + (error instanceof Error ? error.message : '服务器暂时不可用') + '。我保留了你的原始消息。', 'report');
+    });
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -180,43 +192,39 @@ export function SuperAgentCaretaker({ connected, scope, settings, onNavigate, on
     }
   }
 
-  return (
-    <section className={`superagent-caretaker ${expanded ? 'is-expanded' : ''}`} aria-label="SuperAgent 智能体助手管家">
-      <button
-        className="superagent-caretaker-trigger"
-        aria-expanded={expanded}
-        aria-controls="superagent-caretaker-panel"
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span className="superagent-caretaker-orb"><Bot size={18} /></span>
-        <span className="superagent-caretaker-title"><strong>SuperAgent</strong><small>长期智能体管家</small></span>
-        <span className={`superagent-caretaker-status ${connected ? 'is-connected' : ''}`}><CircleDot size={10} />{connected ? '在线' : '演示'}</span>
-        {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-      </button>
+  const activeCount = tasks.filter((task) => !['succeeded', 'failed', 'cancelled'].includes(task.status)).length;
 
+  return (
+    <section className={'superagent-caretaker ' + (expanded ? 'is-expanded' : '')} aria-label="SuperAgent 智能体助手管家">
+      <button className="superagent-caretaker-trigger" aria-expanded={expanded} aria-controls="superagent-caretaker-panel" onClick={() => setExpanded((value) => !value)}>
+        <span className="superagent-caretaker-orb"><Bot size={18} /></span>
+        <span className="superagent-caretaker-title"><strong>SuperAgent</strong><small>你的长期对话管家</small></span>
+        <span className={'superagent-caretaker-status ' + (connected ? 'is-connected' : '')}><CircleDot size={10} />{connected ? '在线' : '未连接'}</span>
+        {activeCount > 0 && <span className="superagent-caretaker-count">{activeCount}</span>}
+      </button>
       {expanded && (
         <div className="superagent-caretaker-panel" id="superagent-caretaker-panel">
-          <div className="superagent-caretaker-panel-heading">
-            <div><span className="superagent-caretaker-kicker"><Sparkles size={11} />LEADER · PERSONAL AGENT</span><strong>告诉我目标，我来委派</strong></div>
-            <div className="superagent-caretaker-window-actions"><span className="superagent-caretaker-runtime">短思考 · 委派执行</span><button className="icon-btn" aria-label="关闭 SuperAgent 对话窗口" onClick={() => setExpanded(false)}><X size={15} /></button></div>
+          <header className="superagent-chat-header">
+            <div className="superagent-chat-identity"><span className="superagent-chat-avatar"><Bot size={18} /></span><span><strong>SuperAgent 管家</strong><small><span className="superagent-online-dot" />短思考 · 委派给 subagent</small></span></div>
+            <button className="icon-btn" aria-label="关闭 SuperAgent 对话窗口" onClick={() => setExpanded(false)}><X size={17} /></button>
+          </header>
+          <div className="superagent-chat-status"><Sparkles size={13} />我负责理解和汇报，subagent 负责执行</div>
+          <div className="superagent-caretaker-messages" aria-live="polite">
+            {messages.slice(-24).map((message) => (
+              <div className={'superagent-chat-row ' + message.role} key={message.id}>
+                {message.role === 'assistant' && <span className="superagent-chat-avatar small"><Bot size={13} /></span>}
+                <div className="superagent-chat-bubble"><p>{message.text}</p>{message.taskId && <small><Clock3 size={11} />{message.state === 'report' ? '执行状态已回传' : '委派任务'}</small>}<time>{timeLabel(message.createdAt)}</time></div>
+              </div>
+            ))}
+            {thinking && <div className="superagent-chat-row assistant"><span className="superagent-chat-avatar small"><Bot size={13} /></span><div className="superagent-chat-bubble thinking"><i /><i /><i /><span>正在理解你的意思…</span></div></div>}
           </div>
-          <div className="superagent-caretaker-tabs" role="tablist" aria-label="SuperAgent 内容">
-            <button role="tab" aria-selected={view === 'chat'} className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>对话</button>
-            <button role="tab" aria-selected={view === 'activity'} className={view === 'activity' ? 'active' : ''} onClick={() => setView('activity')}>Activity <span>{activities.filter((item) => item.status !== '已完成').length}</span></button>
-          </div>
-          {view === 'chat' ? <div className="superagent-caretaker-messages" aria-live="polite">
-            {messages.slice(-6).map((message) => <div className={`superagent-caretaker-message ${message.role}`} key={message.id}>{message.mode === 'delegate' && <span className="superagent-caretaker-message-mode"><Zap size={10} />委派给 subagent</span>}<p>{message.text}</p></div>)}
-            {thinking && <div className="superagent-caretaker-thinking"><span /><span /><span />正在抓住重点…</div>}
-          </div> : <div className="superagent-caretaker-activities" aria-label="委派活动">
-            {activities.map((activity) => <button className="superagent-caretaker-activity" key={activity.id} onClick={() => onNavigate('workspace')}><span className={`superagent-caretaker-activity-icon ${activity.status === '进行中' ? 'running' : activity.status === '待决定' ? 'waiting' : 'done'}`}>{activity.status === '进行中' ? <Clock3 size={13} /> : activity.status === '待决定' ? <ListChecks size={13} /> : <CheckCircle2 size={13} />}</span><span><strong>{activity.title}</strong><small>subagent · {activity.updatedAt}</small></span><span className="superagent-caretaker-activity-status">{activity.status}</span></button>)}
-          </div>}
-          <div className="superagent-caretaker-mode" role="status"><Zap size={13} />仅委派执行 · subagent 执行后由 Leader 汇报</div>
+          <div className="superagent-chat-quick"><button onClick={() => submit('安排今天最重要的三件事')}>安排今天</button><button onClick={() => submit('整理邮件和长期任务')}>整理任务</button><button onClick={() => setDraft('帮我持续推进这个目标')}>持续推进</button><button onClick={() => onNavigate('workspace')}>打开工作台</button></div>
           <div className="superagent-caretaker-compose">
-            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} rows={2} placeholder="描述目标，我会抓住重点并委派给 subagent…" aria-label="和 SuperAgent 对话" />
-            <div><button className="superagent-caretaker-attach" aria-label="添加上下文" onClick={() => onNotice('上下文附件入口已保留，当前 Demo 不上传真实文件。')}><Paperclip size={14} /></button><button className="superagent-caretaker-send" aria-label="发送给 SuperAgent" disabled={!draft.trim() || thinking} onClick={() => submit()}><ArrowUp size={15} /></button></div>
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} rows={2} placeholder="发消息给你的管家…" aria-label="和 SuperAgent 对话" />
+            <div><button className="superagent-caretaker-attach" aria-label="添加上下文" onClick={() => onNotice('请在对应对话中添加附件，SuperAgent 会沿用当前账号上下文。')}><Paperclip size={15} /></button><button className="superagent-caretaker-send" aria-label="发送给 SuperAgent" disabled={!draft.trim() || thinking} onClick={() => submit()}><ArrowUp size={16} /></button></div>
           </div>
-          <div className="superagent-caretaker-quick"><button onClick={() => submit('安排今天最重要的三件事')}>安排今天</button><button onClick={() => submit('整理邮件和长期任务')}>整理任务</button><button onClick={() => setDraft('帮我持续推进这个目标')}>持续推进</button><button className="superagent-caretaker-open-workbench" onClick={() => onNavigate('workspace')}>查看工作台</button></div>
-          <p className="superagent-caretaker-retention">对话按当前账号保存在本机，跨页面继续。Leader 不直接执行任务，subagent 完成后再回传结果。</p>
+          <p className="superagent-caretaker-retention">对话按当前账号保存在本机，刷新后继续。打开工作台可查看真实任务、目标、计划、邮件和持仓。</p>
+          <div className="superagent-chat-footer"><span><CheckCircle2 size={12} />Leader 不直接执行</span><button onClick={() => onNavigate('workspace')}>查看工作台</button></div>
         </div>
       )}
     </section>

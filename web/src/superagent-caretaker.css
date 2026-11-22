@@ -538,3 +538,281 @@
     padding: 14px;
   }
 }
+
+/* 0.9.7 conversational caretaker */
+.superagent-caretaker-trigger {
+  min-height: 56px;
+  border-radius: 16px;
+  padding: 8px 10px;
+}
+.superagent-caretaker-trigger .superagent-caretaker-orb {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+.superagent-caretaker-count {
+  display: grid;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 3px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+}
+.superagent-caretaker-panel {
+  top: 18px;
+  left: 250px;
+  width: min(440px, calc(100vw - 280px));
+  max-height: calc(100vh - 36px);
+  padding: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--surface);
+}
+.superagent-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.superagent-chat-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.superagent-chat-identity > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+.superagent-chat-identity strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.superagent-chat-identity small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.superagent-chat-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-active));
+  color: var(--accent);
+}
+.superagent-chat-avatar.small {
+  width: 24px;
+  height: 24px;
+  align-self: flex-end;
+}
+.superagent-online-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2b9a6b;
+}
+.superagent-chat-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 9px;
+}
+.superagent-caretaker-messages {
+  display: flex;
+  min-height: 270px;
+  max-height: min(58vh, 560px);
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 15px 14px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface));
+}
+.superagent-chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  max-width: 92%;
+}
+.superagent-chat-row.user {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+.superagent-chat-row.assistant {
+  align-self: flex-start;
+}
+.superagent-chat-bubble {
+  position: relative;
+  min-width: 0;
+  padding: 9px 11px 7px;
+  border: 1px solid var(--border);
+  border-radius: 15px 15px 15px 4px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 3px 10px color-mix(in srgb, #000 7%, transparent);
+}
+.superagent-chat-row.user .superagent-chat-bubble {
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 15px 15px 4px 15px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+.superagent-chat-bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.65;
+}
+.superagent-chat-bubble small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 8px;
+}
+.superagent-chat-bubble time {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  opacity: .82;
+}
+.superagent-chat-bubble.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.superagent-chat-bubble.thinking i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: superagent-caretaker-pulse 900ms ease-in-out infinite;
+}
+.superagent-chat-bubble.thinking i:nth-child(2) { animation-delay: 120ms; }
+.superagent-chat-bubble.thinking i:nth-child(3) { animation-delay: 240ms; }
+.superagent-chat-bubble.thinking span {
+  margin-left: 4px;
+  font-size: 9px;
+}
+.superagent-chat-quick {
+  display: flex;
+  gap: 6px;
+  padding: 0 14px 10px;
+  overflow-x: auto;
+}
+.superagent-chat-quick button {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.superagent-chat-quick button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+.superagent-caretaker-compose {
+  margin: 0 12px;
+  padding: 8px 8px 7px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 8%, transparent);
+}
+.superagent-caretaker-compose textarea {
+  min-height: 42px;
+  max-height: 130px;
+  padding: 4px 5px;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.superagent-caretaker-compose textarea:focus {
+  box-shadow: none;
+}
+.superagent-caretaker-compose > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.superagent-caretaker-attach {
+  width: 27px;
+  height: 27px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+}
+.superagent-caretaker-send {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+}
+.superagent-caretaker-send:disabled {
+  opacity: .4;
+}
+.superagent-caretaker-retention {
+  margin: 8px 15px 0;
+  font-size: 8px;
+  line-height: 1.5;
+}
+.superagent-chat-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 8px 15px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 8px;
+}
+.superagent-chat-footer span,
+.superagent-chat-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.superagent-chat-footer button {
+  color: var(--accent);
+}
+@media (max-width: 700px) {
+  .superagent-caretaker-panel {
+    top: max(10px, env(safe-area-inset-top));
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-height: none;
+    border-radius: 18px;
+  }
+  .superagent-caretaker-messages {
+    max-height: none;
+    flex: 1;
+  }
+}
