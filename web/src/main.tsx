@@ -36,6 +36,8 @@ import {
   Bot,
   UserRound,
   Mail,
+  Eye,
+  EyeOff,
   WandSparkles,
   Pencil,
   CheckCircle2,
@@ -58,6 +60,8 @@ import {
   validateSettings,
   persistSettings,
   loadPlugins,
+  loadPluginLayout,
+  persistPluginLayout,
   loadStartupPage,
   persistStartupPage,
   scopedStorageKey,
@@ -75,6 +79,7 @@ import type {
   SyncStatus,
   AuthSession,
 } from './types';
+import type { PluginLayout } from './data';
 import { loadSession, persistSession, accountScope, serverIdentity } from './session';
 import { AccountPage } from './AccountPage';
 import { SocialPage } from './SocialPage';
@@ -111,6 +116,24 @@ import './pet.css';
 import './investment.css';
 import './mail-schedule.css';
 import './superagent-caretaker.css';
+
+type SidebarPlugin = {
+  id: string;
+  name: string;
+  description: string;
+  page: Page;
+  builtin: boolean;
+  icon: typeof Layers;
+  badge?: number;
+};
+
+const builtinSidebarPlugins: SidebarPlugin[] = [
+  { id: 'tarot', name: '塔罗', description: '抽牌、图鉴与手记', page: 'tarot', builtin: true, icon: Layers },
+  { id: 'mail', name: '邮件', description: '收件箱与邮件助手', page: 'mail', builtin: true, icon: Mail },
+  { id: 'investment', name: '投资研究', description: '基金、股票与组合', page: 'investment', builtin: true, icon: LineChart },
+  { id: 'learning', name: '学习', description: '讲解、练习与错题本', page: 'learning', builtin: true, icon: BookOpen },
+  { id: 'pet', name: '桌宠', description: '陪伴、心情与对话', page: 'pet', builtin: true, icon: PawPrint },
+];
 
 function CardBack({ small = false }: { small?: boolean }) {
   return (
@@ -197,11 +220,15 @@ function Workspace({
 }) {
   const [startupPage, setStartupPage] = useState(() => loadStartupPage(scope));
   const [page, setPage] = useState<Page>(() =>
-    new URLSearchParams(location.search).get('demo') === 'mail-schedule' ||
-    loadStartupPage(scope) === 'workspace'
-      ? 'workspace'
-      : 'pi',
+    (() => {
+      const demo = new URLSearchParams(location.search).get('demo');
+      if (demo === 'mail-schedule') return 'workspace';
+      if (demo === 'superagent') return 'superagent';
+      if (demo === 'investment') return 'investment';
+      return loadStartupPage(scope) === 'workspace' ? 'workspace' : 'pi';
+    })(),
   );
+  const mobilePreview = new URLSearchParams(location.search).get('mobile') === '1';
   const pageHistory = useRef<Page[]>([]);
   const unread = useUnread(settings, !!session);
   const [mailNotice, setMailNotice] = useState<{
@@ -292,6 +319,7 @@ function Workspace({
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState('');
   const [plugins, setPlugins] = useState<Plugin[]>(() => loadPlugins(scope));
+  const [pluginLayout, setPluginLayout] = useState<PluginLayout>(() => loadPluginLayout(scope));
   const entriesRef = useRef(entries);
   const syncLock = useRef(false);
   const history = entries
@@ -379,6 +407,13 @@ function Workspace({
       setNotice('插件未能保存，请检查本机存储空间。');
     }
   }, [plugins]);
+  useEffect(() => {
+    try {
+      persistPluginLayout(scope, pluginLayout);
+    } catch {
+      setNotice('插件布局未能保存，请检查本机存储空间。');
+    }
+  }, [pluginLayout, scope]);
   function saveSettings(s: Settings) {
     saveConnection(s);
     setNotice('本机设置已保存，AI 密钥不会同步。');
@@ -395,6 +430,17 @@ function Workspace({
     setActivePluginId(id);
     navigate('plugins');
   }
+  const sidebarPlugins: SidebarPlugin[] = [
+    ...builtinSidebarPlugins.map((plugin) => plugin.id === 'mail' ? { ...plugin, badge: unread.mail?.count ?? 0 } : plugin),
+    ...plugins.map((plugin) => ({
+      id: plugin.id,
+      name: plugin.name,
+      description: plugin.description,
+      page: 'plugins' as Page,
+      builtin: false,
+      icon: Puzzle,
+    })),
+  ];
   useBackLayer(
     page !== 'pi',
     () => {
@@ -416,6 +462,7 @@ function Workspace({
       : (
           {
             pi: '智能助手',
+            superagent: '智能管家',
             workspace: '工作台',
             mail: '邮件',
             investment: '投资研究',
@@ -458,7 +505,7 @@ function Workspace({
   );
   return (
     <DeckThemeContext.Provider value={deckTheme}>
-      <div className="shell deepseek-shell" data-mobile-panel={mobilePanel || undefined}>
+      <div className={`shell deepseek-shell ${mobilePreview ? 'mobile-preview' : ''}`} data-mobile-panel={mobilePanel || undefined}>
         <aside className={`sidebar ${mobileNav ? 'open' : ''}`} aria-label="星屿导航">
           <button
             className="icon-btn mobile-nav-close"
@@ -502,80 +549,24 @@ function Workspace({
                 {n.id === 'pi' && <span className="nav-dot" />}
               </button>
             ))}
-            <div className="nav-group-heading">
-              <span>插件</span>
-              <button
-                aria-label="添加或管理插件"
-                onClick={() => {
-                  setActivePluginId('');
-                  navigate('plugins');
-                }}
-              >
-                <Plus size={15} />
-              </button>
-            </div>
-            <button
-              className={tarotActive ? 'active' : ''}
-              aria-current={tarotActive ? 'page' : undefined}
-              onClick={() => navigate('tarot')}
-            >
-              <Layers size={19} />
-              塔罗
-            </button>
-            <button
-              className={page === 'mail' ? 'active' : ''}
-              aria-current={page === 'mail' ? 'page' : undefined}
-              onClick={() => navigate('mail')}
-            >
-              <Mail size={19} />
-              邮件
-              <UnreadBadge count={unread.mail?.count ?? undefined} label="封收件箱未读邮件" />
-            </button>
-            <button
-              className={page === 'investment' ? 'active' : ''}
-              aria-current={page === 'investment' ? 'page' : undefined}
-              onClick={() => navigate('investment')}
-            >
-              <LineChart size={19} />
-              投资研究
-            </button>
-            <button
-              className={page === 'learning' ? 'active' : ''}
-              aria-current={page === 'learning' ? 'page' : undefined}
-              onClick={() => navigate('learning')}
-            >
-              <BookOpen size={19} />
-              学习
-            </button>
-            <button
-              className={page === 'pet' ? 'active' : ''}
-              aria-current={page === 'pet' ? 'page' : undefined}
-              onClick={() => navigate('pet')}
-            >
-              <PawPrint size={19} />
-              桌宠
-            </button>
-            {plugins.map((p) => (
-              <button
-                key={p.id}
-                title={p.name}
-                className={page === 'plugins' && activePluginId === p.id ? 'active' : ''}
-                onClick={() => openPlugin(p.id)}
-              >
-                <Puzzle size={19} />
-                <span className="nav-plugin-name">{p.name}</span>
-              </button>
-            ))}
-            <button
-              className={page === 'plugins' && !activePluginId ? 'active nav-manage' : 'nav-manage'}
-              onClick={() => {
+            <SidebarPluginShelf
+              plugins={sidebarPlugins}
+              layout={pluginLayout}
+              updateLayout={setPluginLayout}
+              page={page}
+              activePluginId={activePluginId}
+              openPlugin={(plugin) => {
+                if (plugin.builtin) {
+                  navigate(plugin.page);
+                } else {
+                  openPlugin(plugin.id);
+                }
+              }}
+              openManager={() => {
                 setActivePluginId('');
                 navigate('plugins');
               }}
-            >
-              <Plus size={17} />
-              管理插件
-            </button>
+            />
           </nav>
           <div className="sidebar-note">
             <span>
@@ -614,7 +605,7 @@ function Workspace({
           onClick={() => setMobileNav(false)}
         />
         <div
-          className={`workspace ${page === 'pi' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'workspace' ? 'mail-schedule-workspace' : ''} ${page === 'investment' ? 'investment-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'workspace' || page === 'investment' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
+          className={`workspace ${page === 'pi' || page === 'superagent' ? 'assistant-workspace' : ''} ${page === 'mail' ? 'mail-workspace' : ''} ${page === 'workspace' ? 'mail-schedule-workspace' : ''} ${page === 'investment' ? 'investment-workspace' : ''} ${page === 'plugins' || page === 'mail' || page === 'workspace' || page === 'investment' || page === 'pet' ? 'plugin-workspace' : ''} ${page === 'pet' ? 'pet-workspace' : ''}`}
         >
           {page !== 'pi' && (
             <header className="topbar">
@@ -634,7 +625,8 @@ function Workspace({
             </header>
           )}
           <main
-            className={page === 'pi' ? 'assistant-main' : page === 'mail' ? 'mail-main' : page === 'workspace' ? 'mail-schedule-main' : page === 'investment' ? 'investment-main' : ''}
+            className={page === 'pi' || page === 'superagent' ? 'assistant-main' : page === 'mail' ? 'mail-main' : page === 'workspace' ? 'mail-schedule-main' : page === 'investment' ? 'investment-main' : ''}
+            data-panel-swipe={page !== 'pi' && page !== 'superagent' ? '' : undefined}
             key={page === 'plugins' ? `${page}:${activePluginId}` : page}
           >
             {tarotActive && (
@@ -731,6 +723,15 @@ function Workspace({
                 shellActions={shellActions}
                 openNavigation={() => setMobileNav(true)}
               />
+            ) : page === 'superagent' ? (
+              <SuperAgentCaretaker
+                fullPage
+                connected={!!status}
+                scope={scope}
+                settings={settings}
+                onNavigate={navigate}
+                onNotice={setNotice}
+              />
             ) : page === 'workspace' ? (
               <MailSchedulePage
                 settings={settings}
@@ -794,7 +795,7 @@ function Workspace({
                 }}
               />
             )}
-            {page !== 'pi' && (
+            {page !== 'pi' && page !== 'superagent' && (
               <footer>
                 <span>
                   <Sparkle size={12} aria-hidden="true" /> 星屿 · 你的智能工作空间
@@ -817,6 +818,160 @@ function Workspace({
     </DeckThemeContext.Provider>
   );
 }
+
+function SidebarPluginShelf({
+  plugins,
+  layout,
+  updateLayout,
+  page,
+  activePluginId,
+  openPlugin,
+  openManager,
+}: {
+  plugins: SidebarPlugin[];
+  layout: PluginLayout;
+  updateLayout: (next: PluginLayout) => void;
+  page: Page;
+  activePluginId: string;
+  openPlugin: (plugin: SidebarPlugin) => void;
+  openManager: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const byId = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+  const orderedIds = [
+    ...layout.order.filter((id) => byId.has(id)),
+    ...plugins.map((plugin) => plugin.id).filter((id) => !layout.order.includes(id)),
+  ];
+  const ordered = orderedIds.map((id) => byId.get(id)!).filter(Boolean);
+  const hidden = new Set(layout.hidden);
+  const visible = ordered.filter((plugin) => !hidden.has(plugin.id));
+  const hiddenPlugins = ordered.filter((plugin) => hidden.has(plugin.id));
+  function patchLayout(patch: Partial<PluginLayout>) {
+    updateLayout({ ...layout, ...patch });
+  }
+  function reorder(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const from = orderedIds.indexOf(fromId);
+    const to = orderedIds.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    const next = [...orderedIds];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    patchLayout({ order: next });
+  }
+  function moveVisible(pluginId: string, offset: -1 | 1) {
+    const index = visible.findIndex((plugin) => plugin.id === pluginId);
+    const target = visible[index + offset];
+    if (index < 0 || !target) return;
+    reorder(pluginId, target.id);
+  }
+  function hide(pluginId: string) {
+    patchLayout({ hidden: [...new Set([...layout.hidden, pluginId])] });
+  }
+  function show(pluginId: string) {
+    patchLayout({ hidden: layout.hidden.filter((id) => id !== pluginId) });
+  }
+  return (
+    <section className={`sidebar-plugin-shelf ${editing ? 'is-editing' : ''}`} aria-label="插件入口">
+      <div className="sidebar-plugin-heading">
+        <div>
+          <span>插件</span>
+          <small>{visible.length} 个已载入</small>
+        </div>
+        <div className="sidebar-plugin-heading-actions">
+          <button
+            type="button"
+            className={editing ? 'is-active' : ''}
+            aria-label={editing ? '完成插件整理' : '整理插件入口'}
+            title={editing ? '完成整理' : '整理插件入口'}
+            onClick={() => setEditing((value) => !value)}
+          >
+            {editing ? <Check size={15} /> : <Pencil size={14} />}
+          </button>
+          <button type="button" aria-label="载入插件" title="载入插件" onClick={openManager}>
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="sidebar-plugin-list">
+        {visible.map((plugin, index) => {
+          const Icon = plugin.icon;
+          return (
+            <div
+              className={`sidebar-plugin-entry ${dragOverId === plugin.id ? 'is-drag-over' : ''}`}
+              key={plugin.id}
+              draggable={editing}
+              onDragStart={(event) => {
+                if (!editing) return;
+                setDraggedId(plugin.id);
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', plugin.id);
+              }}
+              onDragOver={(event) => {
+                if (!editing || !draggedId || draggedId === plugin.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                setDragOverId(plugin.id);
+              }}
+              onDragLeave={() => {
+                if (dragOverId === plugin.id) setDragOverId(null);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const fromId = draggedId || event.dataTransfer.getData('text/plain');
+                if (fromId) reorder(fromId, plugin.id);
+                setDraggedId(null);
+                setDragOverId(null);
+              }}
+              onDragEnd={() => {
+                setDraggedId(null);
+                setDragOverId(null);
+              }}
+            >
+              {editing && <GripVertical className="sidebar-plugin-grip" size={15} aria-label="拖动排序" />}
+              <button
+                type="button"
+                className={`sidebar-plugin-button ${page === plugin.page && (plugin.builtin || activePluginId === plugin.id) ? 'active' : ''}`}
+                aria-current={page === plugin.page && (plugin.builtin || activePluginId === plugin.id) ? 'page' : undefined}
+                onClick={() => openPlugin(plugin)}
+              >
+                <span className="sidebar-plugin-icon"><Icon size={17} /></span>
+                <span className="sidebar-plugin-copy"><b>{plugin.name}</b><small>{plugin.description}</small></span>
+                {typeof plugin.badge === 'number' && plugin.badge > 0 ? <UnreadBadge count={plugin.badge} label="封收件箱未读邮件" /> : plugin.builtin ? <span className="sidebar-plugin-state" aria-label="内置插件" /> : <span className="sidebar-plugin-custom">自定义</span>}
+              </button>
+              {editing && (
+                <div className="sidebar-plugin-edit-actions">
+                  <button type="button" aria-label={`将插件 ${plugin.name} 上移`} disabled={index === 0} onClick={() => moveVisible(plugin.id, -1)}><ChevronUp size={13} /></button>
+                  <button type="button" aria-label={`将插件 ${plugin.name} 下移`} disabled={index === visible.length - 1} onClick={() => moveVisible(plugin.id, 1)}><ChevronDown size={13} /></button>
+                  <button type="button" aria-label={`隐藏插件 ${plugin.name}`} onClick={() => hide(plugin.id)}><EyeOff size={13} /></button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {editing && hiddenPlugins.length > 0 && (
+        <div className="sidebar-plugin-hidden">
+          <div className="sidebar-plugin-hidden-heading">已隐藏</div>
+          {hiddenPlugins.map((plugin) => {
+            const Icon = plugin.icon;
+            return (
+              <div className="sidebar-plugin-hidden-item" key={plugin.id}>
+                <span className="sidebar-plugin-icon"><Icon size={15} /></span>
+                <span>{plugin.name}</span>
+                <button type="button" aria-label={`显示插件 ${plugin.name}`} onClick={() => show(plugin.id)}><Eye size={14} /></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!editing && <button type="button" className="sidebar-plugin-manage" onClick={openManager}><Plus size={15} />载入或管理插件</button>}
+    </section>
+  );
+}
+
 function Tarot({
   aiConfigured,
   settings,

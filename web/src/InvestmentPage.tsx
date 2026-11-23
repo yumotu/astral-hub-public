@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BarChart3, BookOpen, ChevronRight, Database, LineChart, LoaderCircle, MessageSquareText, Plus, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
+import { BarChart3, BookOpen, ChevronRight, Database, ExternalLink, LineChart, LoaderCircle, MessageSquareText, Plus, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
 import { api } from './data';
 import type { Settings } from './types';
 import { investmentDemoDashboard, investmentDemoHoldings, isInvestmentDemo, isInvestmentMobileDemo } from './investment-demo';
@@ -15,6 +15,50 @@ type AssetType =
   | 'cash'
   | 'cash_management'
   | 'other';
+type HistorySeries = {
+  period: string;
+  unit?: string;
+  granularity?: string;
+  points: number[];
+  labels?: string[];
+  change_percent?: number | null;
+};
+type ResearchMetric = {
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: 'positive' | 'negative' | 'neutral';
+};
+type AssetResearch = {
+  as_of?: string | null;
+  history?: HistorySeries[];
+  valuation?: {
+    status?: string | null;
+    percentile?: number | null;
+    metrics?: ResearchMetric[];
+    note?: string | null;
+  };
+  risk?: {
+    level?: string | null;
+    volatility_1y?: number | null;
+    max_drawdown_3y?: number | null;
+    sharpe_1y?: number | null;
+    beta?: number | null;
+    liquidity?: string | null;
+    metrics?: ResearchMetric[];
+    note?: string | null;
+  };
+  dividends?: {
+    yield_1y?: number | null;
+    frequency?: string | null;
+    last_amount?: number | null;
+    last_date?: string | null;
+    next_date?: string | null;
+    trailing_3y?: number | null;
+    metrics?: ResearchMetric[];
+    note?: string | null;
+  };
+};
 type Holding = {
   id: string;
   asset_type: AssetType;
@@ -30,6 +74,7 @@ type Holding = {
   price_as_of: string | null;
   source: string;
   value: number | null;
+  research?: AssetResearch;
 };
 type ParsedTransaction = {
   name: string;
@@ -49,7 +94,12 @@ type Ranking = {
   metrics?: Record<string, unknown>;
   band?: string;
   flags?: string[];
+  research?: AssetResearch;
 };
+type RankingKind = 'fund' | 'stock';
+type AssetSelection =
+  | { kind: 'holding'; item: Holding }
+  | { kind: RankingKind; item: Ranking };
 type Market = {
   as_of?: string | null;
   regime?: string;
@@ -149,6 +199,66 @@ function holdingDayGainPercent(holding: Holding) {
   return Number(((holding.current_price / holding.previous_close - 1) * 100).toFixed(2));
 }
 
+function assetResearchUrl(kind: AssetSelection['kind'], name: string, symbol: string, assetType?: AssetType) {
+  const code = symbol.trim();
+  if ((kind === 'fund' || assetType === 'fund') && /^\d{6}$/.test(code)) return `https://fund.eastmoney.com/${code}.html`;
+  if (/^\d{6}$/.test(code)) {
+    const market = /^(5|6)/.test(code) ? 'sh' : /^(0|3)/.test(code) ? 'sz' : /^(4|8)/.test(code) ? 'bj' : '';
+    if (market) return `https://quote.eastmoney.com/${market}${code}.html`;
+  }
+  const query = code || name.trim();
+  return query ? `https://so.eastmoney.com/web/s?keyword=${encodeURIComponent(query)}` : null;
+}
+
+function dateLabel(value: unknown) {
+  if (typeof value !== 'string' || !value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('zh-CN');
+}
+
+function DetailMetricGrid({ metrics }: { metrics: ResearchMetric[] }) {
+  if (!metrics.length) return <div className="investment-detail-empty">暂无可用数据，连接数据源后显示。</div>;
+  return <div className="investment-research-metrics">{metrics.map((item) => <div key={`${item.label}-${item.value}`}><small>{item.label}</small><strong className={item.tone ? `investment-metric-${item.tone}` : undefined}>{item.value}</strong>{item.detail && <span>{item.detail}</span>}</div>)}</div>;
+}
+
+function TrendChart({ name, series }: { name: string; series: HistorySeries | null }) {
+  if (!series || series.points.length < 2) return <div className="investment-detail-empty">暂无历史走势，刷新数据源后显示。</div>;
+  const points = series.points.filter((point) => Number.isFinite(point));
+  if (points.length < 2) return <div className="investment-detail-empty">暂无历史走势，刷新数据源后显示。</div>;
+  const width = 560;
+  const height = 190;
+  const padding = 18;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const span = max - min || Math.max(Math.abs(max) * 0.02, 1);
+  const low = min - span * 0.14;
+  const high = max + span * 0.14;
+  const coordinates = points.map((point, index) => ({
+    x: padding + ((width - padding * 2) * index) / Math.max(points.length - 1, 1),
+    y: height - padding - ((point - low) / (high - low)) * (height - padding * 2),
+  }));
+  const linePath = coordinates.map((point, index) => `${index ? 'L' : 'M'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
+  const first = coordinates[0];
+  const last = coordinates.at(-1) as (typeof coordinates)[number];
+  const areaPath = `${linePath} L ${last.x.toFixed(2)} ${(height - padding).toFixed(2)} L ${first.x.toFixed(2)} ${(height - padding).toFixed(2)} Z`;
+  const labels = series.labels || [];
+  const change = series.change_percent;
+  return (
+    <div className="investment-trend-wrap">
+      <div className="investment-trend-meta"><span>{series.unit || '指数化走势'} · {series.granularity === 'day' ? '每日' : series.period}</span><strong className={typeof change === 'number' && change < 0 ? 'investment-metric-negative' : 'investment-metric-positive'}>{typeof change === 'number' ? `${change >= 0 ? '+' : ''}${change.toFixed(2)}%` : '区间涨跌 —'}</strong></div>
+      <svg className="investment-trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${name} ${series.period}历史走势`} preserveAspectRatio="none">
+        <line className="investment-trend-gridline" x1={padding} x2={width - padding} y1={height * 0.25} y2={height * 0.25} />
+        <line className="investment-trend-gridline" x1={padding} x2={width - padding} y1={height * 0.5} y2={height * 0.5} />
+        <line className="investment-trend-gridline" x1={padding} x2={width - padding} y1={height * 0.75} y2={height * 0.75} />
+        <path className="investment-trend-area" d={areaPath} />
+        <path className="investment-trend-line" d={linePath} />
+        <circle className="investment-trend-point" cx={last.x} cy={last.y} r="4" />
+      </svg>
+      <div className="investment-trend-axis"><span>{labels[0] || series.period}</span><span>{labels[Math.floor(labels.length / 2)] || ''}</span><span>{labels.at(-1) || '最新'}</span></div>
+    </div>
+  );
+}
+
 const allocationColors: Record<AssetType, string> = {
   domestic_equity: '#5b7cfa',
   international_equity: '#8e7dff',
@@ -224,7 +334,7 @@ function PortfolioOverview({
   );
 }
 
-function CategoryDetail({ assetType, holdings, onClose }: { assetType: AssetType; holdings: Holding[]; onClose: () => void }) {
+function CategoryDetail({ assetType, holdings, onClose, onSelectHolding }: { assetType: AssetType; holdings: Holding[]; onClose: () => void; onSelectHolding: (holding: Holding) => void }) {
   const matching = holdings.filter((holding) => holding.asset_type === assetType);
   const total = matching.reduce((sum, holding) => sum + (holding.value || 0), 0);
   const dayGain = matching.reduce((sum, holding) => sum + (holdingDayGain(holding) || 0), 0);
@@ -236,8 +346,103 @@ function CategoryDetail({ assetType, holdings, onClose }: { assetType: AssetType
       </div>
       <div className="investment-category-summary"><span>合计市值 <b>{money(total)} 元</b></span><span className={dayGain >= 0 ? 'investment-gain-positive' : 'investment-gain-negative'}>今日相对昨日 <b>{dayGain >= 0 ? '+' : ''}{money(dayGain)} 元</b></span></div>
       <div className="investment-holding-list">
-        {matching.map((holding) => <div className="investment-holding-row" key={holding.id}><div className="investment-holding-main"><strong>{holding.name}</strong><small>{holding.symbol || '无代码'} · 份额 {holding.quantity}</small><small>成本 {money(holding.cost_basis)} · 现价 {money(holding.current_price)} · 来源 {holding.source}</small></div><div className="investment-holding-value"><strong>{money(holding.value)} {holding.currency}</strong><small className={(holdingDayGain(holding) || 0) >= 0 ? 'investment-gain-positive' : 'investment-gain-negative'}>昨日比较 {(holdingDayGain(holding) || 0) >= 0 ? '+' : ''}{money(holdingDayGain(holding))} ({holdingDayGainPercent(holding) ?? '—'}%)</small></div></div>)}
+        {matching.map((holding) => <button className="investment-holding-row investment-holding-row-button" type="button" key={holding.id} onClick={() => onSelectHolding(holding)}><div className="investment-holding-main"><strong>{holding.name}</strong><small>{holding.symbol || '无代码'} · 份额 {holding.quantity}</small><small>成本 {money(holding.cost_basis)} · 现价 {money(holding.current_price)} · 来源 {holding.source}</small></div><div className="investment-holding-value"><strong>{money(holding.value)} {holding.currency}</strong><small className={(holdingDayGain(holding) || 0) >= 0 ? 'investment-gain-positive' : 'investment-gain-negative'}>昨日比较 {(holdingDayGain(holding) || 0) >= 0 ? '+' : ''}{money(holdingDayGain(holding))} ({holdingDayGainPercent(holding) ?? '—'}%)</small></div><ChevronRight size={16} aria-hidden="true" /></button>)}
       </div>
+    </section>
+  );
+}
+
+function AssetDetailPanel({ selection, holdings, onClose }: { selection: AssetSelection; holdings: Holding[]; onClose: () => void }) {
+  const isHolding = selection.kind === 'holding';
+  const holding = isHolding ? selection.item : null;
+  const ranking = isHolding ? null : selection.item;
+  const name = holding?.name || ranking?.name || ranking?.code || '未命名标的';
+  const symbol = holding?.symbol || ranking?.code || '';
+  const assetType = holding?.asset_type || (selection.kind === 'fund' ? 'fund' : 'domestic_equity');
+  const research = holding?.research || ranking?.research || {};
+  const history = research.history || [];
+  const defaultHistoryPeriod = history.find((item) => item.period === '1Y')?.period || history[0]?.period || '1Y';
+  const [historyPeriod, setHistoryPeriod] = useState(defaultHistoryPeriod);
+  useEffect(() => { setHistoryPeriod(defaultHistoryPeriod); }, [defaultHistoryPeriod, name, symbol]);
+  const historySeries = history.find((item) => item.period === historyPeriod) || history[0] || null;
+  const valuation = research.valuation;
+  const valuationMetrics = [...(valuation?.metrics || [])];
+  const hasValuationPercentile = valuationMetrics.some((item) => item.label.includes('分位'));
+  if (typeof valuation?.percentile === 'number' && !hasValuationPercentile) valuationMetrics.unshift({ label: '估值分位', value: `${valuation.percentile.toFixed(0)}%`, detail: '历史区间' });
+  const risk = research.risk;
+  const riskMetrics: ResearchMetric[] = [];
+  if (typeof risk?.volatility_1y === 'number') riskMetrics.push({ label: '近 1 年波动', value: percent(risk.volatility_1y) });
+  const maxDrawdown = typeof risk?.max_drawdown_3y === 'number' ? risk.max_drawdown_3y : metric(ranking?.metrics, 'max_drawdown_3y');
+  if (typeof maxDrawdown === 'number') riskMetrics.push({ label: '近 3 年最大回撤', value: percent(maxDrawdown), tone: 'negative' });
+  if (typeof risk?.sharpe_1y === 'number') riskMetrics.push({ label: '近 1 年夏普', value: risk.sharpe_1y.toFixed(2) });
+  if (typeof risk?.beta === 'number') riskMetrics.push({ label: 'Beta', value: risk.beta.toFixed(2) });
+  if (risk?.liquidity) riskMetrics.push({ label: '流动性', value: risk.liquidity });
+  riskMetrics.push(...(risk?.metrics || []));
+  const dividends = research.dividends;
+  const dividendMetrics: ResearchMetric[] = [];
+  if (typeof dividends?.yield_1y === 'number') dividendMetrics.push({ label: '近 1 年分红率', value: percent(dividends.yield_1y), tone: dividends.yield_1y > 0 ? 'positive' : 'neutral' });
+  if (dividends?.frequency) dividendMetrics.push({ label: '分配频率', value: dividends.frequency });
+  if (typeof dividends?.last_amount === 'number') dividendMetrics.push({ label: '最近每份分配', value: money(dividends.last_amount) });
+  if (dividends?.last_date) dividendMetrics.push({ label: '最近登记日', value: dateLabel(dividends.last_date) });
+  if (dividends?.next_date) dividendMetrics.push({ label: '下次观察日', value: dateLabel(dividends.next_date) });
+  if (typeof dividends?.trailing_3y === 'number') dividendMetrics.push({ label: '近 3 年累计分配', value: money(dividends.trailing_3y) });
+  dividendMetrics.push(...(dividends?.metrics || []));
+  const value = holding?.value ?? null;
+  const dayGain = holding ? holdingDayGain(holding) : null;
+  const dayGainPercent = holding ? holdingDayGainPercent(holding) : null;
+  const totalGain = holding ? holdingGain(holding) : null;
+  const totalGainPercent = holding ? holdingGainPercent(holding) : null;
+  const total = holdings.reduce((sum, item) => sum + (item.value || 0), 0);
+  const source = holding?.source || '当前研究快照';
+  const asOf = holding?.price_as_of || research.as_of || null;
+  const url = assetResearchUrl(selection.kind, name, symbol, holding?.asset_type);
+  const details = holding
+    ? [
+        ['市值', value === null ? '待补价格' : `${money(value)} ${holding.currency}`],
+        ['今日相对昨日', dayGain === null ? '待补充' : `${dayGain >= 0 ? '+' : ''}${money(dayGain)} (${dayGainPercent ?? '—'}%)`],
+        ['累计盈亏', totalGain === null ? '待补充' : `${totalGain >= 0 ? '+' : ''}${money(totalGain)} (${totalGainPercent ?? '—'}%)`],
+        ['组合占比', total > 0 && value !== null ? `${((value / total) * 100).toFixed(1)}%` : '—'],
+        ['数量', String(holding.quantity)],
+        ['成本价 / 现价', `${money(holding.cost_basis)} / ${money(holding.current_price)}`],
+      ]
+    : [
+        ['研究评分', score(ranking?.score)],
+        ['近 3 年年化', percent(metric(ranking?.metrics, 'annualized_return_3y'))],
+        ['近 3 年最大回撤', percent(metric(ranking?.metrics, 'max_drawdown_3y'))],
+        ['研究区间', ranking?.band || '—'],
+        ['置信度', ranking?.confidence === undefined ? '—' : percent((ranking.confidence || 0) * 100)],
+        ['标的类型', assetTypeLabels[assetType] || '股票'],
+      ];
+  return (
+    <section className="investment-card investment-asset-detail" aria-label={`${name}详情`}>
+      <div className="investment-card-heading">
+        <div><span className="investment-eyebrow">{isHolding ? '持仓详情' : '研究详情'}</span><h2>{name}</h2><p className="investment-detail-symbol">{assetTypeLabels[assetType] || '股票'} · {symbol || '无代码'}</p></div>
+        <button className="icon-button" type="button" aria-label="关闭资产详情" onClick={onClose}><X size={17} /></button>
+      </div>
+      <div className="investment-detail-grid">{details.map(([label, content]) => <div key={label}><small>{label}</small><strong>{content}</strong></div>)}</div>
+      <div className="investment-research-windows">
+        <section className="investment-detail-window investment-detail-window-wide" aria-label="历史走势">
+          <div className="investment-detail-window-heading"><div><span className="investment-eyebrow">历史走势</span><h3>{historySeries ? `${historySeries.period}走势` : '历史走势'}</h3></div>{history.length > 0 && <div className="investment-period-tabs" role="tablist" aria-label="历史走势区间">{history.map((item) => <button type="button" role="tab" aria-selected={item.period === historyPeriod} className={item.period === historyPeriod ? 'active' : ''} key={item.period} onClick={() => setHistoryPeriod(item.period)}>{item.period}</button>)}</div>}</div>
+          <TrendChart name={name} series={historySeries} />
+        </section>
+        <section className="investment-detail-window" aria-label="估值信息">
+          <div className="investment-detail-window-heading"><div><span className="investment-eyebrow">估值</span><h3>估值水平</h3></div><span className="investment-detail-status">{valuation?.status || '待同步'}</span></div>
+          <DetailMetricGrid metrics={valuationMetrics} />
+          {valuation?.note && <p className="investment-detail-note">{valuation.note}</p>}
+        </section>
+        <section className="investment-detail-window" aria-label="风险信息">
+          <div className="investment-detail-window-heading"><div><span className="investment-eyebrow">风险</span><h3>风险画像</h3></div><span className="investment-detail-status">{risk?.level || '待同步'}</span></div>
+          <DetailMetricGrid metrics={riskMetrics} />
+          {risk?.note && <p className="investment-detail-note">{risk.note}</p>}
+        </section>
+        <section className="investment-detail-window" aria-label="分红信息">
+          <div className="investment-detail-window-heading"><div><span className="investment-eyebrow">分红</span><h3>分红与收益分配</h3></div><span className="investment-detail-status">{dividends?.frequency || '待同步'}</span></div>
+          <DetailMetricGrid metrics={dividendMetrics} />
+          {dividends?.note && <p className="investment-detail-note">{dividends.note}</p>}
+        </section>
+      </div>
+      <div className="investment-detail-footer"><span>数据来源：{source}{asOf ? ` · ${new Date(asOf).toLocaleString('zh-CN')}` : ''}</span>{url && <a className="secondary investment-detail-link" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} />查看公开资料</a>}</div>
+      <p className="investment-muted">走势、估值、风险和分红信息用于研究参考，公开网页用于补充资料，净值和成交状态以对应官方披露或交易所数据为准。</p>
     </section>
   );
 }
@@ -338,11 +543,13 @@ function HoldingsPanel({
   settings,
   holdings,
   onChanged,
+  onSelectHolding,
   demo = false,
 }: {
   settings: Settings;
   holdings: Holding[];
   onChanged: () => void;
+  onSelectHolding: (holding: Holding) => void;
   demo?: boolean;
 }) {
   const [assetType, setAssetType] = useState<AssetType>('fund');
@@ -429,10 +636,10 @@ function HoldingsPanel({
         {holdings.length ? <div className="investment-holding-list">{holdings.map((holding) => {
           const gain = holdingGain(holding);
           const gainPercent = holdingGainPercent(holding);
-          return <div className="investment-holding-row" key={holding.id}>
+          return <div className="investment-holding-row investment-holding-row-button" role="button" tabIndex={0} key={holding.id} onClick={() => onSelectHolding(holding)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectHolding(holding); } }}>
             <div className="investment-holding-main"><strong>{holding.name}</strong><small>{assetTypeLabels[holding.asset_type]} · {holding.symbol || '无代码'} · 份额 {holding.quantity}</small><small>成本 {money(holding.cost_basis)} · 现价 {money(holding.current_price)} · {holding.currency}</small><small>来源 {holding.source} · 数据 {holding.price_as_of ? new Date(holding.price_as_of).toLocaleString('zh-CN') : '待补充'}</small></div>
             <div className="investment-holding-value"><strong>{holding.value === null ? '待补价格' : `${money(holding.value)} ${holding.currency}`}</strong><small className={gain !== null && gain >= 0 ? 'investment-gain-positive' : 'investment-gain-negative'}>{gain === null ? '盈亏待补充' : `盈亏 ${gain >= 0 ? '+' : ''}${money(gain)} (${gainPercent}%)`}</small></div>
-            {!demo && <button className="icon-button" type="button" aria-label={`删除${holding.name}`} onClick={() => void remove(holding.id)} disabled={busy}><Trash2 size={15} /></button>}
+            {!demo && <button className="icon-button" type="button" aria-label={`删除${holding.name}`} onClick={(event) => { event.stopPropagation(); void remove(holding.id); }} disabled={busy}><Trash2 size={15} /></button>}
           </div>;
         })}</div> : <div className="investment-empty investment-portfolio-empty"><p>还没有保存的持仓。</p><small>添加股票、基金、黄金、货币、债券或现金后，系统才会生成组合级操作建议。</small></div>}
       </section>
@@ -440,12 +647,12 @@ function HoldingsPanel({
   );
 }
 
-function RankingList({ items, kind }: { items: Ranking[]; kind: 'fund' | 'stock' }) {
+function RankingList({ items, kind, onSelectItem }: { items: Ranking[]; kind: RankingKind; onSelectItem: (item: Ranking) => void }) {
   if (!items.length) return <p className="investment-empty">当前没有可用候选。请刷新或配置更完整的数据源。</p>;
   return (
     <div className="investment-ranking-list">
       {items.slice(0, 12).map((item, index) => (
-        <article className="investment-ranking" key={`${item.code || item.name || 'item'}-${index}`}>
+        <article className="investment-ranking investment-ranking-button" role="button" tabIndex={0} key={`${item.code || item.name || 'item'}-${index}`} onClick={() => onSelectItem(item)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectItem(item); } }}>
           <div className="investment-ranking-main">
             <span className="investment-rank">{String(index + 1).padStart(2, '0')}</span>
             <div>
@@ -470,6 +677,7 @@ export function InvestmentPage({ settings }: { settings: Settings }) {
   const mobileDemoMode = isInvestmentMobileDemo();
   const [view, setView] = useState<(typeof views)[number][0]>('portfolio');
   const [selectedAssetType, setSelectedAssetType] = useState<AssetType | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<AssetSelection | null>(null);
   const [riskProfile, setRiskProfile] = useState<RiskProfile>('balanced');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -511,17 +719,18 @@ export function InvestmentPage({ settings }: { settings: Settings }) {
         </div>
       </header>
       <nav className="investment-tabs" aria-label="投资研究视图">
-        {views.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}
+        {views.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setSelectedAsset(null); setSelectedAssetType(null); }}>{label}</button>)}
       </nav>
       {demoMode && <div className="investment-demo-banner" role="status"><strong>演示数据</strong><span>完整合成持仓与行情，仅用于展示，不会读取或写入真实账号。</span><code>?demo=investment</code></div>}
       {error && <p className="error investment-error" role="alert">{error}</p>}
       {busy && !dashboard ? <div className="investment-loading"><LoaderCircle className="spin" /><span>正在读取公开市场数据…</span></div> : dashboard && (
         <div className="investment-content">
-          {view === 'funds' && <><div className="investment-summary-grid"><div className="investment-summary"><small>候选基金</small><strong>{dashboard.funds.count}</strong></div><div className="investment-summary"><small>数据源</small><strong>{dashboard.source === 'live:tencent+eastmoney' ? '实时公开' : dashboard.source}</strong></div><div className="investment-summary"><small>生成时间</small><strong>{new Date(dashboard.generated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</strong></div></div><section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">研究排序</span><h2>基金筛选</h2></div><BarChart3 size={20} /></div><RankingList items={dashboard.funds.rankings} kind="fund" /></section></>}
+          {selectedAsset && <AssetDetailPanel selection={selectedAsset} holdings={holdings} onClose={() => setSelectedAsset(null)} />}
+          {view === 'funds' && <><div className="investment-summary-grid"><div className="investment-summary"><small>候选基金</small><strong>{dashboard.funds.count}</strong></div><div className="investment-summary"><small>数据源</small><strong>{dashboard.source === 'live:tencent+eastmoney' ? '实时公开' : dashboard.source}</strong></div><div className="investment-summary"><small>生成时间</small><strong>{new Date(dashboard.generated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</strong></div></div><section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">研究排序</span><h2>基金筛选</h2></div><BarChart3 size={20} /></div><RankingList items={dashboard.funds.rankings} kind="fund" onSelectItem={(item) => setSelectedAsset({ kind: 'fund', item })} /></section></>}
           {view === 'market' && <div className="investment-market-grid investment-market-area-grid">{(dashboard.market_areas || [{ id: 'domestic_equity', title: '国内权益', market: dashboard.market }, { id: 'international_equity', title: '海外权益', market: dashboard.international.market }]).map((area) => <MarketAreaCard key={area.id} area={area} />)}</div>}
-          {view === 'stocks' && <section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">长期研究</span><h2>股票候选</h2></div><ShieldCheck size={20} /></div><RankingList items={dashboard.stocks.rankings} kind="stock" /></section>}
+          {view === 'stocks' && <section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">长期研究</span><h2>股票候选</h2></div><ShieldCheck size={20} /></div><RankingList items={dashboard.stocks.rankings} kind="stock" onSelectItem={(item) => setSelectedAsset({ kind: 'stock', item })} /></section>}
           {view === 'international' && <><MarketCard title="国际市场" market={dashboard.international.market} /><section className="investment-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">指数观察</span><h2>国际指数</h2></div><Database size={20} /></div><div className="investment-index-grid">{dashboard.international.indices.map((item, index) => <div key={`${String(item.code || item.symbol || 'index')}-${index}`}><strong>{String(item.name || item.code || '指数')}</strong><span>{percent(item.change_1d)}</span><small>{String(item.region || item.currency || '')}</small></div>)}</div></section></>}
-          {view === 'portfolio' && <><PortfolioOverview summary={dashboard.portfolio.summary} holdings={holdings} dataAsOf={dashboard.portfolio.data_as_of} onCategorySelect={setSelectedAssetType} />{selectedAssetType && <CategoryDetail assetType={selectedAssetType} holdings={holdings} onClose={() => setSelectedAssetType(null)} />}<TransactionAssistant settings={settings} demo={demoMode} onChanged={() => void load()} /><HoldingsPanel settings={settings} demo={demoMode} holdings={holdings} onChanged={() => void load()} />{dashboard.daily_actions?.actions?.length ? <section className="investment-card investment-actions-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">AI 建议</span><h2>研究建议</h2></div><ShieldCheck size={20} /></div><div className="investment-action-list">{dashboard.daily_actions.actions.map((item, index) => <article key={`${item.title || item.operation}-${index}`}><strong>{item.title || item.operation || '研究动作'}</strong><p>{item.reason || item.detail || '请查看依据后决定是否执行。'}</p></article>)}</div></section> : null}</>}
+          {view === 'portfolio' && <><PortfolioOverview summary={dashboard.portfolio.summary} holdings={holdings} dataAsOf={dashboard.portfolio.data_as_of} onCategorySelect={setSelectedAssetType} />{selectedAssetType && <CategoryDetail assetType={selectedAssetType} holdings={holdings} onClose={() => setSelectedAssetType(null)} onSelectHolding={(holding) => setSelectedAsset({ kind: 'holding', item: holding })} />}<TransactionAssistant settings={settings} demo={demoMode} onChanged={() => void load()} /><HoldingsPanel settings={settings} demo={demoMode} holdings={holdings} onChanged={() => void load()} onSelectHolding={(holding) => setSelectedAsset({ kind: 'holding', item: holding })} />{dashboard.daily_actions?.actions?.length ? <section className="investment-card investment-actions-card"><div className="investment-card-heading"><div><span className="investment-eyebrow">AI 建议</span><h2>研究建议</h2></div><ShieldCheck size={20} /></div><div className="investment-action-list">{dashboard.daily_actions.actions.map((item, index) => <article key={`${item.title || item.operation}-${index}`}><strong>{item.title || item.operation || '研究动作'}</strong><p>{item.reason || item.detail || '请查看依据后决定是否执行。'}</p></article>)}</div></section> : null}</>}
           <footer className="investment-footer"><span>数据日期：中国 {dashboard.market.as_of || '—'} · 国际 {dashboard.international.market.as_of || '—'}</span><span>{dashboard.data_sources.length} 个来源</span></footer>
         </div>
       )}

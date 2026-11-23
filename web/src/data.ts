@@ -149,6 +149,34 @@ export function loadPlugins(scope = 'legacy'): Plugin[] {
     return [];
   }
 }
+export type PluginLayout = {
+  order: string[];
+  hidden: string[];
+};
+export function loadPluginLayout(scope = 'legacy'): PluginLayout {
+  try {
+    const raw = JSON.parse(localStorage.getItem(scopedStorageKey('plugin-layout', scope)) || '{}');
+    if (!raw || typeof raw !== 'object') return { order: [], hidden: [] };
+    const order = Array.isArray((raw as { order?: unknown }).order)
+      ? (raw as { order: unknown[] }).order.filter((id): id is string => typeof id === 'string')
+      : [];
+    const hidden = Array.isArray((raw as { hidden?: unknown }).hidden)
+      ? (raw as { hidden: unknown[] }).hidden.filter((id): id is string => typeof id === 'string')
+      : [];
+    return { order: [...new Set(order)], hidden: [...new Set(hidden)] };
+  } catch {
+    return { order: [], hidden: [] };
+  }
+}
+export function persistPluginLayout(scope: string, layout: PluginLayout) {
+  localStorage.setItem(
+    scopedStorageKey('plugin-layout', scope),
+    JSON.stringify({
+      order: [...new Set(layout.order)],
+      hidden: [...new Set(layout.hidden)],
+    }),
+  );
+}
 export function loadStartupPage(scope = 'legacy'): StartupPage {
   try {
     return localStorage.getItem(scopedStorageKey('startup-page', scope)) === 'workspace'

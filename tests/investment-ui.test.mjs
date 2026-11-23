@@ -14,6 +14,7 @@ test('investment cards keep long names inside the mobile viewport', async () => 
 test('investment demo mode exposes complete synthetic holdings without the account API', async () => {
   const source = await readFile(new URL('../web/src/investment-demo.ts', import.meta.url), 'utf8');
   const page = await readFile(new URL('../web/src/InvestmentPage.tsx', import.meta.url), 'utf8');
+  const main = await readFile(new URL('../web/src/main.tsx', import.meta.url), 'utf8');
   assert.match(source, /演示数据/);
   for (const field of ['symbol:', 'quantity:', 'cost_basis:', 'current_price:', 'price_as_of:', 'source:', 'value:'])
     assert.match(source, new RegExp(field));
@@ -21,5 +22,25 @@ test('investment demo mode exposes complete synthetic holdings without the accou
   assert.match(page, /不会读取或写入真实账号/);
   assert.match(page, /investment-donut/);
   assert.match(page, /investment-transaction-choices/);
+  assert.match(page, /AssetDetailPanel/);
+  assert.match(page, /查看公开资料/);
+  assert.match(page, /assetResearchUrl/);
+  assert.match(page, /onSelectHolding/);
+  assert.match(page, /onSelectItem/);
+  assert.match(page, /investment-research-windows/);
+  assert.match(page, /investment-trend-chart/);
+  assert.match(page, /历史走势/);
+  assert.match(page, /估值水平/);
+  assert.match(page, /风险画像/);
+  assert.match(page, /分红与收益分配/);
   assert.match(source, /market_areas/);
+  assert.match(source, /招商鑫利中短债债券A/);
+  assert.match(source, /沪深300ETF/);
+  assert.match(source, /history:/);
+  assert.match(source, /granularity: 'day'/);
+  assert.match(source, /valuation:/);
+  assert.match(source, /risk:/);
+  assert.match(source, /dividends:/);
+  assert.match(page, /setView\(id\);\s*setSelectedAsset\(null\);\s*setSelectedAssetType\(null\)/);
+  assert.match(main, /if \(demo === 'investment'\) return 'investment'/);
 });

@@ -540,15 +540,28 @@
 }
 
 /* 0.9.7 conversational caretaker */
+.superagent-caretaker {
+  margin: 0 0 10px;
+}
 .superagent-caretaker-trigger {
-  min-height: 56px;
-  border-radius: 16px;
-  padding: 8px 10px;
+  width: calc(100% - 8px);
+  min-height: 44px;
+  margin: 0 4px;
+  padding: 7px 10px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+}
+.superagent-caretaker-trigger:hover,
+.superagent-caretaker.is-expanded .superagent-caretaker-trigger {
+  border-color: var(--border);
+  background: var(--surface-active);
 }
 .superagent-caretaker-trigger .superagent-caretaker-orb {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
 }
 .superagent-caretaker-count {
   display: grid;
@@ -802,6 +815,9 @@
   color: var(--accent);
 }
 @media (max-width: 700px) {
+  .sidebar > .superagent-caretaker {
+    margin-top: 22px;
+  }
   .superagent-caretaker-panel {
     top: max(10px, env(safe-area-inset-top));
     right: 10px;
@@ -816,3 +832,114 @@
     flex: 1;
   }
 }
+
+/* Full-page overrides are intentionally last so the chat follows the normal assistant viewport. */
+.superagent-caretaker.is-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  flex-direction: column;
+}
+.superagent-caretaker.is-page .superagent-caretaker-panel.is-page-panel {
+  position: static;
+  inset: auto;
+  display: flex;
+  flex: 1;
+  width: auto;
+  max-height: none;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--surface);
+}
+.superagent-caretaker.is-page .superagent-caretaker-messages {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  padding: 22px clamp(18px, 7vw, 92px);
+}
+.superagent-caretaker.is-page .superagent-chat-quick,
+.superagent-caretaker.is-page .superagent-caretaker-compose {
+  width: min(760px, calc(100% - 36px));
+  margin-right: auto;
+  margin-left: auto;
+}
+.superagent-caretaker.is-page .superagent-chat-quick {
+  padding-right: 0;
+  padding-left: 0;
+}
+.superagent-caretaker.is-page .superagent-caretaker-compose {
+  box-shadow: 0 6px 24px color-mix(in srgb, #000 8%, transparent);
+}
+.superagent-caretaker.is-page .superagent-caretaker-retention {
+  width: min(760px, calc(100% - 36px));
+  margin-right: auto;
+  margin-left: auto;
+}
+.superagent-caretaker.is-page .superagent-chat-footer {
+  padding-right: clamp(18px, 7vw, 92px);
+  padding-left: clamp(18px, 7vw, 92px);
+}
+
+.mobile-preview .superagent-caretaker.is-page .superagent-caretaker-messages {
+  padding: 16px 14px;
+}
+.mobile-preview .superagent-caretaker.is-page .superagent-chat-quick,
+.mobile-preview .superagent-caretaker.is-page .superagent-caretaker-compose,
+.mobile-preview .superagent-caretaker.is-page .superagent-caretaker-retention {
+  width: calc(100% - 24px);
+}
+.mobile-preview .superagent-chat-header {
+  padding-right: 14px;
+  padding-left: 14px;
+}
+
+.superagent-compose-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 3px 7px;
+}
+.superagent-compose-file {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--text);
+  font-size: 9px;
+}
+.superagent-compose-file > svg { flex: 0 0 auto; color: var(--accent); }
+.superagent-compose-file > button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin-left: 2px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted);
+}
+.superagent-compose-file > button:hover { background: var(--surface-active); color: var(--text); }
+.superagent-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+}
+.superagent-composer-hint { flex: 1; color: var(--muted); font-size: 8px; }
+.superagent-caretaker-attach { position: relative; }
+.superagent-caretaker-attach input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.superagent-message-attachments { overflow-wrap: anywhere; }

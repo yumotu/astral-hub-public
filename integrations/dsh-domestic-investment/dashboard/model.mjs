@@ -20,6 +20,18 @@ function emptyMarket() {
   };
 }
 
+function marketArea(id, title, input, extra = {}) {
+  const market = input ? analyzeMarketRegime(input) : emptyMarket();
+  return {
+    id,
+    title,
+    market,
+    quote: extra.quote ?? null,
+    source: extra.source ?? null,
+    status: input || extra.quote ? 'ready' : 'pending',
+  };
+}
+
 export async function buildDashboardModel(provider, { riskProfile = "balanced" } = {}) {
   const seed = await provider.getDashboardSeed();
   const candidates = seed.funds?.length ? seed.funds : [];
@@ -29,6 +41,7 @@ export async function buildDashboardModel(provider, { riskProfile = "balanced" }
   const internationalMarket = internationalSeed.market ? analyzeMarketRegime(internationalSeed.market) : emptyMarket();
   const internationalStocks = Array.isArray(internationalSeed.stocks) ? internationalSeed.stocks : [];
   const internationalIndices = Array.isArray(internationalSeed.indices) ? internationalSeed.indices : [];
+  const assetMarkets = seed.asset_markets ?? {};
   const portfolio = { ...EMPTY_PORTFOLIO, ...(seed.portfolio ?? {}) };
 
   return {
@@ -43,6 +56,13 @@ export async function buildDashboardModel(provider, { riskProfile = "balanced" }
       rankings: rankWithMetrics(candidates, riskProfile),
     },
     market,
+    market_areas: [
+      marketArea('domestic_equity', '国内权益', seed.market),
+      marketArea('international_equity', '海外权益', internationalSeed.market),
+      marketArea('bond', '债券与固收', assetMarkets.bond, assetMarkets.bond_meta),
+      marketArea('gold', '黄金与大宗', assetMarkets.gold, assetMarkets.gold_meta),
+      marketArea('fx', '汇率与现金', assetMarkets.fx, assetMarkets.fx_meta),
+    ],
     stocks: {
       count: stocks.length,
       rankings: stocks.map((candidate) => ({

@@ -116,6 +116,7 @@ export async function prepareRelease({
         '0.9.5',
         '0.9.6',
         '0.9.7',
+        '0.9.8',
       ].includes(version)
         ? [await readFile(join(root, `docs/release-${version}.md`), 'utf8')]
         : version === '0.8.5'
