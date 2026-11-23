@@ -934,6 +934,7 @@ function SidebarPluginShelf({
               <button
                 type="button"
                 className={`sidebar-plugin-button ${page === plugin.page && (plugin.builtin || activePluginId === plugin.id) ? 'active' : ''}`}
+                aria-label={`打开插件 ${plugin.name}`}
                 aria-current={page === plugin.page && (plugin.builtin || activePluginId === plugin.id) ? 'page' : undefined}
                 onClick={() => openPlugin(plugin)}
               >

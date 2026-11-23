@@ -75,7 +75,7 @@ public class MailInteractionTest {
                 await(scenario, "!window.__qaReloadPending&&!!document.querySelector('.assistant-workspace .mobile-menu')");
                 js(scenario, "document.querySelector('.assistant-workspace .mobile-menu').click();true");
                 await(scenario, "!!document.querySelector('.sidebar.open')");
-                js(scenario, "[...document.querySelectorAll('.sidebar nav button')].find(b=>b.textContent.trim()==='邮件').click();true");
+                js(scenario, "document.querySelector('.sidebar-plugin-button[aria-label=\"打开插件 邮件\"]')?.click();true");
                 await(scenario, "!!document.querySelector('.mail-page')");
                 js(scenario, "document.querySelector('.mail-heading .primary').click();true");
                 await(scenario, "!!document.querySelector('.mail-composer')");
