@@ -53,6 +53,46 @@ test("bundled investment service exposes the maintained research tools without n
   assert.equal(service.analyzeMarket({ benchmarks: [{ trend_20d: 1, trend_60d: 3 }] }).regime, "neutral");
   assert.equal(service.recordHoldingIntent({ text: "我买了 500 元演示基金" }).type, "buy");
   assert.equal(service.prepareOrder({ type: "buy", name: "演示基金", amount: 500 }).status, "awaiting_confirmation");
+  assert.deepEqual(dashboard.market_areas.map((area) => [area.id, area.status]), [
+    ["domestic_equity", "ready"],
+    ["international_equity", "pending"],
+    ["bond", "pending"],
+    ["gold", "pending"],
+    ["fx", "pending"],
+  ]);
+});
+
+test("investment market areas preserve fixture quotes and sources without fabricating live data", async (t) => {
+  const previous = process.env.INVESTMENT_LIVE_DATA;
+  process.env.INVESTMENT_LIVE_DATA = "0";
+  t.after(() => {
+    if (previous === undefined) delete process.env.INVESTMENT_LIVE_DATA;
+    else process.env.INVESTMENT_LIVE_DATA = previous;
+  });
+
+  const directory = await mkdtemp(join(tmpdir(), "astral-investment-areas-"));
+  const dataFile = join(directory, "portfolio-snapshot.json");
+  await writeFile(dataFile, JSON.stringify({
+    market: { as_of: "2026-11-20", benchmarks: [{ name: "沪深300", trend_20d: 1, trend_60d: 3 }] },
+    international: { market: { as_of: "2026-11-20", benchmarks: [{ name: "标普500", trend_20d: -1, trend_60d: 2 }] } },
+    asset_markets: {
+      bond: { as_of: "2026-11-20", benchmarks: [{ name: "中债", trend_20d: 0.2, trend_60d: 0.5 }] },
+      bond_meta: { quote: { value: 102.18, unit: "净值", change_1d: 0.04 }, source: "演示固收快照" },
+      gold: { as_of: "2026-11-20", benchmarks: [{ name: "黄金", trend_20d: 1.1, trend_60d: 2.2 }] },
+      gold_meta: { quote: { value: 518.6, unit: "元/克", change_1d: 0.72 }, source: "演示贵金属快照" },
+      fx: { as_of: "2026-11-20", benchmarks: [{ name: "USD/CNY", trend_20d: -0.1, trend_60d: 0.2 }] },
+      fx_meta: { quote: { value: 7.245, unit: "USD/CNY", change_1d: -0.08 }, source: "演示汇率快照" },
+    },
+  }));
+
+  const dashboard = await (await createDomesticInvestmentService({ dataFile })).dashboard();
+  assert.equal(dashboard.market_areas.length, 5);
+  assert.deepEqual(dashboard.market_areas.map((area) => area.status), ["ready", "ready", "ready", "ready", "ready"]);
+  assert.deepEqual(dashboard.market_areas.slice(2).map((area) => [area.quote.value, area.source]), [
+    [102.18, "演示固收快照"],
+    [518.6, "演示贵金属快照"],
+    [7.245, "演示汇率快照"],
+  ]);
 });
 
 test("DSH host loads the repository bundle and keeps the optional token out of source paths", async () => {

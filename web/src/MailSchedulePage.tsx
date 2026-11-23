@@ -520,21 +520,22 @@ export function MailSchedulePage({ settings, openMail, openConversation }: { set
 
       <nav className="mail-schedule-tabs" aria-label="工作台视图">
         {[
-          ['overview', '今日概览'],
-          ['conversations', '对话任务'],
-          ['long', '长期任务'],
-          ['schedules', '定时任务'],
-          ['finance', '资产提醒'],
-          ['tasks', '所有任务'],
-          ['inbox', '邮件事项'],
-        ].map(([id, label]) => (
+          ['overview', '今日概览', '概览'],
+          ['conversations', '对话任务', '对话'],
+          ['long', '长期任务', '长期'],
+          ['schedules', '定时任务', '定时'],
+          ['finance', '资产提醒', '资产'],
+          ['tasks', '所有任务', '任务'],
+          ['inbox', '邮件事项', '邮件'],
+        ].map(([id, label, mobileLabel]) => (
           <button
             key={id}
             className={view === id ? 'active' : ''}
             onClick={() => setView(id as typeof view)}
             aria-pressed={view === id}
           >
-            {label}
+            <span className="mail-schedule-tab-desktop">{label}</span>
+            <span className="mail-schedule-tab-mobile">{mobileLabel}</span>
           </button>
         ))}
       </nav>

@@ -378,6 +378,9 @@
 .mail-schedule-tabs button.active::after {
   background: var(--mail-blue);
 }
+.mail-schedule-tab-mobile {
+  display: none;
+}
 .mail-schedule-metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1474,6 +1477,42 @@
   .mail-schedule-search {
     width: 100%;
   }
+  /* The mobile workspace keeps the action area and data cards visible. The
+     desktop introduction and connection notice duplicate that context and
+     consume the first screen. */
+  .mail-schedule-heading h1,
+  .mail-schedule-heading p,
+  .mail-schedule-live-banner {
+    display: none;
+  }
+  .mail-schedule-heading {
+    margin-bottom: 16px;
+  }
+  .mail-schedule-tabs {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0;
+    overflow: visible;
+  }
+  .mail-schedule-tabs button {
+    min-width: 0;
+    white-space: nowrap;
+    word-break: keep-all;
+    text-align: center;
+    padding-right: 0;
+    padding-left: 0;
+    font-size: 10px;
+  }
+  .mail-schedule-tabs button::after {
+    right: 3px;
+    left: 3px;
+  }
+  .mail-schedule-tab-desktop {
+    display: none;
+  }
+  .mail-schedule-tab-mobile {
+    display: inline;
+  }
   .mail-schedule-all-tasks .mail-schedule-panel-heading {
     display: grid;
   }
@@ -1534,9 +1573,9 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .mail-schedule-tabs button {
-    flex: 1;
-    padding-right: 7px;
-    padding-left: 7px;
+    padding-right: 0;
+    padding-left: 0;
+    font-size: 10px;
   }
   .mail-schedule-timeline-row {
     grid-template-columns: 48px 30px minmax(0, 1fr);
@@ -1578,4 +1617,89 @@
   .workbench-tool-router-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* `mobile=1` gives desktop browsers a real phone-width preview for review. */
+.mobile-preview {
+  width: min(390px, 100vw);
+  min-height: 844px;
+  margin: 0 auto;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border), 0 18px 60px color-mix(in srgb, #000 28%, transparent);
+}
+.mobile-preview .sidebar {
+  width: 240px;
+  transform: translateX(-100%);
+  visibility: hidden;
+}
+.mobile-preview .workspace {
+  min-height: 844px;
+  margin-left: 0;
+}
+.mobile-preview .topbar {
+  height: calc(65px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 20px 0;
+}
+.mobile-preview .mobile-menu {
+  display: grid;
+}
+.mobile-preview .mail-schedule-main {
+  padding: 24px 18px 0 !important;
+}
+.mobile-preview .mail-schedule-heading {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 17px;
+  margin-bottom: 16px;
+}
+.mobile-preview .mail-schedule-heading h1,
+.mobile-preview .mail-schedule-heading p,
+.mobile-preview .mail-schedule-live-banner {
+  display: none;
+}
+.mobile-preview .mail-schedule-heading-actions {
+  width: 100%;
+  justify-content: flex-start;
+}
+.mobile-preview .mail-schedule-heading-actions button {
+  flex: 1;
+  justify-content: center;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+.mobile-preview .mail-schedule-tabs {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  overflow: visible;
+}
+.mobile-preview .mail-schedule-tabs button {
+  min-width: 0;
+  padding-right: 0;
+  padding-left: 0;
+  font-size: 10px;
+  white-space: nowrap;
+  word-break: keep-all;
+  text-align: center;
+}
+.mobile-preview .mail-schedule-tabs button::after {
+  right: 3px;
+  left: 3px;
+}
+.mobile-preview .mail-schedule-tab-desktop {
+  display: none;
+}
+.mobile-preview .mail-schedule-tab-mobile {
+  display: inline;
+}
+.mobile-preview .mail-schedule-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.mobile-preview .workbench-overview-grid,
+.mobile-preview .mail-schedule-dashboard-grid {
+  grid-template-columns: 1fr;
+}
+.mobile-preview .mail-schedule-panel {
+  padding: 17px;
 }

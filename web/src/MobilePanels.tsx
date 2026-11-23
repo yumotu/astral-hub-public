@@ -89,7 +89,7 @@ export function MobilePanelsProvider({ children }: { children: ReactNode }) {
       const { clientX: x, clientY: y } = event.touches[0];
       const state = current.current;
       const header = !!target.closest('.assistant-workspace-heading,.topbar');
-      const conversation = !!target.closest('[data-conversation-swipe]');
+      const conversation = !!target.closest('[data-conversation-swipe],[data-panel-swipe]');
       if (!state.panel && target.closest('button,a,summary')) return;
       const candidate = swipeStartPanel({
         panel: state.panel,

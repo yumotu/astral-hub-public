@@ -39,6 +39,8 @@
 .investment-muted, .investment-empty { color: var(--muted); font-size: 12px; }
 .investment-ranking-list { display: grid; gap: 7px; }
 .investment-ranking { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; max-width: 100%; padding: 11px 10px; border-radius: 10px; background: var(--surface-soft); }
+.investment-ranking-button { border: 1px solid transparent; cursor: pointer; text-align: left; transition: border-color .18s ease, background .18s ease; }
+.investment-ranking-button:hover, .investment-ranking-button:focus-visible { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--surface-active); outline: none; }
 .investment-ranking-main { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
 .investment-ranking-main > div { flex: 1 1 auto; min-width: 0; }
 .investment-ranking-main strong, .investment-ranking-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -63,6 +65,8 @@
 .investment-add-holding { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 .investment-holding-list, .investment-action-list { display: grid; gap: 8px; margin-top: 16px; }
 .investment-holding-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-width: 0; padding: 11px 10px; border-radius: 10px; background: var(--surface-soft); }
+.investment-holding-row-button { border: 1px solid transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .18s ease, background .18s ease; }
+.investment-holding-row-button:hover, .investment-holding-row-button:focus-visible { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--surface-active); outline: none; }
 .investment-holding-row > div { min-width: 0; }
 .investment-holding-row strong, .investment-holding-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .investment-holding-row strong { color: var(--text); font-size: 13px; }
@@ -108,6 +112,43 @@
 .investment-allocation-values strong { overflow: hidden; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .investment-allocation-values small { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .investment-category-detail { margin-bottom: 14px; }
+.investment-asset-detail { margin-bottom: 14px; border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
+.investment-detail-symbol { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.investment-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.investment-detail-grid > div { min-width: 0; padding: 11px; border-radius: 10px; background: var(--surface-soft); }
+.investment-detail-grid small, .investment-detail-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.investment-detail-grid small { color: var(--muted); font-size: 11px; }
+.investment-detail-grid strong { margin-top: 6px; color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; }
+.investment-research-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.investment-detail-window { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.investment-detail-window-wide { grid-column: 1 / -1; }
+.investment-detail-window-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.investment-detail-window-heading h3 { margin: 3px 0 0; color: var(--text); font-size: 15px; }
+.investment-detail-status { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); font-size: 10px; }
+.investment-period-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.investment-period-tabs button { min-width: 40px; min-height: 27px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); font: inherit; font-size: 10px; cursor: pointer; }
+.investment-period-tabs button.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text); background: var(--surface-active); }
+.investment-trend-wrap { min-width: 0; }
+.investment-trend-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+.investment-trend-meta strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.investment-trend-chart { display: block; width: 100%; height: 190px; overflow: visible; }
+.investment-trend-gridline { stroke: color-mix(in srgb, var(--text) 9%, transparent); stroke-width: 1; stroke-dasharray: 3 5; }
+.investment-trend-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
+.investment-trend-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.investment-trend-point { fill: var(--surface-soft); stroke: var(--accent); stroke-width: 3; }
+.investment-trend-axis { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; }
+.investment-research-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.investment-research-metrics > div { min-width: 0; padding: 9px; border-radius: 9px; background: var(--surface); }
+.investment-research-metrics small, .investment-research-metrics strong, .investment-research-metrics span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.investment-research-metrics small { color: var(--muted); font-size: 10px; }
+.investment-research-metrics strong { margin-top: 4px; color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.investment-research-metrics span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.investment-metric-positive { color: #2b8a57 !important; }
+.investment-metric-negative { color: #c84b51 !important; }
+.investment-detail-empty { padding: 18px 10px; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 11px; text-align: center; }
+.investment-detail-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.investment-detail-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.investment-detail-link { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; min-height: 32px; padding: 6px 9px; text-decoration: none; }
 .investment-category-summary { display: flex; flex-wrap: wrap; gap: 20px; color: var(--muted); font-size: 12px; }
 .investment-category-summary b { margin-left: 5px; color: var(--text); font-variant-numeric: tabular-nums; }
 .investment-transaction-assistant { margin-bottom: 14px; }
@@ -153,6 +194,10 @@
   .investment-ranking-main, .investment-ranking-metrics { width: 100%; }
   .investment-ranking-metrics { justify-content: flex-start; padding-left: 28px; }
   .investment-footer { flex-direction: column; }
+  .investment-detail-grid { grid-template-columns: 1fr 1fr; }
+  .investment-research-windows { grid-template-columns: 1fr; }
+  .investment-detail-window-wide { grid-column: auto; }
+  .investment-detail-footer { align-items: flex-start; flex-direction: column; }
 }
 .investment-demo-mobile { max-width: 420px; margin: 0 auto; padding: 18px 12px 32px; }
 .investment-demo-mobile .investment-heading { display: block; }
@@ -172,3 +217,5 @@
 .investment-demo-mobile .investment-transaction-preview { align-items: stretch; flex-direction: column; }
 .investment-demo-mobile .investment-choice-buttons { grid-template-columns: 1fr; }
 .investment-demo-mobile .investment-other-choice { grid-template-columns: 1fr; }
+.investment-demo-mobile .investment-research-windows { grid-template-columns: 1fr; }
+.investment-demo-mobile .investment-detail-window-wide { grid-column: auto; }

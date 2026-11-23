@@ -7,6 +7,7 @@ export type Page =
   | 'account'
   | 'social'
   | 'pi'
+  | 'superagent'
   | 'workspace'
   | 'mail'
   | 'investment'

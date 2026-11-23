@@ -85,6 +85,239 @@
   background: var(--surface-active);
 }
 
+.deepseek-shell .sidebar .sidebar-plugin-shelf {
+  display: grid;
+  gap: 7px;
+  margin: 18px 0 0;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px 3px;
+  color: var(--muted);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading span {
+  font-size: 11px;
+  letter-spacing: 1.4px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading-actions {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading-actions button,
+.deepseek-shell .sidebar .sidebar-plugin-edit-actions button,
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item button {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  min-height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-heading-actions button:hover,
+.deepseek-shell .sidebar .sidebar-plugin-heading-actions button.is-active,
+.deepseek-shell .sidebar .sidebar-plugin-edit-actions button:hover,
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item button:hover {
+  color: var(--accent);
+  background: var(--surface-active);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-list {
+  display: grid;
+  gap: 3px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-entry {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-entry[draggable='true'] {
+  cursor: grab;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-entry[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-entry.is-drag-over {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-grip {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  color: var(--muted);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-button {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-button:hover,
+.deepseek-shell .sidebar .sidebar-plugin-button.active {
+  background: var(--surface-active);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-copy b,
+.deepseek-shell .sidebar .sidebar-plugin-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-copy b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-state {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: #55b99a;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-custom {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-edit-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 1px;
+  padding-right: 4px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-edit-actions button:disabled {
+  opacity: .25;
+  cursor: default;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden-heading {
+  padding: 0 2px 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item > span:not(.sidebar-plugin-icon) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item .sidebar-plugin-icon {
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-hidden-item button {
+  margin-left: auto;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-manage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+}
+
+.deepseek-shell .sidebar .sidebar-plugin-manage:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--surface-active);
+}
+
 .deepseek-shell .sidebar-note {
   display: none;
 }
